@@ -20,23 +20,26 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 1 — foundation types (`DataFrame`, `Series`, schema
-handling, construction and conversion).
+**Current focus:** Phase 2 — expressions (`Prism::Expr` AST, DSL, evaluation,
+numeric coercion).
 
 **Next up:**
 
-1. Phase 1: `Prism::Series` + `Prism::DataFrame` construction and round-trip
-   (`from_arrow`, `to_arrow`, `each_batch`, `shape`, `column_names`, `dtypes`).
-2. Phase 1: generic value extraction (`Series#to_a`) via a `make_array`-style
-   dtype dispatch — see [C4](#c4-arraybase-has-no-generic-value-extraction).
-3. Phase 1: `Prism::Error` hierarchy and argument validation.
-4. Phase 2: `Prism::Expr` AST, DSL, and evaluation against a batch.
+1. Phase 2: `Expr` AST nodes (`Col`, `Lit`, `Unary`, `Binary`, `Agg`, `Cast`,
+   `Alias`) with `key`, `columns`, `same_as?`.
+2. Phase 2: `Prism::DSL` (`col`, `lit`) plus operator overloads and the
+   precedence-safe `and`/`or` methods — see
+   [C9](#c9--binds-tighter-than--in-crystal).
+3. Phase 2: numeric coercion (`expression/coerce.cr`) so mixed-dtype arithmetic
+   works without leaning on [C3](#c3-mixed-dtype-arithmetic-raises).
+4. Phase 2: `Expr#eval` against one `RecordBatch`, verified against the
+   equivalent Arrow kernel call.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 0 | Project scaffolding, dependency wiring, gates | **done** |
-| 1 | Foundation: `DataFrame`, `Series`, schema, construction | in progress |
-| 2 | Expressions: AST, DSL, evaluation, coercion | not started |
+| 1 | Foundation: `DataFrame`, `Series`, schema, construction | **done** |
+| 2 | Expressions: AST, DSL, evaluation, coercion | in progress |
 | 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | not started |
 | 4 | `group_by` + aggregations | not started |
 | 5 | Joins and row/column concatenation | not started |
@@ -46,8 +49,8 @@ handling, construction and conversion).
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `chore: rename shard to prism`.
-**Gates:** `make lint` and `make test` — both green at Phase 0.
+**Last commit:** `feat: DataFrame and Series foundation (Phase 1)`.
+**Gates:** `make lint` and `make test` — both green (54 examples).
 
 ---
 
@@ -207,6 +210,16 @@ range) and `arr[i]?` → `T?` (returns `nil` out of range). **Decision:**
 `Prism::Series#value`/`#[]` use the null-aware path, and `Prism::Values` — the
 single dtype-dispatch point (C4) — reads through `[]?` so a null can never leak
 out as a zero. Specs assert this explicitly.
+
+#### C12. `arrow-cr` has no `ChunkedArray`, and that is deliberate
+
+`arrow-rs` does not implement a chunked-array type; it recommends
+`Vec<ArrayRef>` and leaves rechunking to the consumer. Verified: no
+`ChunkedArray` exists anywhere in `arrow-cr`. **Decision:** `Prism::Series` holds
+`Array(Arrow::ArrayBase)` — one entry per frame batch — and every aggregate
+reduces each chunk with the Arrow kernel, then folds the partials (Polars does
+the same with its own `ChunkedArray`). **Verbs never call `#to_arrow`.** Only the
+edges do: `#to_a`, `#to_arrow`, `#each`, display, and file writers.
 
 ### 3.4 Verified end-to-end sketch
 
@@ -433,6 +446,9 @@ Design rules:
 - Element-wise verbs (`filter`, `select`, `with_column`, `cast`, `drop`) map
   over batches and **preserve chunking** — no concatenation, no copy of
   untouched buffers.
+- Aggregates on a `Series` (`sum`, `mean`, `min`, `max`) reduce each chunk with
+  the Arrow kernel and fold the partials, so they never build a consolidated
+  column (C12, §14).
 - Row-reordering verbs (`sort_by`, `group_by`, `distinct`, `join`) concatenate
   to a single batch first. Phase 9 may revisit this if benchmarks justify it.
 - `#each_batch` yields stored chunks; `#to_arrow` returns one concatenated
@@ -724,22 +740,36 @@ block updated, one commit.
 - [x] `CLAUDE.md`/`AGENTS.md`, `docs/`, `Makefile`, `.ameba.yml`, `.rumdl.toml`
 - [x] Verified dependency API end to end (C1–C10 recorded above)
 
-### Phase 1 — foundation
+### Phase 1 — foundation (done)
 
-- [ ] `Prism::Error` hierarchy (§8.4)
-- [ ] `Prism::Values` dtype dispatch (C4)
-- [ ] `Prism::Series`: name, dtype, size, count, null_count, `to_a`, `value`,
-      aggregates, `to_arrow`
-- [ ] `Prism::DataFrame`: `from_arrow`, `from_batches`, `from_columns`,
-      `schema`, `shape`, `column_names`, `dtypes`, `[]`, `to_arrow`,
-      `each_batch`, `head`, `tail`, `slice`, `row_count`
-- [ ] Chunk invariants enforced at construction (schema equality, row counts)
-- [ ] Zero-column and empty frames behave (C-invariant in §5.5)
+- [x] `Prism::Error` hierarchy (§8.4), plus `SchemaError` for batch/schema
+      disagreement
+- [x] `Prism::Values` dtype dispatch (C4): one place that switches on
+      `DataType::Kind`, null-aware via `[]?` (C11), unsupported dtypes raise
+- [x] `Prism::Series`: name, dtype, size, count, null_count, `to_a`, `[]`/`[]?`,
+      `sum`/`mean`/`min`/`max`, `to_arrow`
+- [x] `Prism::DataFrame`: `from_arrow`, `from_batches`, `from_columns`,
+      `schema`, `shape`, `column_names`, `dtypes`, `[]`/`[]?`, `to_arrow`,
+      `each_batch`, `head`, `tail`, `slice`, `row_count`, `==`
+- [x] Chunk invariants enforced at construction (schema equality, dtype
+      agreement)
+- [x] Zero-column and empty frames behave
 
 **Acceptance:** a batch can round-trip `Arrow → DataFrame → Arrow` unchanged
 (schema and values), including nullability and nulls. Specs:
 `spec/prism/dataframe_spec.cr`, `spec/prism/series_spec.cr`,
-`spec/prism/values_spec.cr`.
+`spec/prism/values_spec.cr` — 54 examples.
+
+**Notes for later phases:**
+
+- Single-value access on a series is `[]`/`[]?`, never Arrow's `value?` (C11).
+- Aggregates reduce chunk-by-chunk and fold the partial scalars, so they never
+  consolidate a column (C12). The zero-chunk spec pins this: `#to_arrow` raises
+  for that shape, so an aggregate that rechunked could not return `nil`.
+- A series over zero chunks cannot be materialized to a typed empty array; it
+  raises `Prism::UnsupportedOperation` and points at `#to_a`. A zero-row frame
+  produced by `head(0)`/`filter` keeps its chunks, so this only affects frames
+  built from an empty batch list.
 
 ### Phase 2 — expressions
 
@@ -867,14 +897,58 @@ Shard-level rename is done; the remaining items are outside this repository.
 - Optimization specs assert plan shape via `explain`, not just results, so a
   silently disabled pass fails CI.
 
-## 14. Performance
+## 14. Zero-copy policy and performance
 
-- Kernels are Arrow's; the library's job is to *not* add copies. Rules:
-  element-wise verbs map over chunks and reuse untouched arrays; `select`
-  projects rather than copies; only row-reordering verbs concatenate.
-- Benchmarks (Phase 9) track: filter throughput, group_by on 1e6 rows, Parquet
-  read/write with and without projection pushdown.
-- `#to_arrow` on a multi-chunk frame copies. It is documented, not hidden.
+The rule: **data stays in Arrow buffers until an edge forces materialization.**
+Kernels are Arrow's; this library's contribution is not adding copies.
+
+### The edges
+
+These are the only places allowed to allocate or materialize:
+
+| Edge | Why it allocates |
+| --- | --- |
+| `Series#to_a`, `Series#each`, `Series#[]` | Crystal values are not Arrow buffers |
+| `Series#to_arrow`, `DataFrame#to_arrow` | one contiguous array; concat when chunked |
+| `DataFrame#to_s`, display | formatting needs per-value strings |
+| Parquet/CSV/IPC writers | encoding walks values |
+| `filter`, `sort_by`, `group_by`, `join` | the output is a different row set (Arrow semantics) |
+
+### What never allocates
+
+- `DataFrame#[]` — a series is a list of references to the batch columns.
+- `DataFrame#slice`, `#head`, `#tail` — `RecordBatch#slice` is a view (offset and
+  length only). `head(n)`/`tail(n)` return `self` when `n` covers the frame.
+- `select` / projection — `RecordBatch#project` reuses the arrays.
+- `Series#size`, `#count`, `#null_count` — summed across chunk headers.
+- `Series#sum`, `#mean`, `#min`, `#max` — per-chunk kernel, then fold scalars.
+- `Series#each_chunk`, `DataFrame#each_batch` — streaming access to what exists.
+
+### What the references confirmed
+
+- **arrow-rs** has no `ChunkedArray`; `Vec<ArrayRef>` is the sanctioned model
+  (C12).
+- **Polars** keeps `Vec<ArrayRef>` in `ChunkedArray` and rechunks only for
+  random access or SIMD work; aggregations run per chunk.
+- **Arquero** goes furthest on the read side: `filter` returns a `BitSet` view
+  and columns are only copied when a table is reified.
+- **Kotlin DataFrame** is column-based and reuses storage across its immutable
+  transforms.
+
+### Where we deliberately differ from Arquero
+
+Arquero's deferred `BitSet` mask makes eager `filter` free, but every subsequent
+operation — and every edge — must honor the mask. That is a lazy engine wearing
+eager clothes. Our split is explicit: eager verbs materialize (Arrow's
+`filter_record_batch` semantics, documented), and `LazyFrame` is where work is
+deferred and pushed into the Parquet reader. Revisit only if Phase 9 benchmarks
+show filter-dominated workloads.
+
+### Benchmarks (Phase 9)
+
+Filter throughput, `group_by` on 1e6 rows, Parquet read/write with and without
+projection pushdown, and a copy-count check that the "never allocates" list
+above stays true.
 
 ## 15. Risks and open questions
 

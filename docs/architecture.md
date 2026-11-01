@@ -59,18 +59,52 @@ choose. Zero-column and empty frames are legal; `Arrow.concat_batches` handles
 both (it sums `num_rows` for an empty field list and returns
 `RecordBatch.new_empty(schema)` for an empty chunk list).
 
-## What is actually zero-copy
+## What stays in Arrow, and where it stops
 
-Arrow's own rules, which the plan's original sketch overstated:
+The rule: **data stays in Arrow buffers until an edge forces materialization.**
+Kernels belong to Arrow; this library's job is to not add copies.
+
+### Edges (allowed to allocate)
+
+| Edge | Why |
+| --- | --- |
+| `Series#to_a`, `Series#each`, `Series#[]` | Crystal values are not Arrow buffers |
+| `Series#to_arrow`, `DataFrame#to_arrow` | one contiguous array; concat when chunked |
+| `DataFrame#to_s` | formatting needs per-value strings |
+| file writers | encoding walks values |
+| `filter`, `sort_by`, `group_by`, `join` | the output is a different row set |
+
+### Never allocates
+
+- `DataFrame#[]` — a series is a list of references to batch columns.
+- `DataFrame#slice` / `#head` / `#tail` — `RecordBatch#slice` adjusts offset and
+  length only; `head(n)` and `tail(n)` return `self` when `n` covers the frame.
+- `select` / projection — `RecordBatch#project` reuses the columns.
+- `Series#size`, `#count`, `#null_count` — summed from chunk headers.
+- `Series#sum`, `#mean`, `#min`, `#max` — per-chunk kernel, folded scalars.
+- `Series#each_chunk`, `DataFrame#each_batch` — streaming access to what exists.
+
+`Series` holds `Array(Arrow::ArrayBase)` rather than a chunked-array type because
+`arrow-rs` deliberately has none and recommends exactly this representation.
+
+### What is actually zero-copy (Arrow's rules, not ours)
 
 - `RecordBatch#slice` and `#project` are **views** — no buffer copy.
-- `Arrow.filter` and `Arrow.take` **allocate** new value buffers (they must:
-  the output is a different row set). They do not copy *untouched columns*,
+- `Arrow.filter` and `Arrow.take` **allocate** new value buffers; they must,
+  because the output is a different row set. Untouched columns are not copied,
   which is what `filter_record_batch` exploits.
 - `Arrow.concat_batches` allocates.
 
 So `select` on a filter result copies only the selected arrays, and `select`
-alone copies nothing. This library adds no copies of its own beyond `#to_arrow`.
+alone copies nothing. This library adds no copies of its own beyond the edges.
+
+### Why not Arquero-style deferred filtering
+
+Arquero's `filter` returns a `BitSet` mask over shared columns, so it is
+effectively lazy without saying so. Every later operation then has to honor the
+mask. We keep the boundary explicit instead: eager verbs materialize (Arrow's
+semantics), and `LazyFrame` is where deferral and Parquet pushdown live. Revisit
+if benchmarks show filter-dominated workloads.
 
 ## Expressions
 

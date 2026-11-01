@@ -9,6 +9,12 @@
 require "arrow-cr"
 require "parquet-cr"
 
+require "./prism/error"
+require "./prism/values"
+require "./prism/series"
+require "./prism/dataframe"
+require "./prism/construction"
+
 module Prism
   VERSION = "0.1.0"
 end

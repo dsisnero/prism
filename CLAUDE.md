@@ -50,8 +50,10 @@ volume they can otherwise be mistaken for `*_spec.cr` files. See
 2. **Never patch `lib/`.** If a dependency is wrong or missing, reproduce it,
    report it upstream, and record the workaround in `plans/plan.md`.
 3. **No monkey-patching `Arrow` or `Parquet`.** All wrapping lives in `Prism`.
-4. **Element-wise operations preserve chunking.** Do not concatenate batches
-   unless the operation genuinely reorders rows.
+4. **Keep data in Arrow buffers; materialize only at edges.** Verbs reduce
+   chunk-by-chunk and never call `to_arrow`; only `to_a`, `to_arrow`, `each`,
+   display, and writers materialize. See
+   [plan §14](plans/plan.md#14-zero-copy-policy-and-performance).
 5. **Expressions are values.** No side effects, no callbacks deferred to
    execution; everything must be inspectable and typeable before data is read.
 6. **Fail with context.** Errors name the offending column.

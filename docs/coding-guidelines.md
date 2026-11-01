@@ -89,6 +89,9 @@ also avoids name collisions when `arrow-cr` adds types.
 
 ## Performance
 
+- **Materialize only at edges.** A verb must not call `to_arrow`, `to_a`, or
+  `Arrow.concat_batches`. Reduce per chunk and fold the partial results; the
+  zero-chunk specs in `spec/prism/series_spec.cr` pin this property.
 - Do not copy buffers the operation does not need to change. Element-wise verbs
   map over chunks; `select` projects.
 - Prefer `Arrow.take_record_batch` over per-row Crystal loops for any row
