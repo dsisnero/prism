@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Optional styled CLI tables: `Prism::Styled.render` and `DataFrame#to_styled`
+  draw a bordered table through `lipgloss`, sharing `Display.grid` with the plain
+  renderer so selection and truncation match. Opt-in via
+  `require "prism/lipgloss"`; `lipgloss` is a development dependency, and
+  `to_s`/`inspect` stay ANSI-free.
 - Phase 9b parity: `LazyFrame` gains `drop`, `rename`, `cast`, `fill_null`,
   `drop_nulls`, `with_columns`, `tail` and `slice`, matching the eager verbs
   and results. `Series` gains `is_null`, `fill_null`, `cast`, element-wise `==`

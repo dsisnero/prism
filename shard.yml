@@ -20,3 +20,7 @@ development_dependencies:
   ameba:
     github: crystal-ameba/ameba
     version: ~> 1.6
+  # Optional: only used by `require "prism/lipgloss"` (styled CLI tables).
+  # Kept as a development dependency so consumers are not forced to install it.
+  lipgloss:
+    path: ../lipgloss

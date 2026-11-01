@@ -19,6 +19,35 @@ module Prism
     # Rows shown from the head when truncating.
     ELLIPSIS = "..."
 
+    # Pre-computed text grid, shared by the plain and styled renderers so both
+    # agree on selection, truncation and value formatting.
+    struct Grid
+      getter shape : String
+      getter headers : Array(String)
+      getter dtypes : Array(String)
+      getter rows : Array(Array(String))
+
+      def initialize(
+        @shape : String,
+        @headers : Array(String),
+        @dtypes : Array(String),
+        @rows : Array(Array(String)),
+      )
+      end
+
+      # Dtype labels above the data, for renderers that style rows rather than
+      # columns.
+      def body_rows : Array(Array(String))
+        [@dtypes] + @rows
+      end
+
+      # Header and dtype labels stacked as data rows, for renderers that cannot
+      # set a real header row.
+      def labelled_rows : Array(Array(String))
+        [@headers] + body_rows
+      end
+    end
+
     def render(
       frame : DataFrame,
       *,
@@ -26,6 +55,35 @@ module Prism
       max_cols : Int32 = DEFAULT_MAX_COLS,
       max_string : Int32 = DEFAULT_MAX_STRING,
     ) : String
+      grid = self.grid(
+        frame,
+        max_rows: max_rows,
+        max_cols: max_cols,
+        max_string: max_string,
+      )
+
+      widths = grid.headers.map_with_index do |header, position|
+        cell_width = grid.rows.max_of?(&.[position].size) || 0
+        [header.size, grid.dtypes[position].size, cell_width].max
+      end
+
+      lines = [] of String
+      lines << grid.shape
+      lines << render_row(grid.headers, widths)
+      lines << widths.map { |width| "-" * width }.join(" | ")
+      lines << render_row(grid.dtypes, widths)
+      grid.rows.each { |row| lines << render_row(row, widths) }
+
+      lines.join('\n')
+    end
+
+    def grid(
+      frame : DataFrame,
+      *,
+      max_rows : Int32 = DEFAULT_MAX_ROWS,
+      max_cols : Int32 = DEFAULT_MAX_COLS,
+      max_string : Int32 = DEFAULT_MAX_STRING,
+    ) : Grid
       raise ArgumentError.new("max_rows must be >= 1 (got #{max_rows})") if max_rows < 1
       raise ArgumentError.new("max_cols must be >= 1 (got #{max_cols})") if max_cols < 1
       if max_string < MIN_MAX_STRING
@@ -50,25 +108,11 @@ module Prism
           ELLIPSIS
         end
       end
-      cells = columns.map do |index|
-        rows.map { |row| cell_text(frame, names, index, row, max_string) }
+      body = rows.map do |row|
+        columns.map { |column| cell_text(frame, names, column, row, max_string) }
       end
 
-      widths = headers.map_with_index do |header, position|
-        candidates = [header, dtypes[position]] + cells[position]
-        candidates.max_of(&.size)
-      end
-
-      lines = [] of String
-      lines << "shape: (#{frame.row_count}, #{names.size})"
-      lines << render_row(headers, widths)
-      lines << widths.map { |width| "-" * width }.join(" | ")
-      lines << render_row(dtypes, widths)
-      rows.each_index do |position|
-        lines << render_row(cells.map { |column| column[position] }, widths)
-      end
-
-      lines.join('\n')
+      Grid.new("shape: (#{frame.row_count}, #{names.size})", headers, dtypes, body)
     end
 
     # Short dtype label used in the table header, Polars style.

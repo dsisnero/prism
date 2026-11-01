@@ -45,8 +45,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | in progress |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: lazy and Series verb parity (Phase 9b)`.
-**Gates:** `make lint` and `make test` — both green (269 examples).
+**Last commit:** `feat: optional styled CLI tables via lipgloss`.
+**Gates:** `make lint` and `make test` — both green (275 examples).
 
 ---
 
@@ -1206,13 +1206,24 @@ origin.
       truncation for wide and tall frames, and `null` rendering
 - [x] `DataFrame#to_s(max_rows:, max_cols:, max_string:)` for explicit limits
 - [x] `Series#to_s` summary line and `LazyFrame#explain` were already adequate
+- [x] Optional styled CLI table through `lipgloss`
+      (`require "prism/lipgloss"`, `DataFrame#to_styled`)
 
 **Notes:** defaults follow Polars — 10 rows, 8 columns, 30 characters per string
 cell, with `max/2` head and `max/2` tail plus an ellipsis row or column. The plan
 originally said "dtype footer"; the dtype sits in a row under the header
 (Polars' layout), which reads better than repeating every column name in a
-footer. The table is plain ASCII: `ljust` pads by bytes, so box-drawing
+footer. The core table is plain ASCII: `ljust` pads by bytes, so box-drawing
 characters would misalign with any wide value.
+
+**Styled output is opt-in.** `Prism::Styled` renders a bordered table through
+`dsisnero/lipgloss`, sharing selection and formatting with the plain renderer
+via `Display.grid`. It is a separate require (`require "prism/lipgloss"`) and
+`lipgloss` is only a *development* dependency here, so consumers who want boxes
+add it to their own `shard.yml`. `to_s`/`inspect` stay plain on purpose: logs,
+pipes and specs must not receive ANSI escapes. `Table#headers` takes a splat
+only, so the call is macro-generated for up to 16 columns; wider tables fall back
+to a header row in the body.
 
 #### 9b. API completeness (done)
 
@@ -1262,7 +1273,10 @@ C16).
 
 #### 9e. Release
 
-- [ ] `examples/` for the README workflows
+- [ ] `examples/` for the README workflows, including an interactive viewer
+      built on `dsisnero/bubbletea` + `dsisnero/bubbles` (table viewport) and
+      `dsisnero/ultraviolet` for terminal I/O — the TUI counterpart to
+      `to_styled`, as a development dependency only
 - [ ] Memory notes: `#to_arrow` copy cost documented
 - [ ] v0.1.0 tag
 
