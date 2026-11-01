@@ -283,8 +283,18 @@ Verified in `arrow-cr`: no `unique`/`count_distinct`/`value_counts` kernel exist
 uses `Aggregates.count_distinct` (typed sort + partition) rather than
 `array.uniq`. Polars' `unique_stable` uses a Rust hash set instead; its
 non-stable `unique` sorts, which is the shape used here. The stable path is
-therefore O(n log n) rather than O(n); a hash path would first need Arrow-native
-hashing, which `arrow-cr` does not expose.
+therefore O(n log n) rather than O(n).
+
+**Correction after checking `arrow-rs` directly:** the missing piece is not a
+*hashing* kernel. `arrow-rs` has none either — hashing is not part of the Arrow
+specification, which defines memory layout and IPC only, and `arrow-rs` uses
+`ahash` internally for dictionary interning. What `arrow-rs` does provide is the
+**`arrow-row` crate**: `RowConverter`/`Row`, a canonical byte encoding of one or
+more columns (1-byte null sentinel, big-endian values, sign bit flipped for
+signed integers, IEEE `totalOrder` for floats, block encoding for strings) built
+so that `memcmp` gives the correct ordering. That — not a hash function — is the
+primitive that makes O(n) distinct and unboxed join keys possible. `arrow-cr` has
+neither. See [§14](#native-row-encoding-for-keys-deferred).
 
 #### C19. `Arrow.take_record_batch` reuses the source schema
 
@@ -1179,6 +1189,46 @@ optimize, and the shared pieces (TypeCache, CSE, the expression AST) are the sam
 ones the Phase 7 executor will use. Revisit when `LazyFrame` exists — routing
 eager verbs through it would give uniform predicate pushdown.
 
+### Native row encoding for keys (deferred)
+
+The current divergences, and what would close them:
+
+| Divergence | Today | With row encoding |
+| --- | --- | --- |
+| Join keys | one `Array(Value)` per row, boxed | one canonical `Bytes` per row |
+| `distinct` / `unique` | O(n log n) sort + partition | O(n) seen-set |
+| `n_unique` | O(n log n) | O(n) |
+| NaN / signed-zero keys | Crystal `==`, so NaN never matches NaN | canonical encoding, NaNs match |
+
+Three ways to do it, in increasing fidelity:
+
+**A. Prism-local key encoding (~150–250 lines).** Encode each key value to
+canonical bytes — sign-flipped big-endian integers, `totalOrder` bits for floats,
+length-prefixed strings, a null sentinel — concatenate per row, and use
+`Hash(Bytes, …)`. Verified: Crystal hashes `Bytes` by **content**, and distinct
+objects with equal bytes hit the same bucket, so no boxing is needed. Fully
+inside `Prism`, no dependency change.
+
+**B. Port `arrow-row` into `arrow-cr` (~400–700 lines).** The upstream-faithful
+option: it is an `arrow-rs` component, so porting it is squarely inside
+`arrow-cr`'s charter ("behaviour-faithful port"). Everyone downstream benefits,
+and the encoding matches upstream byte for byte, including the block format for
+variable-length data.
+
+**C. Re-open `module Arrow` from `Prism`.** Rejected. It is exactly what §4
+forbids: `Prism` would be only half-requireable, and the code would live in
+neither shard's ownership.
+
+None of these diverge from the Arrow **specification**: the spec covers the
+memory and wire format, not compute kernels. Option B diverges from nothing at
+all, because it is a port of an existing `arrow-rs` crate.
+
+**Decision: defer, prefer B.** Doing it now would be guessing that joins and
+distinct are the bottleneck; there are no benchmarks yet. Phase 9 measures, and
+this becomes worthwhile if join/distinct/`n_unique` dominate a realistic
+workload. Until then the sort-based paths are correct, deterministic, and stay
+in Arrow buffers.
+
 ### Where we deliberately differ from Arquero
 
 Arquero's deferred `BitSet` mask makes eager `filter` free, but every subsequent
@@ -1206,6 +1256,8 @@ above stays true.
 | Typed-schema macro complexity | Isolated in Phase 8 with its own spec file; API is additive |
 | Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
+| NaN join keys never match | Crystal `==` on `Float64::NAN` is false, so a NaN key does not join to a NaN key (Polars matches them via `totalOrder`). Fixed by the row encoding in §14; documented as a limitation until then |
+| Proving joins/distinct need hashing | Phase 9 benchmarks decide; §14 records the option (A local, B upstream) and the preferred choice |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
 **Open questions** (decide in-phase, record here):
