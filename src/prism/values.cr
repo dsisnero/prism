@@ -95,6 +95,19 @@ module Prism
       end
     end
 
+    # Numeric value as Float64, for means/medians and other float outputs.
+    def to_f64(value : Value) : Float64
+      case value
+      when Arrow::Float16 then value.to_f64
+      when Int8, Int16, Int32, Int64,
+           UInt8, UInt16, UInt32, UInt64,
+           Float32, Float64
+        value.to_f
+      else
+        raise DtypeError.new("expected a number, got #{value.inspect}")
+      end
+    end
+
     private def self.collect_values(array) : Array(Value)
       out = [] of Value
       array.each { |value| out << value }

@@ -206,17 +206,34 @@ Arrow provides sort and partition, not group-by:
 
 ```text
 lexsort_to_indices(keys) -> take_record_batch -> partition(keys) -> ranges
-  -> per-range aggregate Expr evaluation -> assemble result columns
+  -> per-range aggregate on a slice view -> Arrow.concat the scalars
 ```
 
-Consequences worth knowing:
+This is Polars' sort-based path (`GroupsType::Slice`, contiguous `[start, len]`
+ranges). Polars hashes by default and sorts only when keys are already sorted; we
+always sort, which buys:
 
-- Group order follows the sort, so results are deterministic (unlike a hash
-  group). `group_by` output is sorted by keys unless documented otherwise.
-- Null keys form one group; the default policy places it first, matching Arrow's
-  `ASC NULLS FIRST` default.
-- Cost is O(n log n) per grouping, not O(n). A hash-based path is a possible
-  later optimization.
+- **View-based groups.** Each group is `RecordBatch#slice(begin, size)` — offset
+  and length only. No index list, no subarray copy.
+- **One sort per `aggregate` call.** Every aggregation walks the same ranges.
+- **Deterministic order.** `maintain_order: true` (default) restores discovery
+  order by tracking each group's smallest original row index; `false` leaves the
+  sorted order.
+
+Cost is O(n log n) per grouping rather than O(n). A hash path is possible later
+(Polars' `Idx` representation); the tradeoff would be losing zero-copy group
+views.
+
+Aggregations run through `Prism::Series` and Arrow kernels on the group slice:
+`sum`/`mean`/`min`/`max` via `arrow-cr` aggregate kernels, `first`/`last` as
+array slices (never materialized), `variance`/`std` as
+`sum((x - mean)^2) / (n - ddof)` with `sub`/`mul`/`sum`, and `median` via
+`sort` plus the middle row. In-memory aggregation specializations that Polars
+uses for rolling windows are out of scope.
+
+Null keys form one group. `null_keys: :first | :last` controls placement
+(:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows
+before grouping.
 
 ## Parity and divergence
 

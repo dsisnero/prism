@@ -7,6 +7,14 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 4 `group_by` + aggregations: `GroupBy#aggregate` (named arguments or a
+  Hash) and `GroupBy#agg` (aliased expressions) over one or more keys, with
+  `sum`, `mean`, `min`, `max`, `count`, `count_all`, `n_unique`, `first`,
+  `last`, `std`, `variance`, and `median`.
+- Grouping is sort-based on Polars' contiguous-slice strategy: groups are
+  `RecordBatch#slice` views, one sort serves every aggregation in a call, and
+  `null_keys` (`:first`/`:last`/`:drop`) plus `maintain_order` make the result
+  order explicit.
 - Expression execution optimizations mirroring Polars: `Prism::TypeCache`
   resolves dtypes and coercion targets once per execution instead of once per
   chunk, and `Prism::Cse` memoizes repeated subexpressions per chunk.

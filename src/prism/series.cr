@@ -282,15 +282,7 @@ module Prism
     end
 
     private def to_f64(value : Value) : Float64
-      case value
-      when Arrow::Float16 then value.to_f64
-      when Int8, Int16, Int32, Int64,
-           UInt8, UInt16, UInt32, UInt64,
-           Float32, Float64
-        value.to_f
-      else
-        raise DtypeError.new("expected a number, got #{value.inspect}")
-      end
+      Values.to_f64(value)
     end
   end
 end

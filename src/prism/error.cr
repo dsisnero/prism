@@ -40,6 +40,16 @@ module Prism
     end
   end
 
+  # Raised when a group_by aggregation column is not an aggregation.
+  class InvalidAggregation < Error
+    def initialize(column : String, expression : String)
+      super(
+        "column #{column.inspect} is not an aggregation (#{expression}); " \
+        "use .sum, .mean, .count, .min, .max, and friends"
+      )
+    end
+  end
+
   # Raised when an operation cannot apply to the given Arrow data type.
   class DtypeError < Error
   end

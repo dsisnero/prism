@@ -20,17 +20,15 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 4 — `group_by` and aggregations.
+**Current focus:** Phase 5 — joins and concatenation.
 
 **Next up:**
 
-1. Phase 4: aggregate `Expr` nodes (`Agg`) with `sum`/`mean`/`min`/`max`/
-   `count`/`count_all`/`n_unique`/`first`/`last`.
-2. Phase 4: `GroupBy` over one or more keys via `lexsort_to_indices` →
-   `take_record_batch` → `partition` → per-range reduce (C5).
-3. Phase 4: `aggregate(**named)` and `agg(*aliased_exprs)` with a result schema
-   derived from `Expr#dtype`, not from data.
-4. Phase 4: null-key policy (`null_keys: :first | :last | :drop`).
+1. Phase 5: `join` inner/left/right/outer/semi/anti on one or more keys.
+2. Phase 5: `left_on`/`right_on` with differing names, and collision suffixes.
+3. Phase 5: `Prism.concat` (vertical) and `hstack` (horizontal).
+4. Phase 5: cardinality and null-fill specs per join type, including duplicate
+   keys (many-to-many) and empty inputs.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -38,16 +36,16 @@ implicit.
 | 1 | Foundation: `DataFrame`, `Series`, schema, construction | **done** |
 | 2 | Expressions: AST, DSL, evaluation, coercion | **done** |
 | 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | **done** |
-| 4 | `group_by` + aggregations | in progress |
-| 5 | Joins and row/column concatenation | not started |
+| 4 | `group_by` + aggregations | **done** |
+| 5 | Joins and row/column concatenation | in progress |
 | 6 | IO: Parquet, CSV, IPC (read + write, streaming) | not started |
 | 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | not started |
 | 8 | Compile-time typed schemas | not started |
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `perf: compile expressions once per execution`.
-**Gates:** `make lint` and `make test` — both green (138 examples).
+**Last commit:** `feat: group_by and aggregations (Phase 4)`.
+**Gates:** `make lint` and `make test` — both green (158 examples).
 
 ---
 
@@ -153,8 +151,15 @@ where dtype dispatch is allowed to live.
 It returns row ranges only when equal keys are adjacent, and `SortOptions`
 defaults to *ascending, nulls first*. **Decision:** `group_by` is
 `lexsort_to_indices` → `take_record_batch` → `partition` → per-range aggregate.
-Null keys form their own group and are placed first; that policy is documented
-in §8.1 and configurable (`null_keys: :first | :last | :drop`).
+Null keys form their own group; placement is configurable
+(`null_keys: :first | :last | :drop`, §8.1).
+
+Polars has the same two representations and picks by data shape: hash-based
+(`GroupsType::Idx`, first index + index list) by default, sort-based
+(`GroupsType::Slice`, contiguous `[start, len]` pairs) when keys are sorted. We
+always take the slice path because it yields `RecordBatch#slice` views instead
+of index lists, and because it makes output order deterministic instead of
+unspecified.
 
 #### C6. No `mean`, `count`, or `count_distinct` kernels
 
@@ -723,6 +728,7 @@ whole plan is typed before execution.
    output become an `ArrowPredicateFn` on a `RowFilter`; the rest stay as a
    post-scan `Filter`.
 2. **Projection pruning** — collect the columns each node actually needs
+   (Polars also prunes unused aggregation expressions out of a `GroupBy` node)
    (`Expr#columns`), intersect down to the scan. For `ScanParquet`, emit
    `ProjectionMask.columns(parquet_schema, needed)`.
 3. **Limit pushdown** — `Limit` merges into a scan as `with_limit` +
@@ -891,18 +897,44 @@ chunk-count assertions: element-wise verbs keep their chunks, `sort_by` and
 - `distinct` keeps the *smallest original row index* per key group rather than
   trusting sort stability, then restores the original order.
 
-### Phase 4 — group_by + aggregation
+### Phase 4 — group_by + aggregation (done)
 
-- [ ] `GroupBy` with multi-key grouping (C5)
-- [ ] Aggregate functions: `sum min max mean count count_all n_unique first last
-      std var median`
-- [ ] `null_keys` policy (§8.1)
-- [ ] Macro `aggregate(**named)` (C7) + hash overload
-- [ ] Aggregation result schema derived from `Expr#dtype`, not from data
+- [x] `GroupBy` with multi-key grouping (C5)
+- [x] Aggregate functions: `sum mean min max count count_all n_unique first last
+      std variance median`
+- [x] `null_keys` policy (§8.1): `:first`, `:last`, `:drop`
+- [x] `maintain_order`: `true` (default) returns discovery order, `false` sorts
+      by key
+- [x] `aggregate(**named)` (C7) + Hash overload, and `agg(*aliased_exprs)`
+- [x] Aggregation result schema derived from `Expr#dtype`, not from data
 
 **Acceptance:** grouped results match a naive per-key reference implementation
 over the same data, including all-null groups and empty input (zero rows in →
-zero rows out, correct schema).
+zero rows out, correct schema). Specs: `spec/prism/group_by_spec.cr`
+(20 examples).
+
+**Notes carried forward:**
+
+- Grouping is **sort-based**, which is Polars' `GroupsType::Slice` path: keys are
+  lexsorted, `Arrow.partition` yields contiguous ranges, and each range is
+  aggregated through a `RecordBatch#slice` view. No group is copied out and no
+  index list is built. Polars hashes by default and sorts only when keys are
+  already sorted; we always sort because it gives deterministic output order and
+  view-based groups, at O(n log n).
+- All aggregations in one `aggregate` call walk the same ranges, so several
+  aggregates cost one sort, not one per aggregate.
+- `first`/`last` return an array slice, so they never materialize values.
+- `std`/`variance`/`median` use Arrow kernels on the group (`cast` to Float64,
+  `sub`/`mul`/`sum` for variance, `sort` + middle row for median) rather than
+  materializing Crystal values.
+- `n_unique` counts **non-null** distinct values, consistent with the other
+  aggregates skipping nulls. (Polars counts nulls as a value here — a documented
+  divergence if it matters later.)
+- Null keys form **one** group, not one per null row. Polars' wiki text is
+  ambiguous on this; our behavior is pinned by a spec.
+- `maintain_order` defaults to `true` (discovery order), matching dplyr/pandas
+  intuition. Polars leaves order unspecified by default and offers
+  `maintain_order: true` for the same result.
 
 ### Phase 5 — joins and concatenation
 
