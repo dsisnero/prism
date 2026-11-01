@@ -40,6 +40,10 @@ require "./prism/group_by"
 require "./prism/combine"
 require "./prism/join"
 
+require "./prism/io/parquet"
+require "./prism/io/csv"
+require "./prism/io/ipc"
+
 module Prism
   VERSION = "0.1.0"
 end

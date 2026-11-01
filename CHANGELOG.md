@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 6 IO: `Prism.read_parquet` / `write_parquet` (projection pushdown,
+  `batch_size`, `columns`, `predicate`, compression, row-group size,
+  statistics), `read_csv` / `write_csv` (schema inference or explicit schema,
+  header and delimiter control), and `read_ipc` / `write_ipc` in both file and
+  stream formats — each also available as a `DataFrame` method.
 - Phase 5 joins: `DataFrame#join` with `:inner`, `:left`, `:right`, `:full`
   (`:outer`), `:semi`, and `:anti`, on one or several keys via `on:` or
   `left_on:`/`right_on:`, plus `suffix`, `nulls_equal`, and `coalesce` options.
@@ -58,6 +63,12 @@ to [Semantic Versioning](https://semver.org/).
   recorded them as design decisions in the plan.
 - Recorded the design influences for the hybrid architecture (Polars, Kotlin
   DataFrame, RedAmber, Arquero, Explorer) in `CLAUDE.md` and plan §4.1.
+
+### Known issues
+
+- Parquet row-group pruning is disabled: `parquet-cr` returns corrupt values for
+  non-predicate columns when a row filter is combined with a projection (plan
+  C20). Predicates are applied in memory after a projected read instead.
 
 ### Changed
 

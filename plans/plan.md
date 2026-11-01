@@ -20,17 +20,20 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 6 — IO (Parquet, CSV, IPC read and write).
+**Current focus:** Phase 7 — `LazyFrame` and the optimizer.
 
 **Next up:**
 
-1. Phase 6: `Prism.read_parquet` / `write_parquet` on path and `IO`, with
-   `batch_size`, `columns`, and compression options.
-2. Phase 6: guarantee `ArrowWriter#close` runs (a dropped writer loses the
-   footer) and validate the schema before writing (C10).
-3. Phase 6: `read_csv` / `write_csv` and `read_ipc` / `write_ipc` via `arrow-cr`.
-4. Phase 6: round-trip specs through `IO::Memory`, plus one file-based spec in
-   `temp/` for path handling.
+1. Phase 7: plan nodes (`ScanParquet`, `ScanBatches`, `Filter`, `Select`,
+   `WithColumn`, `GroupBy`, `Sort`, `Distinct`, `Join`, `Limit`) with
+   `schema(upstream)` propagation.
+2. Phase 7: optimizer passes in order — predicate pushdown, projection
+   pruning, limit pushdown, constant folding, dead-column elimination (CSE and
+   boolean simplification already happen at eval time).
+3. Phase 7: `LazyFrame#collect` and `#explain`, sharing `TypeCache` and the
+   expression AST with the eager verbs.
+4. Phase 7: push predicates into the Parquet scan once C20 is fixed upstream;
+   until then the scan filters in memory after a projected read.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -40,14 +43,14 @@ implicit.
 | 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | **done** |
 | 4 | `group_by` + aggregations | **done** |
 | 5 | Joins and row/column concatenation | **done** |
-| 6 | IO: Parquet, CSV, IPC (read + write, streaming) | in progress |
-| 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | not started |
+| 6 | IO: Parquet, CSV, IPC (read + write, streaming) | **done** |
+| 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | in progress |
 | 8 | Compile-time typed schemas | not started |
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: joins and concatenation (Phase 5)`.
-**Gates:** `make lint` and `make test` — both green (192 examples).
+**Last commit:** `feat: parquet, csv and ipc IO (Phase 6)`.
+**Gates:** `make lint` and `make test` — both green (213 examples).
 
 ---
 
@@ -304,6 +307,30 @@ schema, so taking with a null index into a non-nullable column raises
 Outer joins need exactly that. **Decision:** `Prism::Join` gathers column by
 column with `Arrow.take` and rebuilds the batch against a relaxed (all-nullable)
 schema, then `compose` restores the precise nullability on the final schema.
+
+#### C20. `parquet-cr`'s row filter corrupts non-predicate columns
+
+Reproduced against the pinned checkout. Write a 5-row frame (`region` Utf8 with
+a null, `price` Float64 with a null, `qty` Int64) and read it with
+`with_row_filter(RowFilter.new([ArrowPredicateFn.new(qty_mask) { ... }]))` for
+`qty > 2`, where the mask logged by the predicate is `[F,F,T,T,T]`:
+
+| Column | Result | Correct |
+| --- | --- | --- |
+| `qty` (Int64) | `[3, 4, 5]` | yes |
+| `flag` (Boolean) | `[true, false, true]` | yes |
+| `region` (Utf8) | `["east", "west", "east"]` (rows 0,1,2) | no |
+| `price` (Float64) | `[30.0, 40.0, 10.0]` (rows 2,3 then row 0) | no |
+
+The predicate's own mask is correct, so the fault is in how the reader applies
+the selection to the other column readers, not in predicate evaluation.
+**Decision:** Prism does not call `with_row_filter`; the `predicate:` argument
+filters in memory after a projected read. Projection pushdown, the other half of
+the win, still applies. `spec/prism/io/parquet_spec.cr` keeps the reproduction as
+a regression guard, and re-enabling pruning is one commented block in
+`src/prism/io/parquet.cr`.
+
+**Upstream action:** report to `dsisnero/parquet-cr` with the table above.
 
 ### 3.4 Verified end-to-end sketch
 
@@ -1016,20 +1043,42 @@ including duplicate keys (many-to-many) and empty inputs. Specs:
   gathered with `Arrow.take`. A sort-merge join would avoid the materialization
   at O(n log n); noted for Phase 9.
 
-### Phase 6 — IO
+### Phase 6 — IO (done)
 
-- [ ] `read_parquet` / `read_parquet(io)` with `columns`, `batch_size`,
-      predicate pushdown
-- [ ] `write_parquet` / `write_parquet(io)` with compression, row-group size,
-      guaranteed `close` (C10)
-- [ ] `read_csv` / `write_csv` via `arrow-cr`
-- [ ] `read_ipc` / `write_ipc`
-- [ ] Round-trip specs against in-memory `IO::Memory` (no fixture files needed)
-- [ ] One fixture-based spec for a real file read from `temp/` (gitignored)
+- [x] `read_parquet` / `read_parquet(io)` with `columns`, `batch_size`, and
+      `predicate` (projection pushdown works; full row-group pruning is blocked
+      by C20)
+- [x] `write_parquet` / `write_parquet(io)` with compression, row-group size,
+      statistics, and `close` on the success path (C10)
+- [x] `read_csv` / `write_csv` with schema inference (`infer_rows`), explicit
+      schema, header and delimiter control
+- [x] `read_ipc` / `write_ipc` in both file and stream formats
+- [x] Round-trip specs through `IO::Memory`
+- [x] File-based specs reading and writing under `temp/` (gitignored)
 
 **Acceptance:** `write_parquet` → `read_parquet` preserves schema (including
 nullability and timestamp units), values, and row count for a table with nils
-and mixed column types.
+and mixed column types. Specs: `spec/prism/io/{parquet,csv,ipc}_spec.cr`
+(21 examples).
+
+**Notes carried forward:**
+
+- Defaults follow Polars, not the Parquet crate: **zstd level 3** and page
+  statistics on. `:uncompressed`, `:snappy`, `:gzip`, `:brotli`, `:zstd`,
+  `:lz4`, `:lz4_raw` are accepted.
+- Projection pushdown goes through
+  `ProjectionMask.columns(parquet_schema, names)`, and **predicate columns are
+  added to the read set then dropped** afterwards, which is Polars' rule.
+- `batch_size` decides the chunk count of the returned frame: the reader's
+  batches become the frame's chunks, so a 5-row file with `batch_size: 2` yields
+  3 chunks.
+- **Row-group pruning is disabled** because of C20; the `predicate:` argument is
+  applied in memory over the projected batches. One commented block in
+  `src/prism/io/parquet.cr` turns it back on.
+- IPC writers use `ScopedWriter#open`, which finishes the writer on normal block
+  completion, so the footer or end-marker is not something callers can forget.
+- CSV `infer_rows` mirrors Polars' `infer_schema_length`; `0` types every column
+  as string.
 
 ### Phase 7 — lazy + optimizer
 
@@ -1283,6 +1332,7 @@ above stays true.
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
 | NaN join keys never match | Crystal `==` on `Float64::NAN` is false, so a NaN key does not join to a NaN key (Polars matches them via `totalOrder`). Fixed by the row encoding in §14; documented as a limitation until then |
 | Proving joins/distinct need hashing | Phase 9 benchmarks decide; §14 records the option (A local, B upstream) and the preferred choice |
+| Parquet row-group pruning blocked by C20 | Predicates run in memory after a projected read; the reproduction is a spec, and the Phase 7 optimizer keeps the pushdown slot |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
 **Open questions** (decide in-phase, record here):

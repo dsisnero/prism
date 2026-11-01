@@ -235,6 +235,35 @@ Null keys form one group. `null_keys: :first | :last` controls placement
 (:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows
 before grouping.
 
+## IO
+
+| Format | Read | Write |
+| --- | --- | --- |
+| Parquet | `Prism.read_parquet(path_or_io, columns:, batch_size:, predicate:)` | `write_parquet(..., compression:, row_group_size:, statistics:)` |
+| CSV | `Prism.read_csv(path_or_io, schema:, header:, delimiter:, infer_rows:, batch_size:)` | `write_csv(..., header:)` |
+| Arrow IPC | `Prism.read_ipc(path_or_io, stream:)` | `write_ipc(..., stream:)` |
+
+Parquet reads project columns with `ProjectionMask.columns`, so unrequested
+columns are never decoded. Predicate columns are added to the read set and then
+dropped from the result, matching Polars. The reader's batches become the frame's
+chunks, so `batch_size` controls chunking instead of forcing one large batch.
+
+**Row-group pruning is currently disabled.** `parquet-cr` corrupts
+non-predicate columns when a row filter is combined with an output projection
+(plan C20 lists the reproduction: `price` came back `[30.0, 40.0, 10.0]` for
+rows 2,3,4). Prism therefore filters in memory after a projected read — correct,
+and still avoids decoding unrequested columns. The pushdown call is one commented
+block away once the dependency is fixed.
+
+Writing defaults follow Polars rather than the Parquet crate: zstd level 3 with
+page statistics. The footer is written by `ArrowWriter#close` on the success
+path only; a failed write leaves a file without a footer rather than a
+misleading valid one. IPC writers use `ScopedWriter#open`, which finishes on
+normal block completion.
+
+CSV inference mirrors Polars' `infer_schema_length` (`infer_rows`), and `0`
+types every column as string.
+
 ## Joins
 
 Hash join with the **right side as the build side**, following Polars' model:
