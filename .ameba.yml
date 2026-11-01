@@ -1,0 +1,9 @@
+# Ameba configuration for the Prism DataFrame library.
+Version: "1.7.0-dev"
+
+Excluded:
+  - temp/**/*
+  - lib/**/*
+  - spec/**/*
+  - docs/**/*
+  - plans/**/*

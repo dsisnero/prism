@@ -1,0 +1,17 @@
+# rumdl configuration
+
+[global]
+exclude = [
+    ".git",
+    ".github",
+    ".shards",
+    "lib",
+    "temp",
+    "vendor",
+    "spec",
+    "CHANGELOG.md",
+    "LICENSE.md",
+]
+
+# Respect .gitignore files when scanning directories (default: true)
+respect-gitignore = true

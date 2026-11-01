@@ -1,0 +1,25 @@
+# Crystal build artifacts and dependencies
+/api/
+/lib/
+/bin/
+/.shards/
+*.dwarf
+
+# Libraries don't need dependency lock
+# Dependencies will be locked in applications that use them
+/shard.lock
+
+# Local Crystal cache
+.crystal-cache/
+
+# Markdown linter cache
+.rumdl_cache/
+
+# Temporary working artifacts
+temp/
+
+# Local agent/tool settings
+.claude/
+
+# macOS AppleDouble sidecars (this checkout lives on an exFAT volume)
+._*
