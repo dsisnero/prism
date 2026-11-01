@@ -44,9 +44,9 @@ handling, construction and conversion).
 | 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | not started |
 | 8 | Compile-time typed schemas | not started |
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
-| 10 | Rename shard `dataframe` → `prism` (deferred by owner) | blocked on owner |
+| 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `chore: scaffold project and record implementation plan`.
+**Last commit:** `chore: rename shard to prism`.
 **Gates:** `make lint` and `make test` — both green at Phase 0.
 
 ---
@@ -264,10 +264,10 @@ meta = writer.close
 downstream shard would make `Prism` requireable-but-broken (types defined only
 after a second `require`) and would couple us to another shard's names.
 
-**Pending rename:** the shard is `dataframe` and the entrypoint file is
-`src/dataframe.cr` so that `require "dataframe"` resolves. The owner will rename
-shard, repo folder, and GitHub repo later; the module is already `Prism`.
-Track it in Phase 10 — do not rename piecemeal.
+**Shard name:** `shard.yml` declares `name: prism` and the entrypoint is
+`src/prism.cr`, so consumers write `require "prism"`. The repository folder and
+the GitHub repository are still named `dataframe`; that rename is owner-gated
+(Phase 10) and must be done as one step, not piecemeal.
 
 ## 4.1 Design influences
 
@@ -331,7 +331,7 @@ logical operations and executes it through the same kernels after optimizing.
 ### 5.2 Module layout
 
 ```text
-src/dataframe.cr            # entrypoint: requires everything, Prism::VERSION
+src/prism.cr                # entrypoint: requires everything, Prism::VERSION
 src/prism/error.cr
 src/prism/dtype.cr          # dtype predicates/helpers over Arrow::DataType
 src/prism/values.cr         # C4: dtype-dispatched value extraction
@@ -441,7 +441,7 @@ Design rules:
 ## 6. Public API (target for v0.1)
 
 ```crystal
-require "dataframe"      # -> "prism" after the Phase 10 rename
+require "prism"
 include Prism::DSL       # optional: enables bare col(...) / lit(...)
 
 # --- construction -------------------------------------------------------
@@ -841,13 +841,17 @@ compile with a message naming the field; `typed.with_column(...)` returns a
 - [ ] Memory notes: `#to_arrow` copy cost documented
 - [ ] v0.1.0 tag
 
-### Phase 10 — rename (owner-gated)
+### Phase 10 — repository rename (owner-gated)
 
-- [ ] `shard.yml` `name: prism`; `src/dataframe.cr` → `src/prism.cr`
-- [ ] `spec/spec_helper.cr` require path; README/docs `require "prism"`
-- [ ] Repo folder + GitHub repo rename; update sibling `parquet-cr` references
-      if needed
-- [ ] One commit, no partial renames
+Shard-level rename is done; the remaining items are outside this repository.
+
+- [x] `shard.yml` `name: prism`; `src/dataframe.cr` → `src/prism.cr`
+- [x] `spec/spec_helper.cr` require path; README/docs `require "prism"`
+- [ ] Repo folder `dataframe/` → `prism/` and the GitHub repository rename
+- [ ] Update sibling checkouts that reference the old path
+- [ ] Switch `shard.yml` dependencies from `path:` to `github:` on publish, and
+      update the README install block to the published form
+- [ ] Do it as one step, not piecemeal
 
 ## 13. Testing strategy
 

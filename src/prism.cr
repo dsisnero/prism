@@ -4,9 +4,8 @@
 # Transformations are inspectable `Prism::Expr` values, and Parquet reads push
 # projections and predicates down into `parquet-cr`'s reader.
 #
-# The shard name and this file name (`dataframe`) are unchanged until the
-# rename phase so that `require "dataframe"` keeps resolving. The module is
-# already `Prism`; see plans/plan.md (Phase 10).
+# Consumers require this file as `require "prism"`, which resolves to
+# `src/prism.cr` for a shard named `prism`.
 require "arrow-cr"
 require "parquet-cr"
 

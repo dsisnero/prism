@@ -1,2 +1,2 @@
 require "spec"
-require "../src/dataframe"
+require "../src/prism"

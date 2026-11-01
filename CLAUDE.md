@@ -11,10 +11,10 @@
 batches; transformations are inspectable expressions; Parquet reads push
 projections and predicates down into the reader.
 
-The shard is still named `dataframe` and the entrypoint is still
-`src/dataframe.cr` so that `require "dataframe"` resolves. The module is already
-`Prism`. The rename is tracked as Phase 10 in the plan — do not rename anything
-piecemeal.
+The shard is `prism` (`shard.yml`), the entrypoint is `src/prism.cr`, and
+consumers `require "prism"`. The repository folder and the GitHub repository are
+still named `dataframe`; renaming those is the remaining Phase 10 item in the
+plan. Do not rename anything else piecemeal.
 
 ## Commands
 

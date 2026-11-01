@@ -8,8 +8,12 @@
 repos/github.com/dsisnero/
 ├── arrow-cr/      # Apache Arrow for Crystal
 ├── parquet-cr/    # Apache Parquet for Crystal (depends on ../arrow-cr)
-└── dataframe/     # this repo (shard name "dataframe", module Prism)
+└── dataframe/     # this repo (shard "prism"; folder rename pending)
 ```
+
+The shard is `prism` and the entrypoint is `src/prism.cr`, so consumers write
+`require "prism"`. The repository folder and the GitHub repository are still
+named `dataframe`; renaming those is the remaining Phase 10 item.
 
 `shards install` symlinks the dependencies into `lib/`:
 
@@ -39,13 +43,13 @@ For a consumer (or after publishing), swap to the git form:
 
 ```yaml
 dependencies:
-  dataframe:
-    github: dsisnero/dataframe
+  prism:
+    github: dsisnero/prism
 ```
 
-A published `${name}` shard will not resolve `path: ../arrow-cr` on a consumer's
-machine, so the published `shard.yml` must use `github:` entries. This is a
-Phase 10 item alongside the shard rename.
+A published shard will not resolve `path: ../arrow-cr` on a consumer's machine,
+so the published `shard.yml` must use `github:` entries. This is the last Phase
+10 item alongside the repository rename.
 
 ## Prerequisites
 
@@ -70,7 +74,7 @@ budget for it.
 ## Repository layout
 
 ```text
-src/dataframe.cr        # entrypoint (renamed in Phase 10)
+src/prism.cr            # entrypoint: requires everything, Prism::VERSION
 src/prism/              # all library code, one directory per concern
 spec/                   # mirrors src/prism/
 plans/plan.md           # implementation plan — the resume source of truth
@@ -149,21 +153,19 @@ Two symptoms:
 
 ## Releasing
 
-Not yet. Phase 9 produces the v0.1.0 tag; Phase 10 handles the shard rename and
-publishing. `CHANGELOG.md` is updated per release, not per commit.
+Not yet. Phase 9 produces the v0.1.0 tag; the remaining Phase 10 work handles
+the repository rename and publishing. `CHANGELOG.md` is updated per release, not
+per commit.
 
-## The shard rename (Phase 10, owner-gated)
+## The repository rename (Phase 10, owner-gated)
 
-The module is `Prism` today, but the shard is `dataframe` and the entrypoint is
-`src/dataframe.cr` so `require "dataframe"` resolves. Renaming is a single
-coordinated change, because a half-rename breaks `require`:
+Done: the shard is `prism` and the entrypoint is `src/prism.cr`.
 
-- [ ] `shard.yml`: `name: prism`
-- [ ] `src/dataframe.cr` → `src/prism.cr`
-- [ ] `spec/spec_helper.cr` and any internal `require "../src/dataframe"`
-- [ ] README/`CLAUDE.md`/`docs/` `require "prism"`
-- [ ] `.ameba.yml`, `Makefile` references if any
-- [ ] Repo folder and GitHub repo rename
-- [ ] `spec/` filename `dataframe_spec.cr` → `prism_spec.cr`
+Remaining, all outside this repository or requiring owner action:
 
-Do not start it until the owner asks.
+- [ ] Rename the repo folder `dataframe/` → `prism/` and the GitHub repository
+- [ ] Update sibling checkouts that reference the old path
+- [ ] Switch `shard.yml` dependencies from `path:` to `github:` on publish
+- [ ] Update the README install block to the published `github:` form
+
+Do not start the folder/GitHub rename until the owner asks.

@@ -17,8 +17,10 @@ the Parquet reader — so a large file can be filtered without being loaded.
 
 ```yaml
 dependencies:
-  dataframe:
-    github: dsisnero/dataframe
+  prism:
+    # Not published yet: point at the sibling checkout. The folder is renamed
+    # to `prism` together with the GitHub repository (plan Phase 10).
+    path: ../dataframe
 ```
 
 ```bash
@@ -30,7 +32,7 @@ Requires Crystal 1.22.2 or newer.
 ## Usage
 
 ```crystal
-require "dataframe"
+require "prism"
 
 include Prism::DSL   # enables bare col(...) / lit(...)
 

@@ -14,8 +14,11 @@ to [Semantic Versioning](https://semver.org/).
 - Verified Arrow/Parquet capability constraints (chunked table model,
   free-function kernels, dtype coercion, projection and predicate pushdown) and
   recorded them as design decisions in the plan.
+- Recorded the design influences for the hybrid architecture (Polars, Kotlin
+  DataFrame, RedAmber, Arquero, Explorer) in `CLAUDE.md` and plan §4.1.
 
 ### Changed
 
-- The library module is now `Prism`. The shard name and entrypoint
-  (`src/dataframe.cr`) are unchanged until the rename phase.
+- The library module is `Prism`, the shard is `prism`, and the entrypoint is
+  `src/prism.cr`. The repository folder and GitHub repository are still named
+  `dataframe` until the remaining rename work lands.

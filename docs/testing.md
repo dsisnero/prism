@@ -16,7 +16,7 @@ one. Batch your edits rather than running after each line.
 ## Layout
 
 ```text
-spec/spec_helper.cr        # requires ../src/dataframe
+spec/spec_helper.cr        # requires ../src/prism
 spec/prism/dataframe_spec.cr
 spec/prism/series_spec.cr
 spec/prism/values_spec.cr
