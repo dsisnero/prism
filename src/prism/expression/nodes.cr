@@ -128,7 +128,9 @@ module Prism
         Coerce.target(@left, @right, schema)
         Arrow::DataType.boolean
       else
-        Coerce.target(@left, @right, schema)
+        target = Coerce.target(@left, @right, schema)
+        reject_unsupported_decimal(@op, target)
+        target
       end
     end
 
@@ -139,11 +141,135 @@ module Prism
     def eval(ctx : EvalContext) : Datum
       return eval_boolean(ctx) if @op.boolean?
 
+      if folded = fold_out_of_range(ctx)
+        return folded
+      end
+
       target = ctx.coercion_target(@left, @right)
+      reject_unsupported_decimal(@op, target)
+      check_literals_fit(target)
+
       left = Coerce.cast(ctx.evaluate(@left), target)
       right = Coerce.cast(ctx.evaluate(@right), target)
 
       Kernels.apply_op(@op, left, right)
+    end
+
+    # Decimal arithmetic is not implemented yet: the kernels grow precision per
+    # the Arrow spec, so the declared dtype and the produced dtype disagree.
+    # Comparisons are supported (they return Boolean, so no scale is involved).
+    private def reject_unsupported_decimal(op : BinaryOp, target : Arrow::DataType) : Nil
+      return unless target.decimal?
+
+      raise UnsupportedOperation.new(
+        "#{op.key_name} on decimal values is not implemented yet; " \
+        "cast the column to Float64 first"
+      )
+    end
+
+    # A comparison against a literal that cannot fit the column's dtype compares
+    # the same way for every row, so it folds to a constant:
+    # `is_null ? null : constant`, which is what Polars rewrites it to.
+    #
+    # Without this the safe cast turns the literal into null and the whole
+    # comparison silently becomes null.
+    private def fold_out_of_range(ctx : EvalContext) : Arrow::BooleanArray?
+      return nil unless @op.comparison?
+
+      literal, operand, op = literal_operand
+      return nil unless literal && operand
+
+      column = Datums.array(ctx.evaluate(operand.not_nil!), ctx)
+      range = integer_range(column.data_type)
+      return nil unless range
+
+      number = integer_literal(literal.not_nil!)
+      return nil unless number
+
+      minimum, maximum = range
+      return nil if number >= minimum && number <= maximum
+
+      above = number > maximum
+      constant = case op
+                 when .lt?, .lt_eq? then above
+                 when .gt?, .gt_eq? then !above
+                 when .eq?          then false
+                 else                    true
+                 end
+
+      Arrow.nullif(
+        Datums.constant_boolean(constant, ctx),
+        Arrow.is_null(column),
+      ).as(Arrow::BooleanArray)
+    end
+
+    # The literal side (if any), the expression on the other side, and the
+    # operator oriented as `column <op> literal`.
+    private def literal_operand : Tuple(Lit?, Expr?, BinaryOp)
+      if @left.is_a?(Lit) && !@right.is_a?(Lit)
+        { @left.as(Lit), @right, mirror(@op) }
+      elsif @right.is_a?(Lit) && !@left.is_a?(Lit)
+        { @right.as(Lit), @left, @op }
+      else
+        { nil, nil, @op }
+      end
+    end
+
+    private def mirror(op : BinaryOp) : BinaryOp
+      case op
+      in .lt?    then BinaryOp::Gt
+      in .lt_eq? then BinaryOp::GtEq
+      in .gt?    then BinaryOp::Lt
+      in .gt_eq? then BinaryOp::LtEq
+      in .eq?    then BinaryOp::Eq
+      in .neq?   then BinaryOp::Neq
+      in .add?, .sub?, .mul?, .div?, .rem?, .and?, .or?
+        op
+      end
+    end
+
+    private def integer_literal(literal : Lit) : Int128?
+      case value = literal.value
+      when Int64  then value.to_i128
+      when UInt64 then value.to_i128
+      end
+    end
+
+    private def integer_range(data_type : Arrow::DataType) : Tuple(Int128, Int128)?
+      case data_type.kind
+      when .int8?   then {-128_i128, 127_i128}
+      when .int16?  then {-32_768_i128, 32_767_i128}
+      when .int32?  then {-2_147_483_648_i128, 2_147_483_647_i128}
+      when .int64?  then {Int64::MIN.to_i128, Int64::MAX.to_i128}
+      when Arrow::DataType::Kind::UInt8  then {0_i128, 255_i128}
+      when Arrow::DataType::Kind::UInt16 then {0_i128, 65_535_i128}
+      when Arrow::DataType::Kind::UInt32 then {0_i128, 4_294_967_295_i128}
+      when Arrow::DataType::Kind::UInt64 then {0_i128, UInt64::MAX.to_i128}
+      end
+    end
+
+    # Arithmetic cannot fold, so a literal that does not fit is an error rather
+    # than a silently nulled row.
+    private def check_literals_fit(target : Arrow::DataType) : Nil
+      check_literal_fits(@left, target)
+      check_literal_fits(@right, target)
+    end
+
+    private def check_literal_fits(expr : Expr, target : Arrow::DataType) : Nil
+      return unless expr.is_a?(Lit)
+
+      number = integer_literal(expr.as(Lit))
+      return unless number
+
+      range = integer_range(target)
+      return unless range
+
+      minimum, maximum = range
+      return if number >= minimum && number <= maximum
+
+      raise DtypeError.new(
+        "literal #{number} does not fit #{target}; cast the column or the literal explicitly"
+      )
     end
 
     # Boolean identities first, so `x & false` and `x | true` never evaluate

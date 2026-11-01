@@ -3,7 +3,7 @@
 ## Status: fixed upstream and workaround removed (2026-11-01)
 
 Fixed in `parquet-cr` commit `5883ff1` ("port: Align row-filter skips with
-definition levels", branch `codex/stream-large-file-reads`). The fix aligns the
+definition levels"), merged to `main`. The fix aligns the
 row-filter skip with definition levels in `src/parquet/column/reader.cr`, and
 adds `spec/parquet/arrow/row_filter_spec.cr` plus a record-reader regression.
 

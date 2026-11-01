@@ -1,3 +1,5 @@
+require "big"
+
 module Prism
   # The Crystal-level representation of an Arrow value.
   #
@@ -7,7 +9,8 @@ module Prism
   alias Value = Int8 | Int16 | Int32 | Int64 |
                 UInt8 | UInt16 | UInt32 | UInt64 |
                 Arrow::Float16 | Float32 | Float64 |
-                Bool | String | Bytes | Time | Time::Span | Nil
+                Bool | String | Bytes | Time | Time::Span |
+                BigDecimal | Nil
 
   # Materializes Arrow arrays into Crystal values and reads single values.
   #
@@ -103,6 +106,8 @@ module Prism
            UInt8, UInt16, UInt32, UInt64,
            Float32, Float64
         value.to_f
+      when BigDecimal
+        value.to_f
       else
         raise DtypeError.new("expected a number, got #{value.inspect}")
       end
@@ -112,6 +117,23 @@ module Prism
       out = [] of Value
       array.each { |value| out << value }
       out
+    end
+
+    # Decimals materialize as `BigDecimal` so the scale is preserved; returning
+    # the raw scaled integer would silently drop it.
+    private def self.collect_decimal(array : Arrow::PrimitiveArray(T)) : Array(Value) forall T
+      scale = array.data_type.scale || 0
+      out = [] of Value
+      array.len.times do |i|
+        out << (array.null?(i) ? nil : BigDecimal.new(array.value(i).to_i128, scale))
+      end
+      out
+    end
+
+    private def self.decimal_at(array : Arrow::PrimitiveArray(T), index : Int) : Value forall T
+      return nil if array.null?(index)
+
+      BigDecimal.new(array.value(index).to_i128, array.data_type.scale || 0)
     end
 
     private def self.collect_datetime(array : Arrow::PrimitiveArray(T)) : Array(Value) forall T

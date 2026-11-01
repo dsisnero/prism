@@ -306,10 +306,10 @@ schema, then `compose` restores the precise nullability on the final schema.
 
 #### C20. `parquet-cr`'s row filter corrupted null-bearing columns (fixed)
 
-**Resolved 2026-11-01** in `parquet-cr` `5883ff1` ("port: Align row-filter skips
-with definition levels"), which aligns the skip with definition levels in
-`src/parquet/column/reader.cr`. Prism re-enabled `with_row_filter`, so Parquet
-predicates prune per row group again, and
+**Resolved 2026-11-01** in `parquet-cr` `5883ff1` ("port: Align row-filter
+skips with definition levels"), merged to `main`, which aligns the skip with
+definition levels in `src/parquet/column/reader.cr`. Prism re-enabled
+`with_row_filter`, so Parquet predicates prune per row group again, and
 `spec/prism/io/parquet_spec.cr` keeps the reproduction as a permanent guard.
 The report lives at
 [`shard_issues/parquet-cr.2.md`](../shard_issues/parquet-cr.2.md).

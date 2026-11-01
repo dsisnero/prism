@@ -42,8 +42,6 @@ module Prism
     ) : Arrow::DataType
       left_dtype = cache ? cache.dtype(left) : left.dtype(schema)
       right_dtype = cache ? cache.dtype(right) : right.dtype(schema)
-      return left_dtype if left_dtype == right_dtype
-
       if left.literal? != right.literal?
         column_dtype = left.literal? ? right_dtype : left_dtype
         literal_dtype = left.literal? ? left_dtype : right_dtype
@@ -53,6 +51,12 @@ module Prism
           return column_dtype
         end
       end
+
+      # Decimials widen to a common scale for comparison; this must run before
+      # the equality shortcut, and after the literal rule above so a literal can
+      # adopt the column's decimal dtype without widening it.
+      return unify_decimal(left_dtype, right_dtype) if left_dtype.decimal? || right_dtype.decimal?
+      return left_dtype if left_dtype == right_dtype
 
       unify(left_dtype, right_dtype)
     end
@@ -77,6 +81,9 @@ module Prism
         float = left.floating? ? left : right
         return unify_integer_and_float(number, float)
       end
+      if left.decimal? || right.decimal?
+        return unify_decimal(left, right)
+      end
       if left.string? && right.string?
         fused = left_kind.large_utf8? || right_kind.large_utf8?
         return fused ? Arrow::DataType.large_utf8 : Arrow::DataType.utf8
@@ -88,12 +95,6 @@ module Prism
       if left_kind.timestamp? && right_kind.timestamp?
         return unify_timestamp(left, right)
       end
-      if left.decimal? || right.decimal?
-        raise UnsupportedOperation.new(
-          "decimal coercion is not implemented yet; cast one side explicitly"
-        )
-      end
-
       raise DtypeError.new(
         "cannot combine #{left} and #{right}; cast one side explicitly"
       )
@@ -112,6 +113,29 @@ module Prism
       return false if literal.kind.float64? && column.kind.float32?
 
       true
+    end
+
+    # Decimals unify at the wider scale and full Decimal128 precision, which is
+    # what comparisons need. Integers are promoted into the decimal; floats are
+    # rejected because the conversion is lossy.
+    private def unify_decimal(
+      left : Arrow::DataType,
+      right : Arrow::DataType,
+    ) : Arrow::DataType
+      if left.decimal? && right.decimal?
+        scale = Math.max(left.scale || 0, right.scale || 0)
+        return Arrow::DataType.decimal128(38, scale)
+      end
+
+      decimal = left.decimal? ? left : right
+      other = left.decimal? ? right : left
+      if other.integer?
+        return Arrow::DataType.decimal128(38, decimal.scale || 0)
+      end
+
+      raise DtypeError.new(
+        "cannot combine #{left} with #{right}; cast the decimal to a float explicitly"
+      )
     end
 
     private def same_family?(left : Arrow::DataType, right : Arrow::DataType) : Bool
