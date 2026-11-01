@@ -75,7 +75,7 @@ memory notes for `#to_arrow`, and the `v0.1.0` tag.
 | 9e | Examples, benchmarks, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last feature commit:** `7cb780b` — Phase 9d projection pruning through joins.
+**Last feature commit:** `53dff2b` — Phase 9d projection pruning through joins.
 **Gates:** `make lint` and `make test` green, 299 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (300) and costs ~13 s; run it before a release.
 
