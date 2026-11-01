@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 9c expression coverage: comparisons against an out-of-range literal fold
+  to a constant instead of silently comparing null, decimal columns compare at a
+  common scale and materialize as `BigDecimal`, and dictionary arrays materialize
+  as their decoded values.
 - Optional styled CLI tables: `Prism::Styled.render` and `DataFrame#to_styled`
   draw a bordered table through `lipgloss`, sharing `Display.grid` with the plain
   renderer so selection and truncation match. Opt-in via

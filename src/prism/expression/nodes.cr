@@ -159,6 +159,7 @@ module Prism
     # the Arrow spec, so the declared dtype and the produced dtype disagree.
     # Comparisons are supported (they return Boolean, so no scale is involved).
     private def reject_unsupported_decimal(op : BinaryOp, target : Arrow::DataType) : Nil
+      return if op.comparison?
       return unless target.decimal?
 
       raise UnsupportedOperation.new(
@@ -177,13 +178,13 @@ module Prism
       return nil unless @op.comparison?
 
       literal, operand, op = literal_operand
-      return nil unless literal && operand
+      return nil unless (literal_side = literal) && (column_expr = operand)
 
-      column = Datums.array(ctx.evaluate(operand.not_nil!), ctx)
+      column = Datums.array(ctx.evaluate(column_expr), ctx)
       range = integer_range(column.data_type)
       return nil unless range
 
-      number = integer_literal(literal.not_nil!)
+      number = integer_literal(literal_side)
       return nil unless number
 
       minimum, maximum = range
@@ -207,11 +208,11 @@ module Prism
     # operator oriented as `column <op> literal`.
     private def literal_operand : Tuple(Lit?, Expr?, BinaryOp)
       if @left.is_a?(Lit) && !@right.is_a?(Lit)
-        { @left.as(Lit), @right, mirror(@op) }
+        {@left.as(Lit), @right, mirror(@op)}
       elsif @right.is_a?(Lit) && !@left.is_a?(Lit)
-        { @right.as(Lit), @left, @op }
+        {@right.as(Lit), @left, @op}
       else
-        { nil, nil, @op }
+        {nil, nil, @op}
       end
     end
 
@@ -237,10 +238,10 @@ module Prism
 
     private def integer_range(data_type : Arrow::DataType) : Tuple(Int128, Int128)?
       case data_type.kind
-      when .int8?   then {-128_i128, 127_i128}
-      when .int16?  then {-32_768_i128, 32_767_i128}
-      when .int32?  then {-2_147_483_648_i128, 2_147_483_647_i128}
-      when .int64?  then {Int64::MIN.to_i128, Int64::MAX.to_i128}
+      when .int8?                        then {-128_i128, 127_i128}
+      when .int16?                       then {-32_768_i128, 32_767_i128}
+      when .int32?                       then {-2_147_483_648_i128, 2_147_483_647_i128}
+      when .int64?                       then {Int64::MIN.to_i128, Int64::MAX.to_i128}
       when Arrow::DataType::Kind::UInt8  then {0_i128, 255_i128}
       when Arrow::DataType::Kind::UInt16 then {0_i128, 65_535_i128}
       when Arrow::DataType::Kind::UInt32 then {0_i128, 4_294_967_295_i128}

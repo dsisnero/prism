@@ -49,6 +49,10 @@ module Prism
       when .binary?                      then collect_values(source.as(Arrow::BinaryArray))
       when .large_binary?                then collect_values(source.as(Arrow::LargeBinaryArray))
       when .fixed_size_binary?           then collect_values(source.as(Arrow::FixedSizeBinaryArray))
+      when .dictionary?                  then extract(decoded_dictionary(source))
+      when .decimal32?                   then collect_decimal(source.as(Arrow::PrimitiveArray(Int32)))
+      when .decimal64?                   then collect_decimal(source.as(Arrow::PrimitiveArray(Int64)))
+      when .decimal128?                  then collect_decimal(source.as(Arrow::PrimitiveArray(Int128)))
       when .timestamp?                   then collect_datetime(source.as(Arrow::PrimitiveArray(Int64)))
       when .date32?                      then collect_date(source.as(Arrow::PrimitiveArray(Int32)))
       when .date64?                      then collect_date(source.as(Arrow::PrimitiveArray(Int64)))
@@ -87,12 +91,18 @@ module Prism
       when .binary?                      then source.as(Arrow::BinaryArray)[index]?
       when .large_binary?                then source.as(Arrow::LargeBinaryArray)[index]?
       when .fixed_size_binary?           then source.as(Arrow::FixedSizeBinaryArray)[index]?
-      when .timestamp?                   then datetime_at(source.as(Arrow::PrimitiveArray(Int64)), index)
-      when .date32?                      then date_at(source.as(Arrow::PrimitiveArray(Int32)), index)
-      when .date64?                      then date_at(source.as(Arrow::PrimitiveArray(Int64)), index)
-      when .time32?                      then time_at(source.as(Arrow::PrimitiveArray(Int32)), index)
-      when .time64?                      then time_at(source.as(Arrow::PrimitiveArray(Int64)), index)
-      when .duration?                    then duration_at(source.as(Arrow::PrimitiveArray(Int64)), index)
+      when .dictionary?
+        decoded = decoded_dictionary(source.slice(index, 1))
+        extract_at(decoded, 0)
+      when .decimal32?  then decimal_at(source.as(Arrow::PrimitiveArray(Int32)), index)
+      when .decimal64?  then decimal_at(source.as(Arrow::PrimitiveArray(Int64)), index)
+      when .decimal128? then decimal_at(source.as(Arrow::PrimitiveArray(Int128)), index)
+      when .timestamp?  then datetime_at(source.as(Arrow::PrimitiveArray(Int64)), index)
+      when .date32?     then date_at(source.as(Arrow::PrimitiveArray(Int32)), index)
+      when .date64?     then date_at(source.as(Arrow::PrimitiveArray(Int64)), index)
+      when .time32?     then time_at(source.as(Arrow::PrimitiveArray(Int32)), index)
+      when .time64?     then time_at(source.as(Arrow::PrimitiveArray(Int64)), index)
+      when .duration?   then duration_at(source.as(Arrow::PrimitiveArray(Int64)), index)
       else
         raise UnsupportedOperation.new("cannot materialize #{source.data_type} values")
       end
@@ -117,6 +127,17 @@ module Prism
       out = [] of Value
       array.each { |value| out << value }
       out
+    end
+
+    # Dictionary arrays are decoded through their value type, so callers see
+    # values rather than dictionary keys.
+    private def self.decoded_dictionary(array : Arrow::ArrayBase) : Arrow::ArrayBase
+      value_type = array.data_type.value
+      unless value_type
+        raise UnsupportedOperation.new("#{array.data_type} has no dictionary value type")
+      end
+
+      Arrow.cast(array, value_type)
     end
 
     # Decimals materialize as `BigDecimal` so the scale is preserved; returning

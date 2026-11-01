@@ -136,6 +136,16 @@ AND, matching SQL and Polars. Negation is `.not` — Crystal's `!` is a
 pseudo-method and cannot be overloaded. `&`/`|` are available but bind tighter
 than comparison operators, so operands must be parenthesised.
 
+Comparisons against a literal that cannot fit the column's dtype fold to a
+constant: `is_null ? null : constant`. Without that fold the safe cast turns the
+overflowing literal into null and every row compares as null. Arithmetic with
+such a literal raises instead of nulling rows.
+
+Decimals compare at a common scale and materialize as `BigDecimal`, preserving
+scale; decimal arithmetic is not implemented yet because `arrow-cr`'s decimal
+kernels grow precision per the Arrow spec, so the declared and produced dtypes
+would disagree (plan §17).
+
 Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, so
 `col("price") * 2` does not build an n-element array of 2s. Arrow's kernels
 reject a union of array and scalar, so `Prism::Kernels` narrows the union and

@@ -25,11 +25,9 @@ implicit.
 
 **Next up:**
 
-1. Phase 9c: decimal coercion, out-of-range literal folding, nested/dictionary
-   materialization in `Prism::Values`.
-2. Phase 9d: projection pruning through joins, slice pinned to
+1. Phase 9d: projection pruning through joins, slice pinned to
    `Sort`/`GroupBy`/`Distinct`, and the `arrow-row` switch once it lands.
-3. Phase 9e: examples, benchmarks, v0.1.0 tag.
+2. Phase 9e: examples (including the bubbletea viewer), benchmarks, v0.1.0 tag.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -45,8 +43,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | in progress |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: optional styled CLI tables via lipgloss`.
-**Gates:** `make lint` and `make test` — both green (275 examples).
+**Last commit:** `feat: decimal comparisons and literal folding (Phase 9c)`.
+**Gates:** `make lint` and `make test` — both green (289 examples).
 
 ---
 
@@ -1250,14 +1248,30 @@ so `rename` through the planner produced a different schema from the eager
 verb. Aliasing a bare column now keeps its nullability (copying the field first,
 C16).
 
-#### 9c. Expression coverage
+#### 9c. Expression coverage (done, two deferrals)
 
-- [ ] Decimal coercion and arithmetic in expressions (`Coerce` currently raises
-      `UnsupportedOperation` for decimals)
-- [ ] Out-of-range literal folds to a constant boolean instead of raising, as
-      Polars does (today a narrow column plus an oversized literal raises)
-- [ ] `Prism::Values` materializes nested/list, struct, dictionary and decimal
-      arrays, so `Series#to_a` and display cover every type the dependency models
+- [x] Decimal **comparison**: decimals unify at the wider scale with
+      `Decimal128(38, s)`, and `Prism::Values` materializes them as
+      `BigDecimal` so the scale survives (the raw scaled integer would drop it)
+- [x] Out-of-range literal folds to a constant boolean, as Polars does
+- [x] Dictionary arrays materialize as their decoded values
+- [ ] Decimal **arithmetic** — deferred: `arrow-cr`'s decimal kernels grow
+      precision per the Arrow spec (`p -> p + 1` for addition), so the dtype the
+      expression declares and the dtype the kernel produces disagree. Modelling
+      it needs a per-operator result-dtype rule; until then arithmetic on
+      decimals raises `UnsupportedOperation` with a cast hint.
+- [ ] Nested (`list`/`struct`) materialization — deferred: it needs a recursive
+      `Value` union, which Crystal cannot express as an alias; a tagged
+      `Prism::Value` struct is the way in (§17).
+
+**Notes:** the fold is Polars' rewrite
+`when(col.is_not_null()).then(constant).otherwise(null)`. It matters because
+`arrow-cr`'s *safe* cast turns an overflowing literal into null, so without it
+`Int32 col > 3_000_000_000` quietly compares null on every row. Arithmetic with
+such a literal raises `Prism::DtypeError` instead, rather than nulling silently.
+
+`Value` gained `BigDecimal`, which is why the "unsupported dtype" spec now uses
+a struct array: decimals materialize instead of raising.
 
 #### 9d. Performance
 
@@ -1549,9 +1563,9 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d |
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
-| Decimal coercion/arithmetic | literals have no decimal form yet | 9c |
-| Out-of-range literal folding | raising is safe, folding is Polars parity | 9c |
-| Nested/list/dict/decimal in `Values` | eager verbs do not need them yet | 9c |
+| Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 |
+| Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |
+| Nested list/struct in `Values` | needs a recursive `Value` union; Crystal aliases cannot recurse | post-v0.1 |
 | `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b (done) |
 | `Series#is_null`/`fill_null`/`cast`/`==` | verbs cover the same ground today | 9b (done) |
 | Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |

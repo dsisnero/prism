@@ -131,3 +131,14 @@ describe "decimal expressions" do
     end
   end
 end
+
+describe "dictionary columns" do
+  it "materializes decoded values rather than keys" do
+    dictionary = Arrow::DictionaryArray(Int32)
+      .from_values(["east", "west", "east"])
+      .as(Arrow::ArrayBase)
+
+    Prism::Values.extract(dictionary).should eq(["east", "west", "east"])
+    Prism::Values.extract_at(dictionary, 1).should eq("west")
+  end
+end
