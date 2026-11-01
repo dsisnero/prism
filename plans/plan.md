@@ -25,13 +25,11 @@ implicit.
 
 **Next up:**
 
-1. Phase 9b: `LazyFrame` verb parity (`drop`, `rename`, `cast`, `fill_null`,
-   `drop_nulls`, `with_columns`, `tail`) and the remaining `Series` methods.
-2. Phase 9c: decimal coercion, out-of-range literal folding, nested/dictionary
+1. Phase 9c: decimal coercion, out-of-range literal folding, nested/dictionary
    materialization in `Prism::Values`.
-3. Phase 9d: projection pruning through joins, slice pinned to
+2. Phase 9d: projection pruning through joins, slice pinned to
    `Sort`/`GroupBy`/`Distinct`, and the `arrow-row` switch once it lands.
-4. Phase 9e: examples, benchmarks, v0.1.0 tag.
+3. Phase 9e: examples, benchmarks, v0.1.0 tag.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -47,8 +45,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | in progress |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: dataframe display (Phase 9a)`.
-**Gates:** `make lint` and `make test` — both green (253 examples).
+**Last commit:** `feat: lazy and Series verb parity (Phase 9b)`.
+**Gates:** `make lint` and `make test` — both green (269 examples).
 
 ---
 
@@ -708,9 +706,8 @@ UserSchema.schema                             # => Arrow::Schema
 `each_chunk`, `sum`, `mean`, `min`, `max`, `unique`, `n_unique`, `[]`/`[]?`,
 `value(i)`.
 
-Implemented so far (Phases 1–4): everything above except `is_null`,
-`fill_null`, `cast` and element-wise `==`, which land with the verb work that
-needs them.
+All of the above is implemented (Phases 1–4 for the aggregates and access,
+Phase 9b for `is_null`, `fill_null`, `cast` and element-wise `==`).
 
 ## 7. Deviations from the proposed sample API
 
@@ -811,6 +808,9 @@ raised `Prism::Error` names the offending column.
   `.not`.
 - **`and`/`or` are Kleene**, not bitwise: null AND false is false. This matches
   SQL and Polars' logical operators, and differs from `Arrow.and`/`or`.
+- **`Series#==` is element-wise** and returns a boolean series, so comparing two
+  series with `==` is always truthy. Use `Series#same_as?` for structural
+  comparison, exactly as with `Expr`.
 
 ## 9. Lazy execution and optimization
 
@@ -1214,13 +1214,30 @@ originally said "dtype footer"; the dtype sits in a row under the header
 footer. The table is plain ASCII: `ljust` pads by bytes, so box-drawing
 characters would misalign with any wide value.
 
-#### 9b. API completeness
+#### 9b. API completeness (done)
 
-- [ ] `LazyFrame` verb parity with eager: `drop`, `rename`, `cast`, `fill_null`,
-      `drop_nulls`, `with_columns`, `tail`/`offset`
-- [ ] `Series`: `is_null`, `fill_null`, `cast`, element-wise `==` (§6.2)
-- [ ] Plan-level CSE — only if benchmarks justify it; per-chunk memoization
-      (§14) already covers repeated subexpressions
+- [x] `LazyFrame` verb parity with eager: `drop`, `rename`, `cast`,
+      `fill_null`, `drop_nulls`, `with_columns`, `tail`, `slice(offset, count)`
+- [x] `Series`: `is_null`, `fill_null`, `cast`, element-wise `==`, and
+      `same_as?` for structural comparison (§6.2)
+- [ ] Plan-level CSE — still not implemented, deliberately: per-chunk
+      memoization (§14) already removes the recompute, and Phase 9d decides with
+      benchmarks whether a plan rewrite buys anything
+
+**Notes:** most lazy verbs are built from existing nodes rather than new ones —
+`drop` and `rename` become a `Select` (rename uses `Alias`), `cast` and
+`fill_null` become `WithColumn` per column, and `drop_nulls` becomes a `Filter`.
+Only `tail` needed a node, because a trailing window cannot be pushed into a
+scan: the row count is unknown until the source runs.
+
+`Series#==` is element-wise and returns a boolean series, so comparing two
+series with `==` is always truthy — `same_as?` exists for
+structural comparison (§8.5).
+
+This phase also fixed a real bug: `select` marked every aliased column nullable,
+so `rename` through the planner produced a different schema from the eager
+verb. Aliasing a bare column now keeps its nullability (copying the field first,
+C16).
 
 #### 9c. Expression coverage
 
@@ -1521,8 +1538,8 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Decimal coercion/arithmetic | literals have no decimal form yet | 9c |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c |
 | Nested/list/dict/decimal in `Values` | eager verbs do not need them yet | 9c |
-| `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b |
-| `Series#is_null`/`fill_null`/`cast`/`==` | verbs cover the same ground today | 9b |
+| `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b (done) |
+| `Series#is_null`/`fill_null`/`cast`/`==` | verbs cover the same ground today | 9b (done) |
 | Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |
 | Display layer | not needed to validate semantics | 9a (done) |
 | Repository folder + GitHub rename | owner-gated | 10 |

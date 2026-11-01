@@ -57,16 +57,31 @@ module Prism
     end
 
     # A selected column keeps its original field, so nullability and metadata
-    # survive a projection. Computed columns are nullable.
+    # survive a projection. Renaming a column is still the same column, so an
+    # `Alias` of a bare column keeps its nullability too; computed columns are
+    # nullable.
     private def select_field(expr : Expr, name : String, types : TypeCache) : Arrow::Field
-      if expr.is_a?(Col)
-        field = @schema.fields.find_field(expr.name)
-        raise ColumnNotFound.new(expr.name, column_names) unless field
-
-        field
+      case expr
+      when Col
+        input_field(expr.name)
+      when Alias
+        inner = expr.operand
+        if inner.is_a?(Col)
+          # `Field#with_name` mutates, so copy first (C16).
+          input_field(inner.name).copy.with_name(name)
+        else
+          Arrow::Field.new(name, types.dtype(expr), true)
+        end
       else
         Arrow::Field.new(name, types.dtype(expr), true)
       end
+    end
+
+    private def input_field(name : String) : Arrow::Field
+      field = @schema.fields.find_field(name)
+      return field if field
+
+      raise ColumnNotFound.new(name, column_names)
     end
   end
 end

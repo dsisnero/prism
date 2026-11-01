@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 9b parity: `LazyFrame` gains `drop`, `rename`, `cast`, `fill_null`,
+  `drop_nulls`, `with_columns`, `tail` and `slice`, matching the eager verbs
+  and results. `Series` gains `is_null`, `fill_null`, `cast`, element-wise `==`
+  and `same_as?`.
 - Phase 9a display: `DataFrame#to_s` / `#inspect` render an aligned table with a
   shape line, dtype row, `null` rendering, and Polars-style head/tail truncation
   (10 rows, 8 columns, 30-character strings by default), overridable through
@@ -83,6 +87,11 @@ to [Semantic Versioning](https://semver.org/).
   recorded them as design decisions in the plan.
 - Recorded the design influences for the hybrid architecture (Polars, Kotlin
   DataFrame, RedAmber, Arquero, Explorer) in `CLAUDE.md` and plan §4.1.
+
+### Fixed
+
+- `select` no longer marks a renamed bare column as nullable, so
+  `rename` produces the same schema through the eager verb and the planner.
 
 ### Fixed
 

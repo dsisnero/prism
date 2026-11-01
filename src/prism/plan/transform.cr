@@ -63,14 +63,29 @@ module Prism
       end
 
       private def field_for(expr : Expr) : Arrow::Field
-        if expr.is_a?(Col)
-          field = @input.schema.fields.find_field(expr.name)
-          raise ColumnNotFound.new(expr.name, @input.schema.fields.map(&.name)) unless field
-
-          return field
+        case expr
+        when Col
+          input_field(expr.name)
+        when Alias
+          # Renaming a column must not change its nullability, otherwise a
+          # rename would report a different schema from the eager verb.
+          inner = expr.operand
+          if inner.is_a?(Col)
+            # `Field#with_name` mutates, so copy first (C16).
+            input_field(inner.name).copy.with_name(expr.name)
+          else
+            Arrow::Field.new(expr.name, expr.dtype(@input.schema), true)
+          end
+        else
+          Arrow::Field.new(Plan.output_name(expr), expr.dtype(@input.schema), true)
         end
+      end
 
-        Arrow::Field.new(Plan.output_name(expr), expr.dtype(@input.schema), true)
+      private def input_field(name : String) : Arrow::Field
+        field = @input.schema.fields.find_field(name)
+        return field if field
+
+        raise ColumnNotFound.new(name, @input.schema.fields.map(&.name))
       end
     end
 
@@ -175,6 +190,37 @@ module Prism
 
       def describe(io : IO, indent : Int) : Nil
         line(io, indent, "Distinct [#{@keys.join(", ")}]")
+        describe_children(io, indent)
+      end
+    end
+
+    # Keeps the last `count` rows. A trailing window cannot be pushed into a
+    # scan, because the row count is not known until the source has run.
+    class Tail < Node
+      getter input : Node
+      getter count : Int32
+
+      def initialize(@input : Node, @count : Int32)
+      end
+
+      def schema : Arrow::Schema
+        @input.schema
+      end
+
+      def children : Array(Node)
+        [@input]
+      end
+
+      def rebuild(children : Array(Node)) : Node
+        Tail.new(children[0], @count)
+      end
+
+      def execute : DataFrame
+        @input.execute.tail(@count)
+      end
+
+      def describe(io : IO, indent : Int) : Nil
+        line(io, indent, "Tail #{@count}")
         describe_children(io, indent)
       end
     end

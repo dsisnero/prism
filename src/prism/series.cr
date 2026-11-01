@@ -86,6 +86,66 @@ module Prism
       Values.extract_at(chunk, local)
     end
 
+    # Element-wise null test, one boolean per row.
+    #
+    # Named for the operation rather than as a Crystal predicate: it builds a
+    # column, so `null?` would misrepresent it (same reasoning as `Expr#is_null`).
+    # ameba:disable Naming/PredicateName
+    def is_null : Series
+      chunks = @chunks.map { |chunk| Arrow.is_null(chunk).as(Arrow::ArrayBase) }
+
+      Series.new(@name, chunks, Arrow::DataType.boolean)
+    end
+
+    # Replaces nulls, keeping this column's dtype.
+    def fill_null(value : Value) : Series
+      filler = Arrow::Scalar(Arrow::ArrayBase).new(
+        Aggregates.array(value, @dtype)
+      )
+      chunks = @chunks.map do |chunk|
+        Datums.zip(Arrow.is_not_null(chunk), chunk, filler).as(Arrow::ArrayBase)
+      end
+
+      Series.new(@name, chunks, @dtype)
+    end
+
+    # Converts to `target`, casting each chunk.
+    def cast(target : Arrow::DataType) : Series
+      return self if target == @dtype
+
+      chunks = @chunks.map { |chunk| Arrow.cast(chunk, target).as(Arrow::ArrayBase) }
+
+      Series.new(@name, chunks, target)
+    end
+
+    # Element-wise equality with another series of the same dtype and length.
+    #
+    # Returns a boolean series, so never use `==` to compare two series for
+    # structural equality — use `#same_as?`. Nulls propagate.
+    def ==(other : Series) : Series
+      unless other.dtype == @dtype
+        raise DtypeError.new(
+          "#{@name.inspect}: cannot compare dtype #{@dtype} with #{other.dtype}"
+        )
+      end
+      unless other.size == size
+        raise ArgumentError.new(
+          "#{@name.inspect}: cannot compare #{size} rows with #{other.size}"
+        )
+      end
+
+      chunks = comparable_chunks(other).map do |(left, right)|
+        Arrow.eq(left, right).as(Arrow::ArrayBase)
+      end
+
+      Series.new(@name, chunks, Arrow::DataType.boolean)
+    end
+
+    # Structural equality: name, dtype and chunk contents.
+    def same_as?(other : Series) : Bool
+      @name == other.name && @dtype == other.dtype && @chunks == other.chunks
+    end
+
     # Distinct values, keeping the first occurrence of each in original order.
     # Nulls are a value, so at most one null survives.
     def unique : Series
@@ -272,6 +332,16 @@ module Prism
       else
         array = chunk.as(Arrow::StringArray)
         op.min? ? Arrow.min_string(array) : Arrow.max_string(array)
+      end
+    end
+
+    # Chunk pairs for an element-wise operation. Series whose chunking differs
+    # are consolidated first; equal chunking is used as-is.
+    private def comparable_chunks(other : Series) : Array(Tuple(Arrow::ArrayBase, Arrow::ArrayBase))
+      if @chunks.size == other.chunks.size
+        @chunks.zip(other.chunks).map { |(left, right)| {left, right} }
+      else
+        [{to_arrow, other.to_arrow}]
       end
     end
 

@@ -68,6 +68,108 @@ module Prism
       LazyFrame.new(Plan::Distinct.new(@plan, names.map(&.to_s).to_a))
     end
 
+    # Removes columns, raising `Prism::ColumnNotFound` for an unknown name.
+    def drop(*names : String | Symbol) : LazyFrame
+      dropped = names.map(&.to_s)
+      dropped.each do |name|
+        raise ColumnNotFound.new(name, columns) unless columns.includes?(name)
+      end
+
+      kept = columns.reject { |name| dropped.includes?(name) }
+      self.select(kept.map { |name| Prism.col(name) })
+    end
+
+    # Renames columns; unknown source names raise `Prism::ColumnNotFound`.
+    def rename(pairs : Hash(String | Symbol, String | Symbol)) : LazyFrame
+      mapping = {} of String => String
+      pairs.each { |source, target| mapping[source.to_s] = target.to_s }
+      mapping.each_key do |from|
+        raise ColumnNotFound.new(from, columns) unless columns.includes?(from)
+      end
+
+      self.select(
+        columns.map do |name|
+          replacement = mapping[name]?
+          replacement ? Prism.col(name).alias(replacement) : Prism.col(name)
+        end
+      )
+    end
+
+    def rename(from : String | Symbol, to : String | Symbol) : LazyFrame
+      rename({from => to})
+    end
+
+    # Casts every column.
+    def cast(target : Arrow::DataType) : LazyFrame
+      rename_targets = {} of String => Arrow::DataType
+      columns.each { |name| rename_targets[name] = target }
+
+      cast(rename_targets)
+    end
+
+    # Casts the named columns.
+    def cast(targets : Hash(String | Symbol, Arrow::DataType)) : LazyFrame
+      targets.reduce(self) do |frame, (name, target)|
+        column = name.to_s
+        raise ColumnNotFound.new(column, columns) unless columns.includes?(column)
+
+        frame.with_column(column, Prism.col(column).cast(target))
+      end
+    end
+
+    # Replaces nulls in every column that can accept `value`.
+    def fill_null(value : LiteralInput) : LazyFrame
+      replacement = Prism.lit(value)
+      literal_dtype = replacement.dtype(schema)
+
+      targets = {} of String => Expr
+      schema.fields.each do |field|
+        next unless Arrow.can_cast_types(literal_dtype, field.data_type)
+
+        targets[field.name] = FillNull.new(Prism.col(field.name), replacement)
+      end
+
+      fill_replacements(targets)
+    end
+
+    # Replaces nulls per column.
+    def fill_null(values : Hash(String | Symbol, LiteralInput)) : LazyFrame
+      targets = {} of String => Expr
+      values.each do |name, value|
+        column = name.to_s
+        raise ColumnNotFound.new(column, columns) unless columns.includes?(column)
+
+        targets[column] = FillNull.new(Prism.col(column), Prism.lit(value))
+      end
+
+      fill_replacements(targets)
+    end
+
+    # Drops rows with a null in any of the named columns (all columns by
+    # default).
+    def drop_nulls(*names : String | Symbol) : LazyFrame
+      targets = names.empty? ? columns : names.map(&.to_s)
+      targets.each do |name|
+        raise ColumnNotFound.new(name, columns) unless columns.includes?(name)
+      end
+      return self if targets.empty?
+
+      predicate = targets
+        .map { |name| Prism.col(name).is_not_null }
+        .reduce { |left, right| left.and(right) }
+
+      filter(predicate)
+    end
+
+    # Adds several columns in one call.
+    def with_columns(**named) : LazyFrame
+      result = self
+      named.each do |name, expr|
+        result = result.with_column(name.to_s, expr.as(Expr))
+      end
+      result
+    end
+
     def limit(count : Int) : LazyFrame
       raise ArgumentError.new("limit must be >= 0 (got #{count})") if count < 0
 
@@ -76,6 +178,21 @@ module Prism
 
     def head(count : Int) : LazyFrame
       limit(count)
+    end
+
+    # Keeps the last `count` rows. Cannot be pushed into a scan.
+    def tail(count : Int) : LazyFrame
+      raise ArgumentError.new("tail must be >= 0 (got #{count})") if count < 0
+
+      LazyFrame.new(Plan::Tail.new(@plan, count.to_i32))
+    end
+
+    # `count` rows starting at `offset`.
+    def slice(offset : Int, count : Int) : LazyFrame
+      raise ArgumentError.new("offset must be >= 0 (got #{offset})") if offset < 0
+      raise ArgumentError.new("count must be >= 0 (got #{count})") if count < 0
+
+      LazyFrame.new(Plan::Limit.new(@plan, offset.to_i32, count.to_i32))
     end
 
     def group_by(
@@ -120,6 +237,12 @@ module Prism
     # Accepts a materialized frame by scanning it.
     def join(other : DataFrame, **options) : LazyFrame
       join(Prism.scan(other), **options)
+    end
+
+    private def fill_replacements(targets : Hash(String, Expr)) : LazyFrame
+      targets.reduce(self) do |frame, (name, expr)|
+        frame.with_column(name, expr)
+      end
     end
 
     def collect : DataFrame
