@@ -56,6 +56,26 @@ volume they can otherwise be mistaken for `*_spec.cr` files. See
    execution; everything must be inspectable and typeable before data is read.
 6. **Fail with context.** Errors name the offending column.
 
+## Design influences
+
+Crystal forces a hybrid: Ruby-like block syntax, static types, native code, and
+a real macro system. No single library is the model — borrow one axis from
+each. DeepWiki pages for the indexed ones:
+
+| Library | What we borrow | Reference |
+| --- | --- | --- |
+| [Polars](https://deepwiki.com/pola-rs/polars) (Rust) | Expression engine and lazy plan: projection pruning, predicate pushdown, slice pushdown, sort collapse | [DeepWiki](https://deepwiki.com/pola-rs/polars) |
+| [Kotlin DataFrame](https://deepwiki.com/Kotlin/dataframe) (Kotlin) | Compile-time schemas and typed column accessors (`df.col.price`) | [DeepWiki](https://deepwiki.com/Kotlin/dataframe) |
+| [RedAmber](https://github.com/heronshoes/red_amber) (Ruby) | Block-first, immutable verbs on Arrow columnar data | GitHub (not indexed on DeepWiki) |
+| [Arquero](https://deepwiki.com/uwdata/arquero) (JavaScript) | Minimal relational verb vocabulary: `derive`, `filter`, `groupby`, `rollup`, `join`, `orderby` | [DeepWiki](https://deepwiki.com/uwdata/arquero) |
+| [Explorer](https://deepwiki.com/elixir-explorer/explorer) (Elixir) | dplyr-style verbs over a lazy Polars plan — proof the API and engine layers stay separable | [DeepWiki](https://deepwiki.com/elixir-explorer/explorer) |
+
+The working split: **API** = RedAmber/dplyr surface, **execution** = Polars-style
+plan, **macros** = Kotlin-style typed accessors. The concrete mapping, including
+what we deliberately do *not* copy, is in
+[`plans/plan.md` §4.1](plans/plan.md#41-design-influences). Consult these when
+designing a new verb or optimizer pass, then record the decision in the plan.
+
 ## Session continuity (read this first)
 
 [`plans/plan.md`](plans/plan.md) is the single source of truth for where we are.

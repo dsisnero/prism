@@ -269,6 +269,43 @@ after a second `require`) and would couple us to another shard's names.
 shard, repo folder, and GitHub repo later; the module is already `Prism`.
 Track it in Phase 10 — do not rename piecemeal.
 
+## 4.1 Design influences
+
+Crystal is Ruby-shaped syntax on a statically typed, LLVM-compiled language with
+macros, so no single reference library fits. Each contributes one axis:
+
+| Library | Axis | Adopted as | Deliberately not adopted |
+| --- | --- | --- | --- |
+| [Polars](https://deepwiki.com/pola-rs/polars) | Execution | Expression engine; lazy plan; pass ordering (projection pruning, predicate pushdown, slice pushdown, constant folding, dead-column elimination) | Common-subplan elimination via `Cache` nodes, join reordering, sort collapse — no payoff at v0.1 scale, and they need plan-level cost modelling |
+| [Kotlin DataFrame](https://deepwiki.com/Kotlin/dataframe) | Type safety | Declared schema → generated typed accessors and compile-time column names | Pipeline-wide schema *refinement* (see below) |
+| [RedAmber](https://github.com/heronshoes/red_amber) | API feel | Block verbs returning new frames; Arrow as the storage substrate | Ruby-only dynamic typing; we pair blocks with typed `Expr` values |
+| [Arquero](https://deepwiki.com/uwdata/arquero) | Verb vocabulary | Small relational verb set (`select`, `filter`, `derive`, `groupby`+`rollup`, `orderby`, `join`) | Its expression-string parser and its "no-copy" claims |
+| [Explorer](https://deepwiki.com/elixir-explorer/explorer) | Layering | dplyr-style verbs over a lazy backend, with `collect` as the explicit execution boundary | Backend NIF boundary; Crystal has no runtime boundary to cross |
+
+### The Kotlin limitation, stated plainly
+
+Kotlin DataFrame's typed columns work because of a **compiler plugin**: it hooks
+the FIR frontend, uses `@Refine`/`@Interpretable`/`@DataSchema`, and rewrites
+return types so that `df.filter { … }.select { … }` tracks the schema through
+every call.
+
+Crystal macros have no equivalent. A macro expands at the call site, but it
+cannot refine the return type of an arbitrary method based on the schema flowing
+through it. Therefore:
+
+- `Prism::TypedFrame(S)` is typed **at the declaration boundary**. A misspelt
+  field is a compile error, and accessors are typed.
+- A verb that changes the schema (`with_column`, `select`, `join`) returns a
+  plain `DataFrame`, not a refined `TypedFrame`. Re-declare or re-wrap with
+  `S.from_dataframe(...)` to regain typed access.
+- This is a hard limitation, not a missing feature to be "fixed later" — it
+  would require compiler-plugin support in Crystal. Recorded here so nobody
+  plans Phase 8 around it.
+
+Designing a new verb or optimizer pass: read the relevant DeepWiki page in
+[`CLAUDE.md`](../CLAUDE.md#design-influences), then add the decision to this
+plan rather than leaving it implicit.
+
 ## 5. Architecture
 
 ### 5.1 Layers
@@ -656,6 +693,11 @@ Type mapping: `Int8/16/32/64`, `UInt8/16/32/64`, `Float32/64`, `Bool`, `String`,
 `Bytes`, `Time`, `Nil` (null column) → the matching `Arrow::DataType`. Anything
 else is a compile error naming the supported set.
 
+**Scope limit (see §4.1):** typing holds at the declaration boundary only.
+`schema`-changing verbs on a `TypedFrame` return a plain `DataFrame`; call
+`S.from_dataframe(...)` to re-enter the typed layer. Kotlin achieves
+pipeline-wide refinement with a compiler plugin; Crystal macros cannot.
+
 ## 11. IO
 
 - `Prism.read_parquet(path, columns:, batch_size:, predicate: nil) → DataFrame`
@@ -781,11 +823,14 @@ scan node carries a `ProjectionMask`, a `RowFilter`, and a limit — asserted vi
 
 - [ ] `define_schema` macro (C8: first parameter `schema`)
 - [ ] `TypedFrame(S)` with block verbs and typed column accessors
+- [ ] Schema-changing verbs return a plain `DataFrame`; document
+      `S.from_dataframe` as the re-entry point (§4.1)
 - [ ] Compile-time safety proven by `crystal build` specs that assert a
       *failure* (a `temp/` file compiled and expected to fail, run from a spec)
 
 **Acceptance:** the happy path compiles and runs; a misspelt field fails to
-compile with a message naming the field.
+compile with a message naming the field; `typed.with_column(...)` returns a
+`DataFrame` and `S.from_dataframe` restores typed access.
 
 ### Phase 9 — display and hardening
 
@@ -837,6 +882,7 @@ compile with a message naming the field.
 | Multi-chunk frames complicate every verb | Element-wise verbs are chunk-agnostic by construction; ordering verbs materialize |
 | Group-by via sort is O(n log n) | Acceptable for v0.1; a hash-based path is a possible Phase 9 optimization |
 | Typed-schema macro complexity | Isolated in Phase 8 with its own spec file; API is additive |
+| Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
 **Open questions** (decide in-phase, record here):
