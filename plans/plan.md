@@ -395,6 +395,17 @@ meta = writer.close
 | Entry-point functions | `Prism.read_parquet`, `Prism.read_csv`, `Prism.from_arrow`, `Prism.concat`, `Prism.scan_parquet` | Constructors do not hang off the table type |
 | Bare expression builders | `Prism::DSL` (`include Prism::DSL`) | Keeps `col`/`lit` out of the global namespace |
 | Errors | `Prism::Error` and subclasses | See §8.4 |
+| Column projection verb | `select` | Relational π. SQL `SELECT` also lists columns, and dplyr, Polars and Arquero all call it `select` |
+| Row restriction verb | `filter` | Relational σ. `select` never filters rows in this API |
+
+**`select` means projection, not filtering.** `df.select("a", "b")` keeps rows
+and picks columns; `df.filter { ... }` keeps columns and picks rows. The two are
+deliberately disjoint, matching SQL/Polars/dplyr. Note the collision with
+RedAmber, which uses `select` for row filtering and `pick` for column selection:
+a RedAmber habit maps to `filter` and `select` respectively here. The plan node
+for projection is `Plan::Select`, and for restriction `Plan::Filter`. Because
+`select` is a Crystal keyword (C17), receiverless calls inside the class spell
+`self.select`.
 
 **No `Arrow::*` reopening.** `arrow-cr` owns that module. Extending it from a
 downstream shard would make `Prism` requireable-but-broken (types defined only
@@ -1145,12 +1156,50 @@ scan node carries a projection, a predicate and a limit — asserted via `explai
 compile with a message naming the field; `typed.with_column(...)` returns a
 `DataFrame` and `S.from_dataframe` restores typed access.
 
-### Phase 9 — display and hardening
+### Phase 9 — parity, performance, display, release
+
+Everything deferred during Phases 1–7 lands here, grouped so each item has an
+owner phase rather than living in prose. §17 lists the same items with their
+origin.
+
+#### 9a. Display
 
 - [ ] `DataFrame#to_s` / `#inspect` aligned table with dtype footer, truncation
       for wide/tall frames, null rendering
+- [ ] `Series#to_s` summary line, `LazyFrame#explain` formatting polish
+
+#### 9b. API completeness
+
+- [ ] `LazyFrame` verb parity with eager: `drop`, `rename`, `cast`, `fill_null`,
+      `drop_nulls`, `with_columns`, `tail`/`offset`
+- [ ] `Series`: `is_null`, `fill_null`, `cast`, element-wise `==` (§6.2)
+- [ ] Plan-level CSE — only if benchmarks justify it; per-chunk memoization
+      (§14) already covers repeated subexpressions
+
+#### 9c. Expression coverage
+
+- [ ] Decimal coercion and arithmetic in expressions (`Coerce` currently raises
+      `UnsupportedOperation` for decimals)
+- [ ] Out-of-range literal folds to a constant boolean instead of raising, as
+      Polars does (today a narrow column plus an oversized literal raises)
+- [ ] `Prism::Values` materializes nested/list, struct, dictionary and decimal
+      arrays, so `Series#to_a` and display cover every type the dependency models
+
+#### 9d. Performance
+
+- [ ] Projection pruning through joins: map suffixed output names back to the
+      side that produced them (Phase 7 stops at joins)
+- [ ] Slice attached to `Sort`/`GroupBy`/`Distinct` as Polars does, instead of
+      only pushing limits into the scan
+- [ ] Switch join/distinct keys to `arrow-row` once the port lands (blocked on
+      `arrow-cr`); removes per-row key boxing, makes `distinct` O(n), and fixes
+      NaN/±0 key equality (C18, §14)
+- [ ] Benchmarks: `filter`, `select`, `group_by` on 1e6 rows, Parquet
+      read/write with and without pushdown
+
+#### 9e. Release
+
 - [ ] `examples/` for the README workflows
-- [ ] `bench/` micro-benchmarks for filter/select/group_by/parquet read
 - [ ] Memory notes: `#to_arrow` copy cost documented
 - [ ] v0.1.0 tag
 
@@ -1412,6 +1461,28 @@ Use `feat:` / `fix:` / `docs:` / `chore:` / `perf:` / `test:`. Name the phase
 in the body (e.g. `Phase 3`). Keep it resumable from the log alone.
 
 ---
+
+## 17. Deferred work
+
+Every gap noticed during a phase, with the phase that closes it. Nothing here is
+forgotten; if an item becomes urgent, it moves up rather than disappearing.
+
+| Item | Deferred because | lands in |
+| --- | --- | --- |
+| Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d |
+| Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d |
+| `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
+| Decimal coercion/arithmetic | literals have no decimal form yet | 9c |
+| Out-of-range literal folding | raising is safe, folding is Polars parity | 9c |
+| Nested/list/dict/decimal in `Values` | eager verbs do not need them yet | 9c |
+| `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b |
+| `Series#is_null`/`fill_null`/`cast`/`==` | verbs cover the same ground today | 9b |
+| Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |
+| Display layer | not needed to validate semantics | 9a |
+| Repository folder + GitHub rename | owner-gated | 10 |
+
+Deliberately **not** planned: Arquero-style deferred `BitSet` filters (§14),
+hash-based grouping (§12 C5), and a `vstack` alias for `concat` (§12 Phase 5).
 
 ## Appendix A — the original proposal
 
