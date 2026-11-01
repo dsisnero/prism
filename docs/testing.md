@@ -115,7 +115,14 @@ produce identical frames for the same input.
 
 ## Compile-time specs
 
-The typed-schema phase asserts that a misspelt field **fails** to compile:
+These shell out to the compiler (roughly 15 s), so they are gated behind an
+environment variable and run before a release:
+
+```bash
+PRISM_COMPILE_SPECS=1 crystal spec spec/prism/typed_spec.cr
+```
+
+The typed-schema spec asserts that a misspelt field **fails** to compile:
 
 ```crystal
 # writes temp/compile_fail.cr, then:

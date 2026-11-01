@@ -20,17 +20,19 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 8 — compile-time typed schemas.
+**Current focus:** Phase 9 — parity, performance, display, release
+(§12 lists the sub-phases 9a–9e).
 
 **Next up:**
 
-1. Phase 8: `Prism.define_schema Name, field: Type, ...` generating the Arrow
-   schema, per-field `Expr` accessors, and `from_arrow`/`from_dataframe`.
-2. Phase 8: `TypedFrame(S)` with block verbs (`typed.select(&.salary)`,
-   `typed.filter(&.active)`) so a misspelt field is a compile error.
-3. Phase 8: schema-changing verbs return a plain `DataFrame`; document
-   `S.from_dataframe` as the re-entry point (§4.1).
-4. Phase 8: compile-failure specs run through `crystal build` in `temp/`.
+1. Phase 9a: `DataFrame#to_s` / `#inspect` aligned table with dtype footer.
+2. Phase 9b: `LazyFrame` verb parity (`drop`, `rename`, `cast`, `fill_null`,
+   `drop_nulls`, `with_columns`, `tail`) and the remaining `Series` methods.
+3. Phase 9c: decimal coercion, out-of-range literal folding, nested/dictionary
+   materialization in `Prism::Values`.
+4. Phase 9d: projection pruning through joins, slice pinned to
+   `Sort`/`GroupBy`/`Distinct`, and the `arrow-row` switch once it lands.
+5. Phase 9e: examples, benchmarks, v0.1.0 tag.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -42,12 +44,12 @@ implicit.
 | 5 | Joins and row/column concatenation | **done** |
 | 6 | IO: Parquet, CSV, IPC (read + write, streaming) | **done** |
 | 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | **done** |
-| 8 | Compile-time typed schemas | in progress |
-| 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
+| 8 | Compile-time typed schemas | **done** |
+| 9 | Display, examples, benchmarks, v0.1.0 hardening | in progress |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: lazy frame and optimizer (Phase 7)`.
-**Gates:** `make lint` and `make test` — both green (229 examples).
+**Last commit:** `feat: compile-time typed schemas (Phase 8)`.
+**Gates:** `make lint` and `make test` — both green (244 examples).
 
 ---
 
@@ -344,6 +346,23 @@ reproducer verified against the pinned checkout. Root cause narrowed: selections
 that span a null in a column shift that column's values by one row per null,
 while columns without nulls in the same batch are correct.
 
+#### C21. `def select` cannot be written inside a macro body
+
+Reproduced while generating the typed frame: a macro body containing
+
+```crystal
+def select(& : {{schema}} -> ::Prism::Expr)
+```
+
+fails with "unterminated macro", because the parser reads `select` as the
+channel-select keyword whenever it appears in macro-expanded code. A named block
+parameter (`&fn`) fails the same way; renaming the method (`pick`) works, and the
+same `def select` in ordinary code is fine. **Decision:** `Prism::TypedVerbs(S)`
+declares the shared typed-frame verbs in ordinary code, and the generated struct
+only `include`s that module plus the per-field accessors. `define_schema` also
+lives inside `module Prism` (a top-level macro cannot be called as
+`Prism.define_schema`).
+
 ### 3.4 Verified end-to-end sketch
 
 This runs today against the sibling checkouts (it is the basis for Phase 1–4
@@ -440,10 +459,10 @@ Crystal macros have no equivalent. A macro expands at the call site, but it
 cannot refine the return type of an arbitrary method based on the schema flowing
 through it. Therefore:
 
-- `Prism::TypedFrame(S)` is typed **at the declaration boundary**. A misspelt
+- `UserSchema::Frame` is typed **at the declaration boundary**. A misspelt
   field is a compile error, and accessors are typed.
 - A verb that changes the schema (`with_column`, `select`, `join`) returns a
-  plain `DataFrame`, not a refined `TypedFrame`. Re-declare or re-wrap with
+  plain `DataFrame`, not a refined frame. Re-declare or re-wrap with
   `S.from_dataframe(...)` to regain typed access.
 - This is a hard limitation, not a missing feature to be "fixed later" — it
   would require compiler-plugin support in Crystal. Recorded here so nobody
@@ -1143,18 +1162,38 @@ scan node carries a projection, a predicate and a limit — asserted via `explai
   cannot appear in an ivar union (join keys are normalized to `Array(String)`),
   and leaf `rebuild` must be the identity rather than raising.
 
-### Phase 8 — typed schemas
+### Phase 8 — typed schemas (done)
 
-- [ ] `define_schema` macro (C8: first parameter `schema`)
-- [ ] `TypedFrame(S)` with block verbs and typed column accessors
-- [ ] Schema-changing verbs return a plain `DataFrame`; document
-      `S.from_dataframe` as the re-entry point (§4.1)
-- [ ] Compile-time safety proven by `crystal build` specs that assert a
-      *failure* (a `temp/` file compiled and expected to fail, run from a spec)
+- [x] `define_schema` macro (C8: first parameter `schema`, and C21: verbs live
+      outside the macro)
+- [x] Typed frame (`S::Frame`) with block verbs and per-field `Series` accessors
+- [x] Schema-changing verbs return a plain `DataFrame`; `S.from_dataframe` is the
+      re-entry point (§4.1)
+- [x] Compile-time safety proven by a `crystal build` spec that asserts a
+      *failure* naming the field
 
 **Acceptance:** the happy path compiles and runs; a misspelt field fails to
-compile with a message naming the field; `typed.with_column(...)` returns a
-`DataFrame` and `S.from_dataframe` restores typed access.
+compile with a message naming it; `typed.with_column(...)` returns a
+`DataFrame` and `S.from_dataframe` restores typed access. Specs:
+`spec/prism/typed_spec.cr` (15 examples, 16 with `PRISM_COMPILE_SPECS=1`).
+
+**Notes carried forward:**
+
+- The generated frame is `UserSchema::Frame`, not `TypedFrame(UserSchema)` as
+  §10 originally had it. A generic wrapper cannot carry per-field accessors, and
+  the generated struct keeps `typeof` honest (`"UserSchema::Frame"`), which the
+  specs assert.
+- Shared verbs live in `Prism::TypedVerbs(S)`, included by the generated struct,
+  because `def select` cannot be written inside a macro body (C21).
+- `Typed.dtype_for` overloads map Crystal types to Arrow dtypes; the `forall T`
+  fallback uses `{% raise %}`, so `id: Int65` is a compile error naming the type.
+- `from_dataframe` validates every **declared** field (present and correct dtype)
+  and accepts a superset of columns, so a typed view can wrap a wider frame.
+- Per-field accessors return `Prism::Series` rather than a typed Arrow array:
+  columns are chunked, and `Series` is this library's column type. Typed array
+  access is `typed.salary.to_arrow`.
+- The compile-failure spec is gated behind `PRISM_COMPILE_SPECS=1` because it
+  shells out to the compiler; run it before a release.
 
 ### Phase 9 — parity, performance, display, release
 

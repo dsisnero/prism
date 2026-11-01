@@ -7,6 +7,14 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 8 compile-time typed schemas: `Prism.define_schema Name, field: Type, ...`
+  generates the Arrow schema, per-field `Expr` accessors, and a typed
+  `Name::Frame` with block verbs (`filter(&.active)`, `select(&.salary)`) and
+  per-field `Series` accessors, so a misspelt field is a compile error.
+- Schema-preserving typed verbs keep the frame type; schema-changing ones return
+  a plain `DataFrame`, with `Name.from_dataframe` as the validated re-entry point.
+- A gated compile-failure spec (`PRISM_COMPILE_SPECS=1`) proves the typo
+  guarantee.
 - Phase 7 `LazyFrame` and optimizer: `DataFrame#lazy`, `Prism.scan`,
   `Prism.scan_parquet`, lazy `filter`/`select`/`with_column`/`sort_by`/
   `distinct`/`limit`/`head`/`group_by(...).aggregate`/`join`, plus `#collect`

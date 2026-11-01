@@ -53,6 +53,8 @@ require "./prism/plan/optimizer"
 
 require "./prism/lazy_frame"
 
+require "./prism/typed"
+
 module Prism
   VERSION = "0.1.0"
 end
