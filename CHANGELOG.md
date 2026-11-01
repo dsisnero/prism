@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 9a display: `DataFrame#to_s` / `#inspect` render an aligned table with a
+  shape line, dtype row, `null` rendering, and Polars-style head/tail truncation
+  (10 rows, 8 columns, 30-character strings by default), overridable through
+  `to_s(max_rows:, max_cols:, max_string:)`.
 - Phase 8 compile-time typed schemas: `Prism.define_schema Name, field: Type, ...`
   generates the Arrow schema, per-field `Expr` accessors, and a typed
   `Name::Frame` with block verbs (`filter(&.active)`, `select(&.salary)`) and

@@ -25,14 +25,13 @@ implicit.
 
 **Next up:**
 
-1. Phase 9a: `DataFrame#to_s` / `#inspect` aligned table with dtype footer.
-2. Phase 9b: `LazyFrame` verb parity (`drop`, `rename`, `cast`, `fill_null`,
+1. Phase 9b: `LazyFrame` verb parity (`drop`, `rename`, `cast`, `fill_null`,
    `drop_nulls`, `with_columns`, `tail`) and the remaining `Series` methods.
-3. Phase 9c: decimal coercion, out-of-range literal folding, nested/dictionary
+2. Phase 9c: decimal coercion, out-of-range literal folding, nested/dictionary
    materialization in `Prism::Values`.
-4. Phase 9d: projection pruning through joins, slice pinned to
+3. Phase 9d: projection pruning through joins, slice pinned to
    `Sort`/`GroupBy`/`Distinct`, and the `arrow-row` switch once it lands.
-5. Phase 9e: examples, benchmarks, v0.1.0 tag.
+4. Phase 9e: examples, benchmarks, v0.1.0 tag.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -48,8 +47,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | in progress |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: compile-time typed schemas (Phase 8)`.
-**Gates:** `make lint` and `make test` — both green (244 examples).
+**Last commit:** `feat: dataframe display (Phase 9a)`.
+**Gates:** `make lint` and `make test` — both green (253 examples).
 
 ---
 
@@ -1201,11 +1200,19 @@ Everything deferred during Phases 1–7 lands here, grouped so each item has an
 owner phase rather than living in prose. §17 lists the same items with their
 origin.
 
-#### 9a. Display
+#### 9a. Display (done)
 
-- [ ] `DataFrame#to_s` / `#inspect` aligned table with dtype footer, truncation
-      for wide/tall frames, null rendering
-- [ ] `Series#to_s` summary line, `LazyFrame#explain` formatting polish
+- [x] `DataFrame#to_s` / `#inspect` aligned table with a dtype row, head/tail
+      truncation for wide and tall frames, and `null` rendering
+- [x] `DataFrame#to_s(max_rows:, max_cols:, max_string:)` for explicit limits
+- [x] `Series#to_s` summary line and `LazyFrame#explain` were already adequate
+
+**Notes:** defaults follow Polars — 10 rows, 8 columns, 30 characters per string
+cell, with `max/2` head and `max/2` tail plus an ellipsis row or column. The plan
+originally said "dtype footer"; the dtype sits in a row under the header
+(Polars' layout), which reads better than repeating every column name in a
+footer. The table is plain ASCII: `ljust` pads by bytes, so box-drawing
+characters would misalign with any wide value.
 
 #### 9b. API completeness
 
@@ -1517,7 +1524,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b |
 | `Series#is_null`/`fill_null`/`cast`/`==` | verbs cover the same ground today | 9b |
 | Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |
-| Display layer | not needed to validate semantics | 9a |
+| Display layer | not needed to validate semantics | 9a (done) |
 | Repository folder + GitHub rename | owner-gated | 10 |
 
 Deliberately **not** planned: Arquero-style deferred `BitSet` filters (§14),
