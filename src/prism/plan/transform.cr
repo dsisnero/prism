@@ -130,13 +130,14 @@ module Prism
       end
     end
 
-    # Reorders rows; exposes a `slice` so a limit can attach to this node
-    # instead of spilling into the scan.
+    # Reorders rows; exposes a `slice` so a limit attaches to this node
+    # instead of sitting above it.
     class Sort < Node
       getter input : Node
       getter keys : Array(SortKey)
+      getter slice : Slice?
 
-      def initialize(@input : Node, @keys : Array(SortKey))
+      def initialize(@input : Node, @keys : Array(SortKey), @slice : Slice? = nil)
       end
 
       def schema : Arrow::Schema
@@ -148,11 +149,17 @@ module Prism
       end
 
       def rebuild(children : Array(Node)) : Node
-        Sort.new(children[0], @keys)
+        Sort.new(children[0], @keys, @slice)
+      end
+
+      def with_slice(slice : Slice) : Sort
+        Sort.new(@input, @keys, slice)
       end
 
       def execute : DataFrame
-        @input.execute.sort_by(@keys)
+        sorted = @input.execute.sort_by(@keys)
+        slice = @slice
+        slice ? sorted.slice(slice.offset, slice.count) : sorted
       end
 
       def describe(io : IO, indent : Int) : Nil
@@ -160,6 +167,9 @@ module Prism
           "#{key.expr.key} #{key.descending? ? "desc" : "asc"}"
         end
         line(io, indent, "Sort [#{described.join(", ")}]")
+        if slice = @slice
+          line(io, indent + 1, "slice: offset=#{slice.offset} count=#{slice.count}")
+        end
         describe_children(io, indent)
       end
     end
@@ -168,8 +178,9 @@ module Prism
     class Distinct < Node
       getter input : Node
       getter keys : Array(String)
+      getter slice : Slice?
 
-      def initialize(@input : Node, @keys : Array(String))
+      def initialize(@input : Node, @keys : Array(String), @slice : Slice? = nil)
       end
 
       def schema : Arrow::Schema
@@ -181,15 +192,24 @@ module Prism
       end
 
       def rebuild(children : Array(Node)) : Node
-        Distinct.new(children[0], @keys)
+        Distinct.new(children[0], @keys, @slice)
+      end
+
+      def with_slice(slice : Slice) : Distinct
+        Distinct.new(@input, @keys, slice)
       end
 
       def execute : DataFrame
-        @input.execute.distinct(@keys)
+        distinct = @input.execute.distinct(@keys)
+        slice = @slice
+        slice ? distinct.slice(slice.offset, slice.count) : distinct
       end
 
       def describe(io : IO, indent : Int) : Nil
         line(io, indent, "Distinct [#{@keys.join(", ")}]")
+        if slice = @slice
+          line(io, indent + 1, "slice: offset=#{slice.offset} count=#{slice.count}")
+        end
         describe_children(io, indent)
       end
     end

@@ -11,6 +11,7 @@ module Prism
       getter aggregates : Hash(String, Expr)
       getter null_keys : Symbol
       getter? maintain_order : Bool
+      getter slice : Slice?
 
       @schema : Arrow::Schema?
 
@@ -20,6 +21,7 @@ module Prism
         @aggregates : Hash(String, Expr),
         @null_keys : Symbol = :first,
         @maintain_order : Bool = true,
+        @slice : Slice? = nil,
       )
         raise ArgumentError.new("aggregate needs at least one column") if @aggregates.empty?
       end
@@ -39,18 +41,29 @@ module Prism
       end
 
       def rebuild(children : Array(Node)) : Node
-        GroupBy.new(children[0], @keys, @aggregates, @null_keys, @maintain_order)
+        GroupBy.new(
+          children[0], @keys, @aggregates, @null_keys, @maintain_order, @slice
+        )
+      end
+
+      def with_slice(slice : Slice) : GroupBy
+        GroupBy.new(@input, @keys, @aggregates, @null_keys, @maintain_order, slice)
       end
 
       def execute : DataFrame
-        @input.execute
+        grouped = @input.execute
           .group_by(@keys, null_keys: @null_keys, maintain_order: @maintain_order)
           .aggregate(@aggregates)
+        slice = @slice
+        slice ? grouped.slice(slice.offset, slice.count) : grouped
       end
 
       def describe(io : IO, indent : Int) : Nil
         keys = @keys.map { |key| Plan.output_name(key) }
         line(io, indent, "GroupBy [#{keys.join(", ")}] -> [#{@aggregates.keys.join(", ")}]")
+        if slice = @slice
+          line(io, indent + 1, "slice: offset=#{slice.offset} count=#{slice.count}")
+        end
         describe_children(io, indent)
       end
     end

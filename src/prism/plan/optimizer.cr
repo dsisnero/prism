@@ -93,13 +93,14 @@ module Prism
           kept,
           node.null_keys,
           node.maintain_order?,
+          node.slice,
         )
       when Plan::Sort
         needed = required | node.keys.flat_map(&.expr.columns).to_set
-        Plan::Sort.new(prune_projections(node.input, needed), node.keys)
+        Plan::Sort.new(prune_projections(node.input, needed), node.keys, node.slice)
       when Plan::Distinct
         needed = required | node.keys.to_set
-        Plan::Distinct.new(prune_projections(node.input, needed), node.keys)
+        Plan::Distinct.new(prune_projections(node.input, needed), node.keys, node.slice)
       when Plan::Limit
         Plan::Limit.new(
           prune_projections(node.input, required), node.offset, node.count
@@ -122,6 +123,9 @@ module Prism
 
     # Limit(Scan) becomes a scan limit. Projections in between are safe because
     # they neither reorder nor change the row count; anything else blocks it.
+    #
+    # A row-reordering node does not let the limit through, but it does take the
+    # window itself (`Plan::Slice`), which is Polars' "limit 10 after the sort".
     def push_limits(node : Plan::Node) : Plan::Node
       case node
       when Plan::Limit
@@ -186,9 +190,28 @@ module Prism
       when Plan::WithColumn
         pushed = push_limit_into(node.input, offset, count)
         pushed ? Plan::WithColumn.new(pushed, node.name, node.expr) : nil
+      when Plan::Sort
+        node.with_slice(compose_slice(node.slice, offset, count))
+      when Plan::GroupBy
+        node.with_slice(compose_slice(node.slice, offset, count))
+      when Plan::Distinct
+        node.with_slice(compose_slice(node.slice, offset, count))
       else
         nil
       end
+    end
+
+    # An inner window applies first, so the offsets add and the count is
+    # clamped to whatever the inner window left.
+    private def compose_slice(
+      existing : Plan::Slice?,
+      offset : Int32,
+      count : Int32,
+    ) : Plan::Slice
+      return Plan::Slice.new(offset, count) unless existing
+
+      available = Math.max(existing.count - offset, 0)
+      Plan::Slice.new(existing.offset + offset, Math.min(available, count))
     end
 
     private def constant_boolean(expr : Expr) : Bool?

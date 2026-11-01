@@ -9,6 +9,14 @@ module Prism
   # same `DataFrame` method it represents, so lazy and eager results cannot
   # drift. The optimizer is where the extra work happens.
   module Plan
+    # A row window pinned to a node that reorders or reshapes rows.
+    #
+    # Polars keeps the slice *on* a `Sort`/`GroupBy`/`Distinct` node ("limit 10
+    # after the sort") rather than pushing it below them, because those nodes
+    # change which rows are where. The node applies the window to its own
+    # output, so the plan keeps one node instead of a separate `Limit`.
+    record Slice, offset : Int32, count : Int32
+
     # Column name an expression will produce.
     def self.output_name(expr : Expr) : String
       case expr

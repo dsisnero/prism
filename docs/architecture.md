@@ -225,13 +225,18 @@ Pass order, mirroring Polars:
    right name does not silently change. Semi/anti joins read only keys from the
    right side. A name that cannot be attributed leaves both inputs untouched.
 4. **Limit pushdown** — a limit reaches the scan through `Select`/`WithColumn`
-   only. Anything that reorders or changes the row count (`Sort`, `GroupBy`,
-   `Distinct`, `Join`, a leftover `Filter`) blocks it.
+   only. A limit that meets `Sort`/`GroupBy`/`Distinct` is not pushed below it,
+   but it does not stay a separate node either: the window is pinned to that
+   node (`Plan::Slice`), Polars' "limit 10 after the sort". Nested limits
+   compose there (offsets add, counts clamp). Anything else that reorders or
+   changes the row count (`Join`, a leftover `Filter`) leaves the `Limit` where
+   it is.
 
-Polars additionally attaches a slice *to* `Sort`/`GroupBy`/`Distinct` nodes
-rather than pushing it below them; that is not implemented yet. Plan-level CSE is
-also deferred, because repeated subexpressions are already memoized per chunk
-during evaluation.
+Plan-level CSE is deferred, because repeated subexpressions are already memoized
+per chunk during evaluation. A pinned slice is executed by trimming the node's
+own output; the physical top-k (gathering only the window from the sort
+indices) is a benchmark-driven follow-up, because the sort itself is still
+`O(n log n)`.
 
 `explain` renders the plan and lists the pushdowns that reached each scan
 (`projection:`, `predicate:`, `limit:`), so a silently disabled pass fails a

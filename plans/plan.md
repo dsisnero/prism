@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (299 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (307 examples, roughly 30 s warm),
 then take the first unchecked item under Phase 9d in §12. This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
@@ -28,23 +28,22 @@ place that tracks status; do not re-derive it from `git log`.
 
 **Next up** (in order, each roughly one commit):
 
-1. **Slice pinned to `Sort`/`GroupBy`/`Distinct`** — Polars attaches a slice to
-   those nodes ("limit 10 after the sort") instead of pushing it below them. Add
-   the slot to those plan nodes and teach `push_limits`; assert through `explain`.
-2. **Benchmarks** — `bench/` for filter, select and `group_by` on 1e6 rows, plus
+1. **Benchmarks** — `bench/` for filter, select and `group_by` on 1e6 rows, plus
    Parquet read/write with and without projection/predicate pushdown. Phase 9e and
-   any later optimization decision needs these numbers.
-3. **`arrow-row` switch** — **blocked**, waiting on the `arrow-cr` port. When it
+   any later optimization decision (including the physical top-k behind a pinned
+   slice) needs these numbers.
+2. **`arrow-row` switch** — **blocked**, waiting on the `arrow-cr` port. When it
    lands: replace the boxed `Array(Value)` keys in `src/prism/join.cr` and
    `src/prism/distinct.cr` with encoded row bytes (`Hash(Bytes, …)` over views into
    the row buffer), which makes `distinct`/`n_unique` O(n) and makes NaN/±0 keys
    match. Re-run `spec/prism/{join,distinct}_spec.cr` (they are the guards).
 
-**Just landed:** projection pruning through joins (9d item 1) —
-`Plan::Join#input_requirements` attributes each output name to its side, so both
-join inputs prune; keys are always kept, a suffixed name pins the right column,
-and the shadowed left column is retained so the suffix stays valid. Semi/anti
-joins read only keys from the right side.
+**Just landed (9d):** projection pruning through joins
+(`Plan::Join#input_requirements` attributes each output name to its side; keys are
+always kept, a suffixed name pins the right column, the shadowed left column is
+retained so the suffix stays valid, semi/anti read only keys from the right), and a
+slice pinned to `Sort`/`GroupBy`/`Distinct` (`Plan::Slice`, nested limits compose,
+`explain` shows `slice: offset=… count=…`).
 
 **Then Phase 9e:** examples for the README workflows (including an interactive
 viewer on `bubbletea` + `bubbles` + `ultraviolet`, development dependencies only),
@@ -52,7 +51,7 @@ memory notes for `#to_arrow`, and the `v0.1.0` tag.
 
 **Owner actions, not code:**
 
-- Say when `arrow-row` lands in `arrow-cr`; item 3 above becomes unblocked.
+- Say when `arrow-row` lands in `arrow-cr`; item 2 above becomes unblocked.
 - Decide whether to do the repo folder / GitHub rename (Phase 10). The shard and
   entrypoint are already `prism`; only the folder and repository still say
   `dataframe`.
@@ -76,8 +75,8 @@ memory notes for `#to_arrow`, and the `v0.1.0` tag.
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
 **Last feature commit:** `53dff2b` — Phase 9d projection pruning through joins.
-**Gates:** `make lint` and `make test` green, 299 examples. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (300) and costs ~13 s; run it before a release.
+**Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
+adds the compile-failure spec (308) and costs ~13 s; run it before a release.
 
 ---
 
@@ -879,7 +878,9 @@ whole plan is typed before execution.
    so both join inputs prune.
 3. **Limit pushdown** — `Limit` merges into a scan as `with_limit` +
    `with_offset` when no intervening `Sort`/`GroupBy`/`Join` reorders or grows
-   rows.
+   rows. A limit that meets `Sort`/`GroupBy`/`Distinct` is pinned to that node
+   instead of staying above it (Polars' "limit 10 after the sort"); nested
+   limits compose on the node.
 4. **Constant folding** — evaluate literal-only subtrees at plan time.
 5. **Dead column elimination** — drop `WithColumn` nodes nobody reads (after
    pruning), keeping order semantics if the removed expression is pure (it
@@ -1185,8 +1186,8 @@ scan node carries a projection, a predicate and a limit — asserted via `explai
   back to the side that produced it was not implemented in this phase, so both
   join inputs kept full schemas. Phase 9d closed it.
 - Limit pushdown crosses only `Select`/`WithColumn`. Polars additionally pins a
-  slice *to* `Sort`/`GroupBy`/`Distinct` instead of pushing below them; that is
-  future work.
+  slice *to* `Sort`/`GroupBy`/`Distinct` instead of pushing below them; Phase 9d
+  added that (`Plan::Slice`).
 - Plan-level CSE is deliberately absent: repeated subexpressions are already
   memoized per chunk (§14), so a plan rewrite would add complexity without a new
   saving.
@@ -1313,8 +1314,9 @@ a struct array: decimals materialize instead of raising.
 
 - [x] Projection pruning through joins: map suffixed output names back to the
       side that produced them
-- [ ] Slice attached to `Sort`/`GroupBy`/`Distinct` as Polars does, instead of
-      only pushing limits into the scan
+- [x] Slice attached to `Sort`/`GroupBy`/`Distinct` as Polars does (`Plan::Slice`),
+      with nested limits composing instead of stacking; the physical top-k that
+      would gather only the window is deferred to the benchmark results
 - [ ] Benchmarks: `filter`, `select`, `group_by` on 1e6 rows, Parquet read/write
       with and without pushdown — do these before the `arrow-row` switch so the
       change can be measured
@@ -1598,7 +1600,8 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Item | Deferred because | lands in |
 | --- | --- | --- |
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d (done) |
-| Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d |
+| Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
+| Physical top-k for a pinned slice | the sort itself stays O(n log n); needs benchmark numbers first | 9d (after benchmarks) |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |

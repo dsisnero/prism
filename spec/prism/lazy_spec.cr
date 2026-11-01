@@ -113,12 +113,53 @@ describe Prism::LazyFrame do
       plan.should contain("limit: 3")
     end
 
-    it "does not push a limit below a sort" do
+    it "pins a limit to the sort instead of pushing it into the scan" do
       plan = Prism.scan_parquet(lazy_parquet_path).sort_by("qty").head(3).explain
 
+      plan.should contain("slice: offset=0 count=3")
+      # No separate node above the sort, and nothing reached the scan.
+      plan.should_not contain("Limit")
+      plan.includes?("limit:").should be_false
+    end
+
+    it "pins a limit to a group_by result" do
+      plan = Prism.scan_parquet(lazy_parquet_path)
+        .group_by("region")
+        .aggregate(total: col("qty").sum)
+        .head(2)
+        .explain
+
+      plan.should contain("slice: offset=0 count=2")
+      plan.should_not contain("Limit")
+    end
+
+    it "pins a limit to a distinct node" do
+      plan = Prism.scan_parquet(lazy_parquet_path).distinct("region").head(1).explain
+
+      plan.should contain("slice: offset=0 count=1")
+      plan.should_not contain("Limit")
+    end
+
+    it "composes nested limits onto one node" do
+      plan = Prism.scan_parquet(lazy_parquet_path)
+        .sort_by("qty")
+        .slice(1, 4)
+        .head(2)
+        .explain
+
+      plan.scan(/slice:/).size.should eq(1)
+      plan.should contain("slice: offset=1 count=2")
+    end
+
+    it "does not pin a limit across a filter" do
+      plan = Prism.scan_parquet(lazy_parquet_path)
+        .sort_by("qty")
+        .filter(col("qty") > lit(1_i64))
+        .head(2)
+        .explain
+
       plan.should contain("Limit")
-      plan.should_not contain("limit: 3\n      projection")
-      plan.includes?("limit: 3").should be_false
+      plan.includes?("slice:").should be_false
     end
 
     it "splits conjunctions so each half can be pushed" do
@@ -292,6 +333,45 @@ describe Prism::LazyFrame do
 
       lazy.collect.should eq(eager)
       lazy.explain.should contain("projection: [region, weight]")
+    end
+
+    it "returns the same rows when a slice is pinned to the sort" do
+      path = lazy_parquet_path
+      lazy = Prism.scan_parquet(path).sort_by("qty", order: :desc).slice(1, 2)
+      eager = Prism.read_parquet(path).sort_by("qty", order: :desc).slice(1, 2)
+
+      lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
+    end
+
+    it "returns the same rows when a slice is pinned to a group_by" do
+      path = lazy_parquet_path
+      lazy = Prism.scan_parquet(path)
+        .group_by("region")
+        .aggregate(total: col("qty").sum)
+        .head(1)
+      eager = Prism.read_parquet(path)
+        .group_by("region")
+        .aggregate(total: col("qty").sum)
+        .head(1)
+
+      lazy.collect["total"].to_a.should eq(eager["total"].to_a)
+    end
+
+    it "returns the same rows when a slice is pinned to distinct" do
+      path = lazy_parquet_path
+      lazy = Prism.scan_parquet(path).distinct("region").head(1)
+      eager = Prism.read_parquet(path).distinct("region").head(1)
+
+      lazy.collect["region"].to_a.should eq(eager["region"].to_a)
+    end
+
+    it "clamps a pinned slice that starts past the end" do
+      path = lazy_parquet_path
+      lazy = Prism.scan_parquet(path).sort_by("qty").head(5).slice(10, 2)
+      eager = Prism.read_parquet(path).sort_by("qty").head(5).slice(10, 2)
+
+      lazy.collect.row_count.should eq(0)
+      eager.row_count.should eq(0)
     end
   end
 end
