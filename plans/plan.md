@@ -75,7 +75,8 @@ memory notes for `#to_arrow`, and the `v0.1.0` tag.
 | 9e | Examples, benchmarks, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last feature commit:** `8065fa6` — Phase 9d slice pinned to `Sort`/`GroupBy`/`Distinct`.
+**Last feature commit:** `ab497a8` — Phase 9d window gather for a pinned slice,
+with the benchmark harness (`make bench`, [docs/benchmarks.md](benchmarks.md)).
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (311) and costs ~13 s; run it before a release.
 
