@@ -127,7 +127,19 @@ Nodes: `Col`, `Lit`, `Unary`, `Binary`, `Agg`, `Cast`, `Alias`.
   drop them freely.
 
 Numeric coercion lives in `expression/coerce.cr` and is applied before kernels
-are called, because Arrow's kernels require matching dtypes.
+are called, because Arrow's kernels require matching dtypes. When one side is a
+literal, the literal is cast to the column's dtype (matching Polars) instead of
+widening the column, so a narrow column is never copied into a wider buffer.
+
+Boolean `and`/`or` use Arrow's Kleene kernels: a known `false` wins over null in
+AND, matching SQL and Polars. Negation is `.not` — Crystal's `!` is a
+pseudo-method and cannot be overloaded. `&`/`|` are available but bind tighter
+than comparison operators, so operands must be parenthesised.
+
+Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, so
+`col("price") * 2` does not build an n-element array of 2s. Arrow's kernels
+reject a union of array and scalar, so `Prism::Kernels` narrows the union and
+calls a generic `apply` instantiated per operand pair.
 
 ## Execution
 

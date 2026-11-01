@@ -20,27 +20,26 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 2 — expressions (`Prism::Expr` AST, DSL, evaluation,
-numeric coercion).
+**Current focus:** Phase 3 — eager verbs (`select`, `filter`, `with_column`,
+`drop`, `rename`, `sort_by`, `distinct`, …).
 
 **Next up:**
 
-1. Phase 2: `Expr` AST nodes (`Col`, `Lit`, `Unary`, `Binary`, `Agg`, `Cast`,
-   `Alias`) with `key`, `columns`, `same_as?`.
-2. Phase 2: `Prism::DSL` (`col`, `lit`) plus operator overloads and the
-   precedence-safe `and`/`or` methods — see
-   [C9](#c9--binds-tighter-than--in-crystal).
-3. Phase 2: numeric coercion (`expression/coerce.cr`) so mixed-dtype arithmetic
-   works without leaning on [C3](#c3-mixed-dtype-arithmetic-raises).
-4. Phase 2: `Expr#eval` against one `RecordBatch`, verified against the
-   equivalent Arrow kernel call.
+1. Phase 3: `filter` (block and expression forms) mapping over chunks so it
+   stays element-wise.
+2. Phase 3: `select` with names, expressions, and aliased expressions;
+   projection reuses columns.
+3. Phase 3: `with_column` / `with_columns` and `drop` / `rename`.
+4. Phase 3: `sort_by` with per-key direction and null placement via
+   `lexsort_to_indices` + `take_record_batch`.
+5. Phase 3: `distinct`, `drop_nulls`, `fill_null`, `with_row_index`.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 0 | Project scaffolding, dependency wiring, gates | **done** |
 | 1 | Foundation: `DataFrame`, `Series`, schema, construction | **done** |
-| 2 | Expressions: AST, DSL, evaluation, coercion | in progress |
-| 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | not started |
+| 2 | Expressions: AST, DSL, evaluation, coercion | **done** |
+| 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | in progress |
 | 4 | `group_by` + aggregations | not started |
 | 5 | Joins and row/column concatenation | not started |
 | 6 | IO: Parquet, CSV, IPC (read + write, streaming) | not started |
@@ -49,8 +48,8 @@ numeric coercion).
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: DataFrame and Series foundation (Phase 1)`.
-**Gates:** `make lint` and `make test` — both green (54 examples).
+**Last commit:** `feat: expression engine (Phase 2)`.
+**Gates:** `make lint` and `make test` — both green (88 examples).
 
 ---
 
@@ -220,6 +219,31 @@ out as a zero. Specs assert this explicitly.
 reduces each chunk with the Arrow kernel, then folds the partials (Polars does
 the same with its own `ChunkedArray`). **Verbs never call `#to_arrow`.** Only the
 edges do: `#to_a`, `#to_arrow`, `#each`, display, and file writers.
+
+#### C13. `Arrow.merge` compacts its inputs; `Arrow.zip` is row-aligned
+
+Verified by running it: `merge(mask, truthy, falsy)` consumes `truthy` only at
+`true` positions, in order — the arrow-rs contract. Passing a full-length array
+to fill nulls silently shifts values and drops the tail (a 3-row fill produced
+`[1.5, 0.0, nil]`). `zip` requires full-length arrays or length-1 scalars and
+selects per row, which is what expressions produce. **Decision:**
+`fill_null`/`coalesce` use `Arrow.zip`; `merge` is only for compacted inputs.
+
+#### C14. `!` is a Crystal pseudo-method and cannot be overloaded
+
+`def !` fails to compile ("'!' is a pseudo-method and can't be redefined"), so
+`!expr` can never build an expression. **Decision:** boolean negation is
+`.not`; `&`/`|` operators remain available for composition with mandatory
+parentheses (C9).
+
+#### C15. Arrow kernels reject a `Datum` union argument
+
+The kernels are untyped methods that resolve `numeric_datum`/`zip_datum`
+overloads against static types, so passing `ArrayBase | Scalar(ArrayBase)`
+fails to compile even though both members are supported. **Decision:**
+`Prism::Kernels.apply_op` narrows the union, then calls a generic `apply` that
+Crystal instantiates once per operand-type pair — one written op table, four
+compiled variants, and scalars still broadcast inside Arrow.
 
 ### 3.4 Verified end-to-end sketch
 
@@ -542,7 +566,7 @@ UserSchema.schema                             # => Arrow::Schema
 | --- | --- |
 | Arithmetic | `+ - * / // % ** abs round floor ceil sqrt pow` |
 | Comparison | `== != < <= > >= eq neq lt lt_eq gt gt_eq` |
-| Boolean | `& \| !` (operators), `and` / `or` / `not` (methods, precedence-safe) |
+| Boolean | `&` / `\|` (operators, parenthesise), `and` / `or` / `not` (methods; `!` is not overloadable) |
 | Null | `is_null`, `is_not_null`, `fill_null(v)`, `coalesce(*exprs)` |
 | Cast | `cast(dtype)` |
 | String | `str_length`, `str_contains`, `str_starts_with`, `str_to_uppercase`, `str_to_lowercase` |
@@ -602,6 +626,12 @@ default to `Int64`, `Float` literals to `Float64`.
 | decimal | float | `Float64` (documented precision loss) |
 | anything | `Null` | the non-null side |
 
+Before unifying, the engine checks whether one side is a literal. If it is, the
+literal is cast to the column's dtype instead of the column being widened —
+`col("i32") + 1` stays `Int32` and copies nothing. This mirrors Polars'
+`modify_supertype`. The cast only happens when both dtypes are in the same
+family, so `col("name") == 1` raises instead of comparing a string to "1".
+
 Non-numeric operands (`Utf8 + Int64`) raise `Prism::DtypeError` at
 `dtype(schema)` time — before any data is touched.
 
@@ -637,7 +667,12 @@ raised `Prism::Error` names the offending column.
   and never use `Expr` as a `Hash` key by `==` semantics. Specs use
   `Expr#same_as?` or compare `Expr#key` (see
   [docs/testing.md](../docs/testing.md#expressions)).
-- **`&` precedence** (C9): parentheses are mandatory.
+- **`&` precedence** (C9): parentheses are mandatory. `and`/`or` are the safe
+  spelling.
+- **`!` cannot be overloaded** (C14): `!expr` is always a `Bool`, so negation is
+  `.not`.
+- **`and`/`or` are Kleene**, not bitwise: null AND false is false. This matches
+  SQL and Polars' logical operators, and differs from `Arrow.and`/`or`.
 
 ## 9. Lazy execution and optimization
 
@@ -771,19 +806,35 @@ block updated, one commit.
   produced by `head(0)`/`filter` keeps its chunks, so this only affects frames
   built from an empty batch list.
 
-### Phase 2 — expressions
+### Phase 2 — expressions (done)
 
-- [ ] AST nodes + `key`, `columns`, `same_as?`
-- [ ] `dtype(schema)` for every node, including coercion (§8.2)
-- [ ] `eval(ctx)` for column, literal, arithmetic, comparison, boolean, cast
-- [ ] `Prism::DSL` with `col`, `lit`, and `Prism.col` alias
-- [ ] Operator overloads with the C9 caveat documented
-- [ ] `And`/`Or`/`Not` methods as the precedence-safe form
-- [ ] Null predicates and `fill_null`/`coalesce`
+- [x] AST nodes + `key`, `columns`, `same_as?`: `Col`, `Lit`, `Binary`, `Neg`,
+      `Not`, `IsNull`, `IsNotNull`, `Cast`, `Alias`, `FillNull`, `Coalesce`
+- [x] `dtype(schema)` for every node, including coercion (§8.2)
+- [x] `eval(ctx)` for column, literal, arithmetic, comparison, boolean, cast
+- [x] `Prism::DSL` with `col`, `lit`, and `Prism.col`/`Prism.lit` entry points
+- [x] Operator overloads with the C9 caveat documented
+- [x] `and`/`or`/`not` methods as the precedence-safe form
+- [x] Null predicates and `fill_null`/`coalesce`
 
 **Acceptance:** expressions evaluate identically to the equivalent Arrow kernel
 calls, and `dtype` matches `eval(...).data_type` for every spec case (asserted
-with a helper so the two can never drift).
+via the `checked` helper in `spec/prism/expr_spec.cr`).
+
+**Notes carried forward:**
+
+- Literals evaluate to `Arrow::Scalar`, not to a broadcast array, so
+  `col("price") * 2` never builds an n-element array of 2s (C12 policy).
+- Coercion prefers casting **the literal** to the column dtype when the cast is
+  possible and both are in the same family, matching Polars' `modify_supertype`
+  behaviour. Out-of-range literals therefore raise from the safe cast rather
+  than widening the column; Polars folds them to a constant instead (open, §15).
+- `and`/`or` use Arrow's **Kleene** kernels (`and_kleene`/`or_kleene`), matching
+  SQL and Polars' logical operators: a known `false` wins over null in AND.
+- Boolean negation is `.not`, because `!` is a Crystal pseudo-method and cannot
+  be overloaded (C14).
+- Arrow's `merge` compacts its inputs, so `fill_null`/`coalesce` use `zip`,
+  which is row-aligned (C13).
 
 ### Phase 3 — eager verbs
 
@@ -934,6 +985,12 @@ These are the only places allowed to allocate or materialize:
   and columns are only copied when a table is reified.
 - **Kotlin DataFrame** is column-based and reuses storage across its immutable
   transforms.
+- **Polars casts the literal, not the column**, in column-vs-literal binary
+  operations (`modify_supertype`), which is what §8.2 specifies.
+- **Polars refuses string/numeric comparison at planning time** rather than
+  casting implicitly; `same_family?` reproduces that.
+- **Polars' logical AND/OR are Kleene**, so `and`/`or` use Arrow's Kleene
+  kernels rather than the plain ones.
 
 ### Where we deliberately differ from Arquero
 
@@ -961,6 +1018,7 @@ above stays true.
 | Group-by via sort is O(n log n) | Acceptable for v0.1; a hash-based path is a possible Phase 9 optimization |
 | Typed-schema macro complexity | Isolated in Phase 8 with its own spec file; API is additive |
 | Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
+| Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
 **Open questions** (decide in-phase, record here):

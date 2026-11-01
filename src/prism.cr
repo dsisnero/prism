@@ -15,6 +15,14 @@ require "./prism/series"
 require "./prism/dataframe"
 require "./prism/construction"
 
+require "./prism/expression/expr"
+require "./prism/expression/literals"
+require "./prism/expression/coerce"
+require "./prism/expression/kernels"
+require "./prism/expression/nodes"
+require "./prism/expression/dsl"
+require "./prism/expression/operators"
+
 module Prism
   VERSION = "0.1.0"
 end

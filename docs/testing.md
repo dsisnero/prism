@@ -62,6 +62,10 @@ matching spec file, even if it only holds shared helpers.
 (col("a") == 1).key.should eq("bin:eq(col:a,lit:1)")
 ```
 
+`!expr` is not overloadable in Crystal (it is a pseudo-method), so negation is
+`.not`; a spec that expects `!expr` to build an expression will not compile.
+Boolean composition must be parenthesised, because `&` binds tighter than `==`.
+
 Also assert that `dtype(schema)` and `eval(...).data_type` agree, via a shared
 helper, so the two can never drift:
 

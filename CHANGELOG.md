@@ -7,6 +7,14 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 2 expression engine: `Prism::Expr` AST (`Col`, `Lit`, `Binary`, `Neg`,
+  `Not`, `IsNull`, `IsNotNull`, `Cast`, `Alias`, `FillNull`, `Coalesce`),
+  `Prism.col`/`Prism.lit` plus `Prism::DSL`, operator overloads, and the
+  precedence-safe `and`/`or`/`not` methods.
+- `Prism::Coerce`: dtype unification and literal-first casting, matching Polars'
+  rule of casting the literal instead of the column.
+- Kleene boolean logic for `and`/`or`, and null handling via `is_null`,
+  `is_not_null`, `fill_null`, and `coalesce`.
 - Phase 1 foundation: `Prism::DataFrame` (chunked Arrow batches, `from_arrow`,
   `from_batches`, `from_columns`, `[]`/`[]?`, `to_arrow`, `each_batch`, `head`,
   `tail`, `slice`, `shape`, `dtypes`), `Prism::Series` (chunked column with
