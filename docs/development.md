@@ -136,7 +136,12 @@ If a kernel is missing or returns a wrong result:
 2. Check whether the same input works in `arrow-rs` semantics (the port is
    behaviour-faithful, so a mismatch is a dependency bug).
 3. File it against `dsisnero/arrow-cr` or `dsisnero/parquet-cr`.
-4. Record the workaround and the issue link in `plans/plan.md` §15.
+4. Write the report to `shard_issues/<shard>.<n>.md` — a self-contained failure
+   description with a runnable reproducer, expected vs actual, and the analysis.
+   Numbers are per shard and continue across repos (for example
+   `parquet-cr.1` lives in `amazon_data`, so this repo starts at
+   `parquet-cr.2`).
+5. Record the workaround and a link to that file in `plans/plan.md`.
 
 Never edit `lib/*/src/` and commit — the symlink means the change lands in the
 dependency's working tree, not this repo, and it will silently disappear.

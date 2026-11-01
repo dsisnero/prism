@@ -330,7 +330,12 @@ the win, still applies. `spec/prism/io/parquet_spec.cr` keeps the reproduction a
 a regression guard, and re-enabling pruning is one commented block in
 `src/prism/io/parquet.cr`.
 
-**Upstream action:** report to `dsisnero/parquet-cr` with the table above.
+**Upstream action:** the report is written as
+[`shard_issues/parquet-cr.2.md`](../shard_issues/parquet-cr.2.md) (numbered per
+shard, continuing from `parquet-cr.1` in `amazon_data`), with a standalone
+reproducer verified against the pinned checkout. Root cause narrowed: selections
+that span a null in a column shift that column's values by one row per null,
+while columns without nulls in the same batch are correct.
 
 ### 3.4 Verified end-to-end sketch
 
