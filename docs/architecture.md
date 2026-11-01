@@ -339,6 +339,81 @@ run and sorts those ascending to restore input order.
 Cost is O(n log n). Polars' `unique_stable` is O(n) with a Rust hash set; matching
 that would need Arrow-native hashing, which this dependency does not expose.
 
+## Display
+
+`DataFrame#to_s` and `#inspect` render an aligned table with a shape line, a dtype
+row, and head/tail truncation:
+
+```text
+shape: (4, 4)
+region | price | qty | note
+------ | ----- | --- | ------------------------------
+str    | f64   | i64 | str
+east   | 10.0  | 1   | a very long note that shoul...
+west   | 20.5  | 2   | short
+```
+
+Defaults follow Polars: 10 rows, 8 columns, 30 characters per string cell.
+Larger frames keep `max/2` rows (or columns) from each end with an ellipsis
+between them, so the shape stays readable. `to_s(max_rows:, max_cols:,
+max_string:)` overrides them.
+
+Plain ASCII is deliberate: `ljust` pads by bytes, so box-drawing characters would
+misalign beside any non-ASCII value. Nulls render as `null`, and floats use
+Crystal's formatting (`NaN`, `Infinity`).
+
+For CLI output there is an optional bordered renderer:
+
+```crystal
+require "prism/lipgloss"   # after adding lipgloss to your shard.yml
+
+puts df.to_styled
+```
+
+```text
+shape: (3, 3)
+┌──────┬─────┬───┐
+│region│price│qty│
+├──────┼─────┼───┤
+│str   │f64  │i64│
+│east  │10.0 │1  │
+└──────┴─────┴───┘
+```
+
+It shares `Display.grid` with the plain renderer, so both show the same cells and
+truncation. Styling is opt-in because `to_s` must stay free of ANSI escapes —
+logs, pipes and specs consume it.
+
+## Typed schemas
+
+```crystal
+Prism.define_schema UserSchema, id: Int64, name: String, active: Bool, salary: Float64
+
+typed = UserSchema.from_arrow(batch)
+typed.filter(&.active).select(&.salary)   # misspelt field fails to compile
+typed.salary                              # => Prism::Series
+```
+
+`define_schema` generates three things: the Arrow schema, a fields struct whose
+properties are `Prism::Expr` references, and `UserSchema::Frame`, a typed view.
+
+The frame is a **generated struct**, not a generic wrapper, because per-field
+accessors cannot be added to an instantiated generic type. Shared behaviour lives
+in `Prism::TypedVerbs(S)`, which the struct includes — partly for reuse, and
+partly because `def select` cannot be written inside a macro body: the parser
+reads `select` as the channel-select keyword (plan C21).
+
+Typing holds at the **declaration boundary**. Schema-preserving verbs (`filter`,
+`sort_by`, `head`, `slice`) return the same frame type. Anything that changes the
+schema (`select`, `with_column`) returns a plain `DataFrame`, because Crystal has
+no way to refine a return type from the schema flowing through a call — that
+needs a compiler plugin, as Kotlin DataFrame uses. `UserSchema.from_dataframe`
+is the explicit way back in; it validates every declared field and accepts a
+superset of columns.
+
+Field types map to Arrow dtypes through `Prism::Typed.dtype_for`; an unsupported
+type is a compile error naming it, raised from the fallback overload.
+
 ## Parity and divergence
 
 `arrow-cr` is a behaviour-faithful port of `arrow-rs`; `parquet-cr` likewise for
