@@ -59,9 +59,11 @@ module Prism
       batch = to_arrow
       return self if batch.num_rows <= 1
 
-      ctx = EvalContext.new(batch)
+      types = TypeCache.new(@schema)
+      duplicates = Cse.duplicate_keys(keys.map(&.expr))
+      ctx = EvalContext.new(batch, types, duplicates)
       columns = keys.map do |key|
-        values = Datums.array(key.expr.eval(ctx), ctx)
+        values = Datums.array(ctx.evaluate(key.expr), ctx)
         options = Arrow::SortOptions.new(key.descending?, key.nulls_first?)
         Arrow::SortColumn.new(values, options)
       end

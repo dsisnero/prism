@@ -141,6 +141,32 @@ Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, s
 reject a union of array and scalar, so `Prism::Kernels` narrows the union and
 calls a generic `apply` instantiated per operand pair.
 
+Schema-dependent work happens **once per execution**, not once per chunk.
+`Prism::TypeCache` resolves output dtypes and coercion targets keyed by
+`Expr#key`; verbs build one and share it across every chunk's `EvalContext`.
+Polars achieves the same by compiling a physical expression once.
+
+Repeated subexpressions are computed once per chunk. `Prism::Cse` counts canonical
+keys across a verb's expressions, and `EvalContext#evaluate` memoizes only the
+keys that occur more than once — the same saving as Polars' CSEE without
+rewriting the plan.
+
+## Filtering
+
+`DataFrame#filter` mirrors the three cases in Polars' `filter_with_bitmap`:
+
+- all rows match → the batch is returned untouched;
+- no rows match → an empty view, kernel skipped;
+- otherwise → `Arrow.filter_record_batch`.
+
+Boolean identities short-circuit before evaluation: `x & false` and `x | true`
+produce a constant bitmap (n/8 bytes) without evaluating `x`.
+
+Nulls are Arrow validity bitmaps (`NullBuffer` over `BooleanBuffer`), and
+`BooleanArray#true_count` is a bitmap AND plus popcount, so deciding which case
+applies is cheap. Arrow's filter already treats a null mask bit as false, which
+is why an all-null predicate drops every row without special handling.
+
 ## Verbs
 
 Eager verbs split into two groups by cost:

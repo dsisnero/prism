@@ -132,32 +132,50 @@ module Prism
       end
     end
 
-    def eval(ctx : EvalContext) : Datum
-      if @op.boolean?
-        return apply_boolean(
-          Datums.boolean_array(@left.eval(ctx), ctx),
-          Datums.boolean_array(@right.eval(ctx), ctx),
-        )
-      end
+    def children : Array(Expr)
+      [@left, @right]
+    end
 
-      target = Coerce.target(@left, @right, ctx.schema)
-      left = Coerce.cast(@left.eval(ctx), target)
-      right = Coerce.cast(@right.eval(ctx), target)
+    def eval(ctx : EvalContext) : Datum
+      return eval_boolean(ctx) if @op.boolean?
+
+      target = ctx.coercion_target(@left, @right)
+      left = Coerce.cast(ctx.evaluate(@left), target)
+      right = Coerce.cast(ctx.evaluate(@right), target)
 
       Kernels.apply_op(@op, left, right)
     end
 
-    def to_s(io : IO) : Nil
-      io << key
+    # Boolean identities first, so `x & false` and `x | true` never evaluate
+    # `x` at all. Safe under Kleene logic: a known false wins in AND, a known
+    # true wins in OR, exactly as `and_kleene`/`or_kleene` define it.
+    private def eval_boolean(ctx : EvalContext) : Arrow::BooleanArray
+      and_op = @op.and?
+      left_constant = boolean_literal(@left)
+      right_constant = boolean_literal(@right)
+
+      if left_constant == !and_op || right_constant == !and_op
+        return Datums.constant_boolean(!and_op, ctx)
+      end
+      return Datums.boolean_array(ctx.evaluate(@left), ctx) if right_constant == and_op
+      return Datums.boolean_array(ctx.evaluate(@right), ctx) if left_constant == and_op
+
+      left = Datums.boolean_array(ctx.evaluate(@left), ctx)
+      right = Datums.boolean_array(ctx.evaluate(@right), ctx)
+      and_op ? Arrow.and_kleene(left, right) : Arrow.or_kleene(left, right)
     end
 
-    # Kleene logic, matching SQL and Polars' logical operators: a known `false`
-    # wins over null in AND, a known `true` wins over null in OR.
-    private def apply_boolean(
-      left : Arrow::BooleanArray,
-      right : Arrow::BooleanArray,
-    ) : Arrow::BooleanArray
-      @op.and? ? Arrow.and_kleene(left, right) : Arrow.or_kleene(left, right)
+    private def boolean_literal(expr : Expr) : Bool?
+      case expr
+      when Lit
+        expr.value.as?(Bool)
+      else
+        nil
+      end
+    end
+
+    def to_s(io : IO) : Nil
+      io << key
     end
 
     private def require_boolean(expr : Expr, schema : Arrow::Schema) : Nil
@@ -181,6 +199,10 @@ module Prism
       "neg(#{@operand.key})"
     end
 
+    def children : Array(Expr)
+      [@operand]
+    end
+
     def columns : Array(String)
       @operand.columns
     end
@@ -195,7 +217,7 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      Arrow.neg(Datums.array(@operand.eval(ctx), ctx))
+      Arrow.neg(Datums.array(ctx.evaluate(@operand), ctx))
     end
   end
 
@@ -208,6 +230,10 @@ module Prism
 
     def key : String
       "not(#{@operand.key})"
+    end
+
+    def children : Array(Expr)
+      [@operand]
     end
 
     def columns : Array(String)
@@ -224,7 +250,7 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      Arrow.not(Datums.boolean_array(@operand.eval(ctx), ctx))
+      Arrow.not(Datums.boolean_array(ctx.evaluate(@operand), ctx))
     end
   end
 
@@ -239,6 +265,10 @@ module Prism
       "is_null(#{@operand.key})"
     end
 
+    def children : Array(Expr)
+      [@operand]
+    end
+
     def columns : Array(String)
       @operand.columns
     end
@@ -249,7 +279,7 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      Arrow.is_null(Datums.array(@operand.eval(ctx), ctx))
+      Arrow.is_null(Datums.array(ctx.evaluate(@operand), ctx))
     end
   end
 
@@ -264,6 +294,10 @@ module Prism
       "is_not_null(#{@operand.key})"
     end
 
+    def children : Array(Expr)
+      [@operand]
+    end
+
     def columns : Array(String)
       @operand.columns
     end
@@ -274,7 +308,7 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      Arrow.is_not_null(Datums.array(@operand.eval(ctx), ctx))
+      Arrow.is_not_null(Datums.array(ctx.evaluate(@operand), ctx))
     end
   end
 
@@ -290,6 +324,10 @@ module Prism
       "cast(#{@operand.key},#{@target})"
     end
 
+    def children : Array(Expr)
+      [@operand]
+    end
+
     def columns : Array(String)
       @operand.columns
     end
@@ -300,7 +338,7 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      Coerce.cast(@operand.eval(ctx), @target)
+      Coerce.cast(ctx.evaluate(@operand), @target)
     end
   end
 
@@ -316,6 +354,10 @@ module Prism
       "alias(#{@operand.key},#{@name})"
     end
 
+    def children : Array(Expr)
+      [@operand]
+    end
+
     def columns : Array(String)
       @operand.columns
     end
@@ -325,7 +367,7 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      @operand.eval(ctx)
+      ctx.evaluate(@operand)
     end
   end
 
@@ -341,6 +383,10 @@ module Prism
       "fill_null(#{@operand.key},#{@replacement.key})"
     end
 
+    def children : Array(Expr)
+      [@operand, @replacement]
+    end
+
     def columns : Array(String)
       (@operand.columns + @replacement.columns).uniq
     end
@@ -352,8 +398,8 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      array = Datums.array(@operand.eval(ctx), ctx)
-      replacement = Coerce.cast(@replacement.eval(ctx), array.data_type)
+      array = Datums.array(ctx.evaluate(@operand), ctx)
+      replacement = Coerce.cast(ctx.evaluate(@replacement), array.data_type)
 
       Datums.zip(Arrow.is_not_null(array), array, replacement)
     end
@@ -370,6 +416,10 @@ module Prism
       "coalesce(#{@operands.map(&.key).join(",")})"
     end
 
+    def children : Array(Expr)
+      @operands
+    end
+
     def columns : Array(String)
       @operands.flat_map(&.columns).uniq!
     end
@@ -381,10 +431,10 @@ module Prism
     end
 
     def eval(ctx : EvalContext) : Datum
-      accumulator = Datums.array(@operands.first.eval(ctx), ctx)
+      accumulator = Datums.array(ctx.evaluate(@operands.first), ctx)
 
       @operands[1..].each do |operand|
-        replacement = Coerce.cast(operand.eval(ctx), accumulator.data_type)
+        replacement = Coerce.cast(ctx.evaluate(operand), accumulator.data_type)
         accumulator = Datums.zip(
           Arrow.is_not_null(accumulator),
           accumulator,

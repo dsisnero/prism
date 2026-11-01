@@ -7,6 +7,13 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Expression execution optimizations mirroring Polars: `Prism::TypeCache`
+  resolves dtypes and coercion targets once per execution instead of once per
+  chunk, and `Prism::Cse` memoizes repeated subexpressions per chunk.
+- `DataFrame#filter` fast paths: an all-true predicate returns the batch
+  untouched, an all-false predicate returns an empty view without running the
+  kernel, and boolean identities (`x & false`, `x | true`) short-circuit to a
+  constant bitmap.
 - Phase 3 eager verbs on `Prism::DataFrame`: `select` (names, projections,
   aliased expressions), `filter`, `with_column`/`with_columns`, `drop`,
   `rename`, `cast`, `sort_by` (multi-key with `asc`/`desc` and null placement),
@@ -39,6 +46,13 @@ to [Semantic Versioning](https://semver.org/).
   recorded them as design decisions in the plan.
 - Recorded the design influences for the hybrid architecture (Polars, Kotlin
   DataFrame, RedAmber, Arquero, Explorer) in `CLAUDE.md` and plan §4.1.
+
+### Fixed
+
+- Literal-first casting is now lossless: a float literal against an integer
+  column widens the column (`Int64 * 1.5` was truncating to `Int64` and losing
+  the fractional part), and a `Float64` literal no longer narrows into a
+  `Float32` column.
 
 ### Changed
 

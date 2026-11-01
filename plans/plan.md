@@ -46,8 +46,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: eager verbs (Phase 3)`.
-**Gates:** `make lint` and `make test` — both green (127 examples).
+**Last commit:** `perf: compile expressions once per execution`.
+**Gates:** `make lint` and `make test` — both green (138 examples).
 
 ---
 
@@ -647,6 +647,11 @@ literal is cast to the column's dtype instead of the column being widened —
 `modify_supertype`. The cast only happens when both dtypes are in the same
 family, so `col("name") == 1` raises instead of comparing a string to "1".
 
+The cast must also be **lossless**: a float literal in an integer column widens
+the column instead (`col("i64") * 1.5` is `Float64`, not `Int64` with `1.5`
+truncated to `1`), and a `Float64` literal does not narrow into a `Float32`
+column. Without that guard the "cast the literal" rule silently changes values.
+
 Non-numeric operands (`Utf8 + Int64`) raise `Prism::DtypeError` at
 `dtype(schema)` time — before any data is touched.
 
@@ -727,6 +732,13 @@ whole plan is typed before execution.
 5. **Dead column elimination** — drop `WithColumn` nodes nobody reads (after
    pruning), keeping order semantics if the removed expression is pure (it
    always is; expressions have no side effects).
+6. **Common subexpression elimination** — Polars' CSEE counts occurrences and
+   substitutes temp columns. Prism already memoizes duplicate subexpressions per
+   chunk (§14); the plan-level version is deferred to this phase so `explain`
+   shows the rewrite.
+7. **Boolean simplification** — collapse literal predicates and identities
+   (`x & false` → false). Already applied at eval time (§14); at plan level it
+   lets a `Filter` with a constant false predicate become an empty scan.
 
 `explain` prints the unoptimized and optimized plans side by side, including
 which predicates and projections reached the scan — this is the observable proof
@@ -1021,6 +1033,59 @@ These are the only places allowed to allocate or materialize:
   casting implicitly; `same_family?` reproduces that.
 - **Polars' logical AND/OR are Kleene**, so `and`/`or` use Arrow's Kleene
   kernels rather than the plain ones.
+
+### Expression execution
+
+Polars converts an `Expr` into an arena IR, optimizes it, and compiles a physical
+expression that is **reused for every chunk**. Prism keeps the AST but reproduces
+the effect with two per-execution caches:
+
+| Mechanism | Polars equivalent | Prism |
+| --- | --- | --- |
+| Resolve dtypes/coercion once | compiled `PhysicalExpr` | `Prism::TypeCache`, built once per verb call and shared by every chunk's `EvalContext` |
+| Evaluate a repeated subtree once | CSEE (counts occurrences, substitutes temp columns) | `Prism::Cse` counts canonical keys, `EvalContext#evaluate` memoizes only those keys, per chunk |
+
+Both are observable in specs: `spec/prism/expression_plan_spec.cr` uses counting
+test nodes to assert a repeated subexpression evaluates once per chunk and that
+dtype resolution does not grow with chunk count.
+
+### Filter fast paths
+
+Polars' `filter_with_bitmap` has three cases; `DataFrame#filter` now matches
+them:
+
+| Mask | Polars | Prism |
+| --- | --- | --- |
+| all true | return the array as-is | return the batch untouched (no copy) |
+| all false | empty array | `batch.slice(0, 0)` (a view; kernel skipped) |
+| all null | values AND validity | falls out of Arrow: `true_count` is `(values & validity).count_set_bits`, so null rows never count as matches |
+
+Boolean identities are applied before evaluation: `x & false` and `x | true`
+return a constant **bitmap** (n/8 bytes, not n) without evaluating `x`; `x & true`
+and `x | false` return `x` untouched. This is Polars' boolean-simplification
+rule, applied at eval time because Prism has no plan pass yet.
+
+### How Arrow represents nulls (and what we get for free)
+
+- Nulls are a validity bitmap: `NullBuffer` wrapping a `BooleanBuffer`, where a
+  set bit means valid. `null_count` is cached on the buffer.
+- `BooleanArray#true_count` is `(nulls.inner & values).count_set_bits` — a bitmap
+  AND plus popcount, so the filter fast-path check is cheap.
+- `Arrow.filter` already treats a null mask bit as false (it ANDs validity into
+  the mask), which is the all-null case above.
+- Constant boolean columns cost n/8 bytes, so the fast paths allocate almost
+  nothing.
+
+Verified in `lib/arrow-cr/src/arrow/{null_buffer,boolean_buffer,boolean_array}.cr`;
+no bitmap-level work is needed in Prism beyond what these fast paths use.
+
+### Where we deliberately differ from Polars
+
+Polars' eager API internally builds a `LazyFrame`, optimizes, and collects. Prism
+keeps eager verbs as direct kernel calls for now: a one-verb call has nothing to
+optimize, and the shared pieces (TypeCache, CSE, the expression AST) are the same
+ones the Phase 7 executor will use. Revisit when `LazyFrame` exists — routing
+eager verbs through it would give uniform predicate pushdown.
 
 ### Where we deliberately differ from Arquero
 

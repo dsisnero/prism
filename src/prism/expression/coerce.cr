@@ -31,15 +31,24 @@ module Prism
     end
 
     # The dtype an operation between `left` and `right` runs in.
-    def target(left : Expr, right : Expr, schema : Arrow::Schema) : Arrow::DataType
-      left_dtype = left.dtype(schema)
-      right_dtype = right.dtype(schema)
+    #
+    # `cache` is the per-execution `Prism::TypeCache`; when present, dtype
+    # inference happens once per expression instead of once per chunk.
+    def target(
+      left : Expr,
+      right : Expr,
+      schema : Arrow::Schema,
+      cache : TypeCache? = nil,
+    ) : Arrow::DataType
+      left_dtype = cache ? cache.dtype(left) : left.dtype(schema)
+      right_dtype = cache ? cache.dtype(right) : right.dtype(schema)
       return left_dtype if left_dtype == right_dtype
 
       if left.literal? != right.literal?
         column_dtype = left.literal? ? right_dtype : left_dtype
         literal_dtype = left.literal? ? left_dtype : right_dtype
         if same_family?(column_dtype, literal_dtype) &&
+           literal_cast_safe?(literal_dtype, column_dtype) &&
            Arrow.can_cast_types(literal_dtype, column_dtype)
           return column_dtype
         end
@@ -88,6 +97,21 @@ module Prism
       raise DtypeError.new(
         "cannot combine #{left} and #{right}; cast one side explicitly"
       )
+    end
+
+    # Casting the literal into the column's dtype must not lose information.
+    #
+    # A float literal in an integer column would be truncated (`1.5` -> `1`), so
+    # that case widens the *column* instead. A Float64 literal in a Float32
+    # column is the same problem in reverse.
+    private def literal_cast_safe?(
+      literal : Arrow::DataType,
+      column : Arrow::DataType,
+    ) : Bool
+      return false if literal.floating? && column.integer?
+      return false if literal.kind.float64? && column.kind.float32?
+
+      true
     end
 
     private def same_family?(left : Arrow::DataType, right : Arrow::DataType) : Bool

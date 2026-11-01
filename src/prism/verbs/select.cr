@@ -26,17 +26,19 @@ module Prism
       list = exprs.to_a
       raise ArgumentError.new("select needs at least one column") if list.empty?
 
+      types = TypeCache.new(@schema)
+      duplicates = Cse.duplicate_keys(list)
       names = list.map { |expr| output_name(expr) }
-      fields = list.map_with_index { |expr, index| select_field(expr, names[index]) }
+      fields = list.map_with_index { |expr, index| select_field(expr, names[index], types) }
       schema = Arrow::Schema.new(fields)
 
       projected = @batches.map do |batch|
-        ctx = EvalContext.new(batch)
+        ctx = EvalContext.new(batch, types, duplicates)
         columns = list.map do |expr|
           if expr.is_a?(Col)
             batch.column_by_name(expr.name) || raise ColumnNotFound.new(expr.name, batch.column_names)
           else
-            Datums.array(expr.eval(ctx), ctx)
+            Datums.array(ctx.evaluate(expr), ctx)
           end
         end
 
@@ -56,14 +58,14 @@ module Prism
 
     # A selected column keeps its original field, so nullability and metadata
     # survive a projection. Computed columns are nullable.
-    private def select_field(expr : Expr, name : String) : Arrow::Field
+    private def select_field(expr : Expr, name : String, types : TypeCache) : Arrow::Field
       if expr.is_a?(Col)
         field = @schema.fields.find_field(expr.name)
         raise ColumnNotFound.new(expr.name, column_names) unless field
 
         field
       else
-        Arrow::Field.new(name, expr.dtype(@schema), true)
+        Arrow::Field.new(name, types.dtype(expr), true)
       end
     end
   end

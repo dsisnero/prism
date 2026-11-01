@@ -5,7 +5,8 @@ module Prism
     # Only the new column is computed; existing arrays are reused as-is.
     def with_column(name : String | Symbol, expr : Expr) : DataFrame
       column = name.to_s
-      field = Arrow::Field.new(column, expr.dtype(@schema), true)
+      types = TypeCache.new(@schema)
+      field = Arrow::Field.new(column, types.dtype(expr), true)
       index = @schema.fields.to_a.index { |existing| existing.name == column }
 
       fields = @schema.fields.to_a
@@ -16,9 +17,10 @@ module Prism
       end
       schema = Arrow::Schema.new(fields)
 
+      duplicates = Cse.duplicate_keys([expr])
       batches = @batches.map do |batch|
-        ctx = EvalContext.new(batch)
-        values = Datums.array(expr.eval(ctx), ctx)
+        ctx = EvalContext.new(batch, types, duplicates)
+        values = Datums.array(ctx.evaluate(expr), ctx)
         columns = batch.columns.dup
 
         if index
@@ -198,13 +200,15 @@ module Prism
     private def fill_replacements(replacements : Hash(String, Expr)) : DataFrame
       return self if replacements.empty?
 
+      types = TypeCache.new(@schema)
+      duplicates = Cse.duplicate_keys(replacements.values)
       batches = @batches.map do |batch|
-        ctx = EvalContext.new(batch)
+        ctx = EvalContext.new(batch, types, duplicates)
         columns = batch.columns.map_with_index do |column, index|
           expr = replacements[batch.schema.field(index).name]?
           next column unless expr
 
-          replacement = Coerce.cast(expr.eval(ctx), column.data_type)
+          replacement = Coerce.cast(ctx.evaluate(expr), column.data_type)
           Datums.zip(Arrow.is_not_null(column), column, replacement)
         end
 
