@@ -54,6 +54,10 @@ module Prism
         needed = required | node.predicates.flat_map(&.columns).to_set
         names = node.full_schema.fields.map(&.name)
           .select { |name| needed.includes?(name) }
+        # A projection over every column buys nothing, so leave the scan bare
+        # and let `explain` show that nothing was pruned.
+        return node if names.size == node.full_schema.fields.size
+
         node.with_projection(names)
       when Plan::ScanBatches, Plan::Empty
         node
@@ -101,11 +105,16 @@ module Prism
           prune_projections(node.input, required), node.offset, node.count
         )
       when Plan::Join
-        # Pruning through a join would have to map suffixed output names back to
-        # their side, so both inputs keep their full schemas (plan §9.2).
-        node.rebuild(
-          node.children.map { |child| prune_projections(child, required_names(child.schema)) }
-        )
+        # Map the join's output names back to the side that produced them, so
+        # each input is pruned to what the output (and the keys) really need.
+        requirements = node.input_requirements(required)
+        return node unless requirements
+
+        left_required, right_required = requirements
+        node.rebuild([
+          prune_projections(node.left, left_required),
+          prune_projections(node.right, right_required),
+        ])
       else
         node
       end

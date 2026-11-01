@@ -8,6 +8,22 @@ private def lazy_parquet_path : String
   path
 end
 
+# Two parquet files whose columns collide on `price`, so the join suffixes the
+# right one to `price_right`.
+private def lazy_join_paths : Tuple(String, String)
+  left = SpecPaths.temp("lazy_join_left.parquet")
+  SpecFrames.sales.write_parquet(left, row_group_size: 2)
+
+  right = SpecPaths.temp("lazy_join_right.parquet")
+  Prism.from_columns({
+    region: Arrow::StringArray.from_values(["east", "west"]),
+    price:  Arrow::Float64Array.from_values([1.5, 2.5]),
+    weight: Arrow::Float64Array.from_values([1.0, 2.0]),
+  }).write_parquet(right)
+
+  {left, right}
+end
+
 describe Prism::LazyFrame do
   describe "#collect" do
     it "matches the eager filter + select pipeline" do
@@ -129,6 +145,69 @@ describe Prism::LazyFrame do
 
       plan.should contain("projection: [region]")
     end
+
+    it "prunes both inputs of a join down to what the output needs" do
+      left, right = lazy_join_paths
+      plan = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :left)
+        .select("price", "weight")
+        .explain
+
+      # `qty` exists on the left and is read by nothing.
+      plan.should contain("projection: [region, price]")
+      plan.should contain("projection: [region, weight]")
+      plan.includes?("qty").should be_false
+    end
+
+    it "reads only the keys from the right side of a semi join" do
+      left, right = lazy_join_paths
+      plan = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :semi)
+        .select("qty")
+        .explain
+
+      plan.should contain("projection: [region, qty]")
+      plan.should contain("projection: [region]")
+    end
+
+    it "keeps the shadowed left column so a suffixed right name survives" do
+      left, right = lazy_join_paths
+      plan = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :inner)
+        .select("price_right")
+        .explain
+
+      # Without the left `price` the right one would lose its suffix, so both
+      # inputs carry `region` and `price` — and `weight` is never read.
+      plan.scan(/projection: \[region, price\]/).size.should eq(2)
+    end
+
+    it "leaves the inputs alone when the whole join output is required" do
+      left, right = lazy_join_paths
+      plan = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region")
+        .explain
+
+      plan.includes?("projection:").should be_false
+    end
+
+    it "prunes a join whose keys are named differently on each side" do
+      left, _ = lazy_join_paths
+      other = SpecPaths.temp("lazy_join_uid.parquet")
+      Prism.from_columns({
+        uid:    Arrow::StringArray.from_values(["east", "west"]),
+        weight: Arrow::Float64Array.from_values([1.0, 2.0]),
+        note:   Arrow::StringArray.from_values(["a", "b"]),
+      }).write_parquet(other)
+
+      plan = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(other), left_on: "region", right_on: "uid", how: :left)
+        .select("qty", "weight")
+        .explain
+
+      plan.should contain("projection: [region, qty]")
+      plan.should contain("projection: [uid, weight]")
+    end
   end
 
   describe "results after optimization" do
@@ -150,6 +229,69 @@ describe Prism::LazyFrame do
       eager = Prism.read_parquet(path).head(2)
 
       lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
+    end
+
+    it "returns the same rows as an eager join after pruning" do
+      left, right = lazy_join_paths
+      lazy = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :left)
+        .select("region", "price", "weight")
+      eager = Prism.read_parquet(left)
+        .join(Prism.read_parquet(right), on: "region", how: :left)
+        .select("region", "price", "weight")
+
+      lazy.collect.should eq(eager)
+    end
+
+    it "keeps a suffixed right column readable after pruning" do
+      left, right = lazy_join_paths
+      lazy = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :inner)
+        .select("region", "price", "price_right")
+      eager = Prism.read_parquet(left)
+        .join(Prism.read_parquet(right), on: "region", how: :inner)
+        .select("region", "price", "price_right")
+
+      lazy.collect.should eq(eager)
+    end
+
+    it "keeps a filtered right column readable after pruning" do
+      left, right = lazy_join_paths
+      lazy = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :left)
+        .filter(col("weight") > lit(1.5))
+        .select("price")
+      eager = Prism.read_parquet(left)
+        .join(Prism.read_parquet(right), on: "region", how: :left)
+        .filter(col("weight") > lit(1.5))
+        .select("price")
+
+      lazy.collect.should eq(eager)
+    end
+
+    it "returns the same rows for a non-coalesced full join after pruning" do
+      left, right = lazy_join_paths
+      lazy = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :full, coalesce: false)
+        .select("region", "region_right", "weight")
+      eager = Prism.read_parquet(left)
+        .join(Prism.read_parquet(right), on: "region", how: :full, coalesce: false)
+        .select("region", "region_right", "weight")
+
+      lazy.collect.should eq(eager)
+    end
+
+    it "treats the :outer alias as a non-coalesced full join while pruning" do
+      left, right = lazy_join_paths
+      lazy = Prism.scan_parquet(left)
+        .join(Prism.scan_parquet(right), on: "region", how: :outer)
+        .select("region_right", "weight")
+      eager = Prism.read_parquet(left)
+        .join(Prism.read_parquet(right), on: "region", how: :outer)
+        .select("region_right", "weight")
+
+      lazy.collect.should eq(eager)
+      lazy.explain.should contain("projection: [region, weight]")
     end
   end
 end

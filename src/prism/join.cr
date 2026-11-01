@@ -222,7 +222,9 @@ module Prism
       )
     end
 
-    private def resolve_keys(
+    # Normalizes and validates `on:`/`left_on:`/`right_on:` into the left and
+    # right key names. Raises `ArgumentError` for an unusable combination.
+    def resolve_keys(
       on : String | Symbol | Enumerable | Nil,
       left_on : String | Symbol | Enumerable | Nil,
       right_on : String | Symbol | Enumerable | Nil,

@@ -219,8 +219,11 @@ Pass order, mirroring Polars:
 3. **Projection pruning** — required columns flow down from the root; the scan
    keeps only those plus the columns its pushed predicates need. Unused
    `WithColumn` nodes disappear entirely, and unused aggregations are dropped.
-   Pruning stops at joins (mapping suffixed output names back to a side is not
-   implemented yet), so both join inputs keep their full schemas.
+   Joins map each output name back to the side that produced it, so both inputs
+   prune too: keys are always kept, a suffix is honoured (`price_right` pins the
+   right `price`), and the left column that *forces* a suffix is retained so the
+   right name does not silently change. Semi/anti joins read only keys from the
+   right side. A name that cannot be attributed leaves both inputs untouched.
 4. **Limit pushdown** — a limit reaches the scan through `Select`/`WithColumn`
    only. Anything that reorders or changes the row count (`Sort`, `GroupBy`,
    `Distinct`, `Join`, a leftover `Filter`) blocks it.
