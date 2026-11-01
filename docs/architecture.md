@@ -187,18 +187,42 @@ Crystal keyword, so internal calls spell `self.select`.
 
 ## Execution
 
-Eager verbs execute immediately against the chunks. Lazy execution builds a plan
-and runs optimizer passes before executing:
+Eager verbs execute immediately against the chunks. `DataFrame#lazy` and
+`Prism.scan_parquet` build a `Prism::Plan` instead, and `#collect` optimizes then
+executes it.
 
-1. predicate pushdown (splitting `&`-conjuncts, converting scan-compatible
-   conjuncts into `Parquet::Arrow::RowFilter` predicates);
-2. projection pruning (into `ProjectionMask.columns`);
-3. limit/offset pushdown (`with_limit`, `with_offset`);
-4. constant folding;
-5. dead `WithColumn` elimination.
+Plan nodes (`ScanBatches`, `ScanParquet`, `Filter`, `Select`, `WithColumn`,
+`GroupBy`, `Sort`, `Distinct`, `Join`, `Limit`, `Empty`) each know their output
+schema, which is what makes pruning possible before any data is read. Execution
+**delegates to the eager verbs**, so lazy and eager results cannot drift, and
+`GroupBy`/`Join` derive their schema by running the eager verb against zero-row
+frames — one implementation of the layout rules.
 
-`explain` shows both plans and marks which projections and predicates reached
-the scan. Tests assert on that output so a silently disabled pass fails CI.
+Pass order, mirroring Polars:
+
+1. **Constant folding** — `filter(lit(true))` disappears, `filter(lit(false))`
+   becomes an `Empty` source.
+2. **Predicate pushdown** — `&`-conjuncts are split, each is pushed as far as it
+   can go, and scan-compatible ones become `RowFilter` predicates. A projection
+   is crossed only when every referenced column passes through as a bare `Col`;
+   a `WithColumn` blocks a predicate that reads the column it computes.
+3. **Projection pruning** — required columns flow down from the root; the scan
+   keeps only those plus the columns its pushed predicates need. Unused
+   `WithColumn` nodes disappear entirely, and unused aggregations are dropped.
+   Pruning stops at joins (mapping suffixed output names back to a side is not
+   implemented yet), so both join inputs keep their full schemas.
+4. **Limit pushdown** — a limit reaches the scan through `Select`/`WithColumn`
+   only. Anything that reorders or changes the row count (`Sort`, `GroupBy`,
+   `Distinct`, `Join`, a leftover `Filter`) blocks it.
+
+Polars additionally attaches a slice *to* `Sort`/`GroupBy`/`Distinct` nodes
+rather than pushing it below them; that is not implemented yet. Plan-level CSE is
+also deferred, because repeated subexpressions are already memoized per chunk
+during evaluation.
+
+`explain` renders the plan and lists the pushdowns that reached each scan
+(`projection:`, `predicate:`, `limit:`), so a silently disabled pass fails a
+spec rather than degrading quietly.
 
 ## Grouping
 

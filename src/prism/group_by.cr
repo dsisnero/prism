@@ -22,6 +22,16 @@ module Prism
 
       GroupBy.new(self, expressions, null_keys, maintain_order)
     end
+
+    # Expression-list form, used by the planner.
+    def group_by(
+      keys : Array(Expr),
+      *,
+      null_keys : Symbol = :first,
+      maintain_order : Bool = true,
+    ) : GroupBy
+      GroupBy.new(self, keys, null_keys, maintain_order)
+    end
   end
 
   # Grouped rows, ready for aggregation.

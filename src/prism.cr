@@ -44,6 +44,15 @@ require "./prism/io/parquet"
 require "./prism/io/csv"
 require "./prism/io/ipc"
 
+require "./prism/plan/node"
+require "./prism/plan/scans"
+require "./prism/plan/transform"
+require "./prism/plan/aggregate"
+require "./prism/plan/join"
+require "./prism/plan/optimizer"
+
+require "./prism/lazy_frame"
+
 module Prism
   VERSION = "0.1.0"
 end

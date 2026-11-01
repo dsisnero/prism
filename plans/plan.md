@@ -20,20 +20,17 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 7 — `LazyFrame` and the optimizer.
+**Current focus:** Phase 8 — compile-time typed schemas.
 
 **Next up:**
 
-1. Phase 7: plan nodes (`ScanParquet`, `ScanBatches`, `Filter`, `Select`,
-   `WithColumn`, `GroupBy`, `Sort`, `Distinct`, `Join`, `Limit`) with
-   `schema(upstream)` propagation.
-2. Phase 7: optimizer passes in order — predicate pushdown, projection
-   pruning, limit pushdown, constant folding, dead-column elimination (CSE and
-   boolean simplification already happen at eval time).
-3. Phase 7: `LazyFrame#collect` and `#explain`, sharing `TypeCache` and the
-   expression AST with the eager verbs.
-4. Phase 7: reuse the now-working Parquet pushdown from the scan node
-   (`with_row_filter` + `ProjectionMask`), which C20 had blocked.
+1. Phase 8: `Prism.define_schema Name, field: Type, ...` generating the Arrow
+   schema, per-field `Expr` accessors, and `from_arrow`/`from_dataframe`.
+2. Phase 8: `TypedFrame(S)` with block verbs (`typed.select(&.salary)`,
+   `typed.filter(&.active)`) so a misspelt field is a compile error.
+3. Phase 8: schema-changing verbs return a plain `DataFrame`; document
+   `S.from_dataframe` as the re-entry point (§4.1).
+4. Phase 8: compile-failure specs run through `crystal build` in `temp/`.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -44,13 +41,13 @@ implicit.
 | 4 | `group_by` + aggregations | **done** |
 | 5 | Joins and row/column concatenation | **done** |
 | 6 | IO: Parquet, CSV, IPC (read + write, streaming) | **done** |
-| 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | in progress |
-| 8 | Compile-time typed schemas | not started |
+| 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | **done** |
+| 8 | Compile-time typed schemas | in progress |
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `perf: re-enable parquet predicate pushdown`.
-**Gates:** `make lint` and `make test` — both green (214 examples).
+**Last commit:** `feat: lazy frame and optimizer (Phase 7)`.
+**Gates:** `make lint` and `make test` — both green (229 examples).
 
 ---
 
@@ -1095,18 +1092,45 @@ and mixed column types. Specs: `spec/prism/io/{parquet,csv,ipc}_spec.cr`
 - CSV `infer_rows` mirrors Polars' `infer_schema_length`; `0` types every column
   as string.
 
-### Phase 7 — lazy + optimizer
+### Phase 7 — lazy + optimizer (done)
 
-- [ ] Plan nodes + `schema` propagation
-- [ ] `collect`, `explain`
-- [ ] All five optimizer passes (§9.2), each with a spec asserting the plan
-      shape
-- [ ] Pushdown equivalence spec: optimized and unoptimized plans return
-      identical `DataFrame`s
+- [x] Plan nodes with schema propagation: `ScanBatches`, `ScanParquet`,
+      `Filter`, `Select`, `WithColumn`, `GroupBy`, `Sort`, `Distinct`, `Join`,
+      `Limit`, `Empty`
+- [x] `collect`, `explain(optimized:)`
+- [x] Optimizer passes: constant folding, predicate pushdown, projection
+      pruning (with dead-column elimination), limit pushdown
+- [x] Equivalence specs: lazy results match the eager pipeline for
+      filter+select, group_by, sort+limit, distinct and join
+- [x] Pushdown specs assert `explain` output: `predicate:`, `projection:`,
+      `limit:`, and that a sort blocks a limit, a computed column blocks a
+      predicate, and `&`-conjuncts split
 
 **Acceptance:** a scan with `filter` + `select` + `head` produces a plan whose
-scan node carries a `ProjectionMask`, a `RowFilter`, and a limit — asserted via
-`explain` — and the result equals the eager pipeline's result.
+scan node carries a projection, a predicate and a limit — asserted via `explain`
+— and the result equals the eager pipeline's. Specs:
+`spec/prism/lazy_spec.cr` (15 examples).
+
+**Notes carried forward:**
+
+- Nodes execute by delegating to the eager verbs, so there is exactly one
+  implementation of each operation's semantics.
+- `GroupBy` and `Join` derive their output schema by running the eager verb
+  against zero-row frames. Joins recompute the suffix/coalesce layout otherwise,
+  and this keeps the two paths in agreement.
+- Projection pruning stops at joins: mapping a suffixed output name back to the
+  side that produced it is not implemented, so both join inputs keep full
+  schemas.
+- Limit pushdown crosses only `Select`/`WithColumn`. Polars additionally pins a
+  slice *to* `Sort`/`GroupBy`/`Distinct` instead of pushing below them; that is
+  future work.
+- Plan-level CSE is deliberately absent: repeated subexpressions are already
+  memoized per chunk (§14), so a plan rewrite would add complexity without a new
+  saving.
+- `read_parquet` grew `limit:`/`offset:` so the scan node can push a window.
+- Keyword landmines hit again: `select` cannot be a parameter name, `Enumerable`
+  cannot appear in an ivar union (join keys are normalized to `Array(String)`),
+  and leaf `rebuild` must be the identity rather than raising.
 
 ### Phase 8 — typed schemas
 

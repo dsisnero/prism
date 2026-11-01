@@ -7,6 +7,14 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 7 `LazyFrame` and optimizer: `DataFrame#lazy`, `Prism.scan`,
+  `Prism.scan_parquet`, lazy `filter`/`select`/`with_column`/`sort_by`/
+  `distinct`/`limit`/`head`/`group_by(...).aggregate`/`join`, plus `#collect`
+  and `#explain(optimized:)`.
+- Optimizer passes: constant folding, predicate pushdown (conjunct splitting,
+  scan absorption, projection crossing rules), projection pruning (including
+  unused `WithColumn` and aggregation elimination) and limit pushdown.
+- `read_parquet(limit:, offset:)` so a plan can push a window into the scan.
 - Phase 6 IO: `Prism.read_parquet` / `write_parquet` (projection pushdown,
   `batch_size`, `columns`, `predicate`, compression, row-group size,
   statistics), `read_csv` / `write_csv` (schema inference or explicit schema,

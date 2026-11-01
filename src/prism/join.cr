@@ -251,7 +251,8 @@ module Prism
       {left_names, right_names}
     end
 
-    private def column_names(value : String | Symbol | Enumerable) : Array(String)
+    # Normalizes `on:`/`left_on:`/`right_on:` arguments to column names.
+    def column_names(value : String | Symbol | Enumerable) : Array(String)
       case value
       when String then [value]
       when Symbol then [value.to_s]

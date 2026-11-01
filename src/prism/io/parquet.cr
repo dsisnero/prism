@@ -19,12 +19,14 @@ module Prism
     columns : Enumerable | Nil = nil,
     batch_size : Int32 = DEFAULT_BATCH_SIZE,
     predicate : Expr | Nil = nil,
+    limit : Int32? = nil,
+    offset : Int32? = nil,
   ) : DataFrame
     file = Parquet::File::SerializedFileReader.new(
       Parquet::File::FileChunkReader.new(path)
     )
 
-    read_parquet_file(file, columns, batch_size, predicate)
+    read_parquet_file(file, columns, batch_size, predicate, limit, offset)
   end
 
   # Reads Parquet from memory. The IO is consumed in full: the reader needs
@@ -35,19 +37,24 @@ module Prism
     columns : Enumerable | Nil = nil,
     batch_size : Int32 = DEFAULT_BATCH_SIZE,
     predicate : Expr | Nil = nil,
+    limit : Int32? = nil,
+    offset : Int32? = nil,
   ) : DataFrame
     file = Parquet::File::SerializedFileReader.new(
       Parquet::File::BytesChunkReader.new(io.getb_to_end)
     )
 
-    read_parquet_file(file, columns, batch_size, predicate)
+    read_parquet_file(file, columns, batch_size, predicate, limit, offset)
   end
 
+  # ameba:disable Metrics/CyclomaticComplexity
   private def self.read_parquet_file(
     file : Parquet::File::FileReader,
     columns : Enumerable | Nil,
     batch_size : Int32,
     predicate : Expr | Nil,
+    limit : Int32?,
+    offset : Int32?,
   ) : DataFrame
     builder = Parquet::Arrow::ParquetRecordBatchReaderBuilder.try_new(file)
     available = builder.schema.fields.map(&.name)
@@ -67,6 +74,8 @@ module Prism
       Parquet::Arrow::ProjectionMask.columns(builder.parquet_schema, read_set)
     )
     builder.with_batch_size(batch_size)
+    builder.with_offset(offset) if offset
+    builder.with_limit(limit) if limit
 
     # A predicate with no column references (a constant) has nothing to prune.
     pushdown = !predicate.nil? && !predicate_columns.empty?

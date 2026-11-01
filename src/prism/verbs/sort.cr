@@ -53,6 +53,11 @@ module Prism
       sort_by_keys(resolved.to_a)
     end
 
+    # Key-list form, used by the planner.
+    def sort_by(keys : Enumerable(SortKey)) : DataFrame
+      sort_by_keys(keys.to_a)
+    end
+
     private def sort_by_keys(keys : Array(SortKey)) : DataFrame
       raise ArgumentError.new("sort_by needs at least one key") if keys.empty?
 

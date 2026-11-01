@@ -12,6 +12,11 @@ module Prism
       distinct_columns(names.map(&.to_s).to_a)
     end
 
+    # Key-list form, used by the planner.
+    def distinct(names : Array(String)) : DataFrame
+      distinct_columns(names)
+    end
+
     # Drops rows with a null in any column. Element-wise, so chunks survive.
     def drop_nulls : DataFrame
       drop_null_columns(column_names)
