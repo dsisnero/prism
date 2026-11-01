@@ -32,8 +32,8 @@ implicit.
    boolean simplification already happen at eval time).
 3. Phase 7: `LazyFrame#collect` and `#explain`, sharing `TypeCache` and the
    expression AST with the eager verbs.
-4. Phase 7: push predicates into the Parquet scan once C20 is fixed upstream;
-   until then the scan filters in memory after a projected read.
+4. Phase 7: reuse the now-working Parquet pushdown from the scan node
+   (`with_row_filter` + `ProjectionMask`), which C20 had blocked.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -49,8 +49,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: parquet, csv and ipc IO (Phase 6)`.
-**Gates:** `make lint` and `make test` — both green (213 examples).
+**Last commit:** `perf: re-enable parquet predicate pushdown`.
+**Gates:** `make lint` and `make test` — both green (214 examples).
 
 ---
 
@@ -308,9 +308,19 @@ Outer joins need exactly that. **Decision:** `Prism::Join` gathers column by
 column with `Arrow.take` and rebuilds the batch against a relaxed (all-nullable)
 schema, then `compose` restores the precise nullability on the final schema.
 
-#### C20. `parquet-cr`'s row filter corrupts non-predicate columns
+#### C20. `parquet-cr`'s row filter corrupted null-bearing columns (fixed)
 
-Reproduced against the pinned checkout. Write a 5-row frame (`region` Utf8 with
+**Resolved 2026-11-01** in `parquet-cr` `5883ff1` ("port: Align row-filter skips
+with definition levels"), which aligns the skip with definition levels in
+`src/parquet/column/reader.cr`. Prism re-enabled `with_row_filter`, so Parquet
+predicates prune per row group again, and
+`spec/prism/io/parquet_spec.cr` keeps the reproduction as a permanent guard.
+The report lives at
+[`shard_issues/parquet-cr.2.md`](../shard_issues/parquet-cr.2.md).
+
+Original finding, kept because it explains the guard: a row filter used to shift
+columns containing nulls by one row per null while leaving null-free columns
+correct. Write a 5-row frame (`region` Utf8 with
 a null, `price` Float64 with a null, `qty` Int64) and read it with
 `with_row_filter(RowFilter.new([ArrowPredicateFn.new(qty_mask) { ... }]))` for
 `qty > 2`, where the mask logged by the predicate is `[F,F,T,T,T]`:
@@ -1051,8 +1061,7 @@ including duplicate keys (many-to-many) and empty inputs. Specs:
 ### Phase 6 — IO (done)
 
 - [x] `read_parquet` / `read_parquet(io)` with `columns`, `batch_size`, and
-      `predicate` (projection pushdown works; full row-group pruning is blocked
-      by C20)
+      `predicate` (projection and row-group pruning both pushed down)
 - [x] `write_parquet` / `write_parquet(io)` with compression, row-group size,
       statistics, and `close` on the success path (C10)
 - [x] `read_csv` / `write_csv` with schema inference (`infer_rows`), explicit
@@ -1077,9 +1086,10 @@ and mixed column types. Specs: `spec/prism/io/{parquet,csv,ipc}_spec.cr`
 - `batch_size` decides the chunk count of the returned frame: the reader's
   batches become the frame's chunks, so a 5-row file with `batch_size: 2` yields
   3 chunks.
-- **Row-group pruning is disabled** because of C20; the `predicate:` argument is
-  applied in memory over the projected batches. One commented block in
-  `src/prism/io/parquet.cr` turns it back on.
+- **Row-group pruning is enabled**: `predicate:` is pushed through
+  `with_row_filter`, evaluated per row group over only the columns it
+  references. It was disabled while C20 was open and re-enabled once
+  `parquet-cr` `5883ff1` landed.
 - IPC writers use `ScopedWriter#open`, which finishes the writer on normal block
   completion, so the footer or end-marker is not something callers can forget.
 - CSV `infer_rows` mirrors Polars' `infer_schema_length`; `0` types every column
@@ -1337,7 +1347,6 @@ above stays true.
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
 | NaN join keys never match | Crystal `==` on `Float64::NAN` is false, so a NaN key does not join to a NaN key (Polars matches them via `totalOrder`). Fixed by the row encoding in §14; documented as a limitation until then |
 | Proving joins/distinct need hashing | Phase 9 benchmarks decide; §14 records the option (A local, B upstream) and the preferred choice |
-| Parquet row-group pruning blocked by C20 | Predicates run in memory after a projected read; the reproduction is a spec, and the Phase 7 optimizer keeps the pushdown slot |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
 **Open questions** (decide in-phase, record here):

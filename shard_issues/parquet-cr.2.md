@@ -1,10 +1,26 @@
 # `parquet-cr`: `with_row_filter` mis-reads columns that contain nulls
 
-## Status: open, reproduced 2026-11-01
+## Status: fixed upstream and workaround removed (2026-11-01)
 
-Reproduced against the pinned sibling checkout (`parquet-cr` 0.1.0, ported from
-`parquet` 60.0.0). The predicate mask itself is correct; the fault is in how the
-reader applies the resulting selection to value buffers that contain nulls.
+Fixed in `parquet-cr` commit `5883ff1` ("port: Align row-filter skips with
+definition levels", branch `codex/stream-large-file-reads`). The fix aligns the
+row-filter skip with definition levels in `src/parquet/column/reader.cr`, and
+adds `spec/parquet/arrow/row_filter_spec.cr` plus a record-reader regression.
+
+Verified from `prism`: the reproducer below now prints `[nil, 40]`, and the
+mixed-type frame reads `region=["east", nil, "west"]`,
+`price=[30.0, 40.0, nil]`, `qty=[3, 4, 5]` across one row group, across three
+row groups (`row_group_size: 2`), and for a selection spanning groups.
+
+Downstream: `prism` re-enabled `with_row_filter`, so Parquet predicates prune per
+row group again. `spec/prism/io/parquet_spec.cr` keeps this reproduction as a
+permanent guard. This file remains as the record of the defect.
+
+### Original report
+
+Reproduced against the then-current checkout (`parquet-cr` 0.1.0, ported from
+`parquet` 60.0.0). The predicate mask itself was correct; the fault was in how
+the reader applied the resulting selection to value buffers containing nulls.
 
 ## Failure
 

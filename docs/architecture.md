@@ -243,17 +243,21 @@ before grouping.
 | CSV | `Prism.read_csv(path_or_io, schema:, header:, delimiter:, infer_rows:, batch_size:)` | `write_csv(..., header:)` |
 | Arrow IPC | `Prism.read_ipc(path_or_io, stream:)` | `write_ipc(..., stream:)` |
 
-Parquet reads project columns with `ProjectionMask.columns`, so unrequested
-columns are never decoded. Predicate columns are added to the read set and then
-dropped from the result, matching Polars. The reader's batches become the frame's
-chunks, so `batch_size` controls chunking instead of forcing one large batch.
+Parquet reads push both halves down:
 
-**Row-group pruning is currently disabled.** `parquet-cr` corrupts
-non-predicate columns when a row filter is combined with an output projection
-(plan C20 lists the reproduction: `price` came back `[30.0, 40.0, 10.0]` for
-rows 2,3,4). Prism therefore filters in memory after a projected read — correct,
-and still avoids decoding unrequested columns. The pushdown call is one commented
-block away once the dependency is fixed.
+- **Projection.** `ProjectionMask.columns` means unrequested columns are never
+  decoded. Predicate columns are added to the read set and dropped from the
+  result afterwards, matching Polars.
+- **Predicate.** `with_row_filter` evaluates the expression per row group over
+  only the columns it references, so non-matching rows are never materialized.
+
+The reader's batches become the frame's chunks, so `batch_size` controls chunking
+instead of forcing one large batch.
+
+Row-group pruning was disabled for a while: `parquet-cr` used to shift
+null-bearing columns by one row per null when a filter was combined with a
+projection (`shard_issues/parquet-cr.2.md`). Fixed upstream in `5883ff1`, and the
+reproduction is kept as a spec guard.
 
 Writing defaults follow Polars rather than the Parquet crate: zstd level 3 with
 page statistics. The footer is written by `ArrowWriter#close` on the success

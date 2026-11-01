@@ -64,11 +64,12 @@ to [Semantic Versioning](https://semver.org/).
 - Recorded the design influences for the hybrid architecture (Polars, Kotlin
   DataFrame, RedAmber, Arquero, Explorer) in `CLAUDE.md` and plan §4.1.
 
-### Known issues
+### Fixed
 
-- Parquet row-group pruning is disabled: `parquet-cr` returns corrupt values for
-  non-predicate columns when a row filter is combined with a projection (plan
-  C20). Predicates are applied in memory after a projected read instead.
+- Parquet predicates are pushed down again. `parquet-cr` `5883ff1` fixed the row
+  filter shifting null-bearing columns by one row per null, so
+  `read_parquet(predicate:)` now prunes per row group instead of filtering in
+  memory. See `shard_issues/parquet-cr.2.md`.
 
 ### Changed
 

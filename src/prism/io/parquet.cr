@@ -5,15 +5,11 @@ module Prism
   # Reads a Parquet file into a frame.
   #
   # `columns` is projected into the reader: only those columns are decoded.
-  # `predicate` filters rows, and the columns it references are added to the
-  # read set then dropped again, exactly as Polars does — so
-  # `columns: ["region"], predicate: col("qty") > 2` never returns `qty`.
-  #
-  # Row-group pruning via `with_row_filter` is **disabled**: the pinned
-  # `parquet-cr` returns corrupt values for some columns when a row filter is
-  # combined with an output projection (see plan C20). Until that is fixed the
-  # predicate runs in memory over the projected batches, which is correct and
-  # still avoids decoding unrequested columns.
+  # `predicate` is pushed into the reader as a Parquet row filter, so rows are
+  # dropped per row group before the requested projection is materialized. The
+  # columns it references are added to the read set and dropped again, exactly
+  # as Polars does — so `columns: ["region"], predicate: col("qty") > 2` never
+  # returns `qty`.
   #
   # The result keeps one chunk per reader batch, so `batch_size` controls the
   # chunking rather than forcing a single large batch.
@@ -72,12 +68,12 @@ module Prism
     )
     builder.with_batch_size(batch_size)
 
-    # TODO(C20): restore pruning with the equivalent of:
-    #   predicate_mask = ProjectionMask.columns(builder.parquet_schema, predicate_columns)
-    #   filter = ArrowPredicateFn.new(predicate_mask) { |b| ... }
-    #   builder.with_row_filter(RowFilter.new([filter] of ArrowPredicate))
-    # once parquet-cr stops returning wrong values for columns other than the
-    # predicate's own projection.
+    # A predicate with no column references (a constant) has nothing to prune.
+    pushdown = !predicate.nil? && !predicate_columns.empty?
+    if expr = predicate
+      add_row_filter(builder, predicate_columns, expr) if pushdown
+    end
+
     reader = builder.build
     batches = [] of Arrow::RecordBatch
     while batch = reader.next_batch
@@ -85,8 +81,9 @@ module Prism
     end
 
     frame = DataFrame.new(reader.schema, batches)
+    # Constant predicates cannot be pushed; everything else was filtered above.
     if expr = predicate
-      frame = frame.filter(expr)
+      frame = frame.filter(expr) unless pushdown
     end
 
     # `select` takes names variadically; the request is a runtime array.
@@ -148,6 +145,25 @@ module Prism
     # stream never gets a footer that makes it look valid.
     frame.each_batch { |batch| writer.write(batch) }
     writer.close
+  end
+
+  # Pushes `expr` into the reader. The parameter is typed `Expr` on purpose: a
+  # proc literal capturing a nilable local sends Crystal 1.22 into a compiler
+  # crash ("Cast from Nil to Crystal::ProcInstanceType failed").
+  private def self.add_row_filter(
+    builder : Parquet::Arrow::ParquetRecordBatchReaderBuilder,
+    columns : Array(String),
+    expr : Expr,
+  ) : Nil
+    mask = Parquet::Arrow::ProjectionMask.columns(builder.parquet_schema, columns)
+    filter = Parquet::Arrow::ArrowPredicateFn.new(mask) do |batch|
+      ctx = EvalContext.new(batch)
+      Datums.boolean_array(ctx.evaluate(expr), ctx)
+    end
+
+    builder.with_row_filter(
+      Parquet::Arrow::RowFilter.new([filter] of Parquet::Arrow::ArrowPredicate)
+    )
   end
 
   private def self.parquet_properties(

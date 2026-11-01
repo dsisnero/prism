@@ -50,8 +50,9 @@ describe "Parquet IO" do
     read["region"].to_a.should eq(["east", nil, "west"])
   end
 
-  # Regression guard for plan C20: enabling parquet-cr's row filter corrupted
-  # non-predicate columns (price returned [30.0, 40.0, 10.0] for rows 2,3,4).
+  # Regression guard for shard_issues/parquet-cr.2.md (fixed upstream in
+  # 5883ff1): a row filter used to shift columns containing nulls by one row per
+  # null, so price returned [30.0, 40.0, 10.0] for rows 2,3,4.
   it "keeps every column consistent when a predicate is applied" do
     read = Prism.read_parquet(
       parquet_io(SpecFrames.sales),
@@ -72,6 +73,20 @@ describe "Parquet IO" do
     in_memory = original.filter(col("price") > lit(15.0))
 
     pushed["qty"].to_a.should eq(in_memory["qty"].to_a)
+  end
+
+  it "filters correctly across several row groups" do
+    # Small row groups force the predicate to run per group, which is where the
+    # null-shift bug above lived.
+    io = IO::Memory.new
+    Prism.write_parquet(io, SpecFrames.sales, row_group_size: 2)
+    io.rewind
+
+    read = Prism.read_parquet(io, predicate: col("qty") > lit(2_i64))
+
+    read["region"].to_a.should eq(["east", nil, "west"])
+    read["price"].to_a.should eq([30.0, 40.0, nil])
+    read["qty"].to_a.should eq([3_i64, 4_i64, 5_i64])
   end
 
   it "honours batch_size when chunking the result" do
