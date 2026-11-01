@@ -1229,6 +1229,31 @@ this becomes worthwhile if join/distinct/`n_unique` dominate a realistic
 workload. Until then the sort-based paths are correct, deterministic, and stay
 in Arrow buffers.
 
+**Prerequisite: `arrow-row` is being ported into `arrow-cr` (in progress).**
+Audit of the pinned workspace (`vendor/arrow-rs`, 60.0.0) against `arrow-cr`:
+
+| Workspace crate | Status in `arrow-cr` | Prism needs it |
+| --- | --- | --- |
+| `arrow`, `-array`, `-buffer`, `-data`, `-schema` | ported | yes |
+| `arrow-cmp`, `-ord`, `-select`, `-arith`, `-string`, `-cast` | ported (`cmp`, `sort`/`rank`/`partition`, `filter`/`take`/`zip`, `aggregate`/`temporal`, `like`/`regexp`, `cast`/`display`) | yes |
+| `arrow-csv`, `-json`, `-ipc` | ported | yes (Phase 6) |
+| `parquet`, `-geospatial`, `-variant*`, `parquet_derive` | ported in `parquet-cr` | yes (Phase 6) |
+| **`arrow-row`** | **missing — port in progress** | yes (this section) |
+| `arrow-integration-test`, `-testing` | missing | optional: conformance only |
+| `arrow-avro` (~37k) | missing | no: Avro is not on the roadmap |
+| `arrow-flight` (~14k) | missing, declared out of scope | no: gRPC transport |
+| `arrow-pyarrow` | missing | no: PyO3 bindings |
+
+Port scope for `arrow-row`: ~9.0k lines total, of which **~4.1k is code**
+(`lib.rs` is 2.4k code plus 4.3k tests; `run.rs` is 155 code plus 492 tests).
+Suggested order: `fixed.rs` (475: primitives and booleans — null sentinel,
+big-endian, sign-bit flip, `totalOrder` floats), `variable.rs` (437: block
+encoding for strings/binary), then the `lib.rs` core (`RowConverter`, `Row`,
+`Rows`, `RowParser`, `SortField`); defer `list.rs` (636) and `run.rs`.
+No new prerequisites: its only dependencies are array/buffer/data/schema plus
+`half`, all present, and `SortField` is defined inside `arrow-row` over
+`SortOptions`, which `arrow-cr` already has.
+
 ### Where we deliberately differ from Arquero
 
 Arquero's deferred `BitSet` mask makes eager `filter` free, but every subsequent
