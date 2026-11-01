@@ -141,6 +141,24 @@ Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, s
 reject a union of array and scalar, so `Prism::Kernels` narrows the union and
 calls a generic `apply` instantiated per operand pair.
 
+## Verbs
+
+Eager verbs split into two groups by cost:
+
+| Group | Verbs | Effect |
+| --- | --- | --- |
+| Element-wise | `select`, `filter`, `with_column(s)`, `drop`, `rename`, `cast`, `fill_null`, `drop_nulls`, `with_row_index` | map over chunks, preserve chunking, reuse untouched arrays |
+| Row-reordering | `sort_by`, `distinct` | collapse to one batch, since the output row set differs |
+
+`select` projects a bare column without copying it; only computed expressions
+produce new arrays. `rename` changes only the schema and re-wraps the same
+arrays — Arrow's `RecordBatch#with_schema` cannot express a rename (it demands a
+superset), so the batch is rebuilt around the existing columns.
+
+Named-argument verbs (`with_columns`) use Crystal's `**named` parameter, not a
+macro: a macro expands at the call site without the receiver. `select` is a
+Crystal keyword, so internal calls spell `self.select`.
+
 ## Execution
 
 Eager verbs execute immediately against the chunks. Lazy execution builds a plan

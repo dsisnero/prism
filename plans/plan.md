@@ -20,27 +20,25 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 3 — eager verbs (`select`, `filter`, `with_column`,
-`drop`, `rename`, `sort_by`, `distinct`, …).
+**Current focus:** Phase 4 — `group_by` and aggregations.
 
 **Next up:**
 
-1. Phase 3: `filter` (block and expression forms) mapping over chunks so it
-   stays element-wise.
-2. Phase 3: `select` with names, expressions, and aliased expressions;
-   projection reuses columns.
-3. Phase 3: `with_column` / `with_columns` and `drop` / `rename`.
-4. Phase 3: `sort_by` with per-key direction and null placement via
-   `lexsort_to_indices` + `take_record_batch`.
-5. Phase 3: `distinct`, `drop_nulls`, `fill_null`, `with_row_index`.
+1. Phase 4: aggregate `Expr` nodes (`Agg`) with `sum`/`mean`/`min`/`max`/
+   `count`/`count_all`/`n_unique`/`first`/`last`.
+2. Phase 4: `GroupBy` over one or more keys via `lexsort_to_indices` →
+   `take_record_batch` → `partition` → per-range reduce (C5).
+3. Phase 4: `aggregate(**named)` and `agg(*aliased_exprs)` with a result schema
+   derived from `Expr#dtype`, not from data.
+4. Phase 4: null-key policy (`null_keys: :first | :last | :drop`).
 
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 0 | Project scaffolding, dependency wiring, gates | **done** |
 | 1 | Foundation: `DataFrame`, `Series`, schema, construction | **done** |
 | 2 | Expressions: AST, DSL, evaluation, coercion | **done** |
-| 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | in progress |
-| 4 | `group_by` + aggregations | not started |
+| 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | **done** |
+| 4 | `group_by` + aggregations | in progress |
 | 5 | Joins and row/column concatenation | not started |
 | 6 | IO: Parquet, CSV, IPC (read + write, streaming) | not started |
 | 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | not started |
@@ -48,8 +46,8 @@ implicit.
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: expression engine (Phase 2)`.
-**Gates:** `make lint` and `make test` — both green (88 examples).
+**Last commit:** `feat: eager verbs (Phase 3)`.
+**Gates:** `make lint` and `make test` — both green (127 examples).
 
 ---
 
@@ -164,20 +162,21 @@ in §8.1 and configurable (`null_keys: :first | :last | :drop`).
 promoted to `Float64` (integers included); `count` uses `ArrayBase#count`
 (non-null rows) with an explicit `count_all` for `len`.
 
-#### C7. `serde`-style named-argument aggregation does not exist in Crystal
+#### C7. Named arguments become a `NamedTuple`, not a macro
 
-`aggregate(total: expr, avg: expr)` with arbitrary names requires a **macro**
-with a named splat. Verified working:
+Crystal methods accept a double splat: `def f(**named)` collects call-site
+named arguments into a `NamedTuple` (verified). A **macro** with `**named` also
+works, but is the wrong tool here: a macro defined inside a class expands at the
+call site *without the receiver*, so `df.with_columns(a: x)` would expand to a
+receiverless call. **Decision:** named-argument APIs (`with_columns`,
+`GroupBy#aggregate`) are plain methods using `**named`, each also offering a
+`Hash` overload for runtime-built names.
 
 ```crystal
-macro aggregate(**named)
-  # each key/value pair is a NamedTupleLiteral member
+def with_columns(**named) : DataFrame
+  named.each { |name, expr| ... }
 end
 ```
-
-**Decision:** `GroupBy#aggregate` is an instance macro emitting
-`Array({String, Expr})`. A plain-hash overload
-(`aggregate({"total" => expr})`) is kept for dynamic names.
 
 #### C8. A macro parameter named `name` breaks named arguments
 
@@ -244,6 +243,22 @@ fails to compile even though both members are supported. **Decision:**
 `Prism::Kernels.apply_op` narrows the union, then calls a generic `apply` that
 Crystal instantiates once per operand-type pair — one written op table, four
 compiled variants, and scalars still broadcast inside Arrow.
+
+#### C16. Arrow's `Field#with_*` mutate, and `with_schema` only adds fields
+
+`Field#with_name`, `with_metadata` and `with_nullable` assign to the receiver and
+return `self` — they are not functional copies. `RecordBatch#with_schema`
+requires the new schema to be a **superset** of the current one, so it cannot
+express a rename. **Decision:** rename does `field.copy.with_name(...)` and
+rebuilds each batch with `Arrow::RecordBatch.new(schema, batch.columns,
+batch.num_rows)`; that keeps the arrays and copies nothing.
+
+#### C17. `select` is a Crystal keyword
+
+`select` starts the channel-select expression, so a receiverless `select(...)`
+inside `DataFrame` is parsed as the keyword and fails with "expecting when, else
+or end". **Decision:** internal calls use `self.select(...)`; the public method
+name is unchanged because `df.select(...)` parses fine.
 
 ### 3.4 Verified end-to-end sketch
 
@@ -649,6 +664,7 @@ Non-numeric operands (`Utf8 + Int64`) raise `Prism::DtypeError` at
 class Prism::Error < Exception; end
 class Prism::ColumnNotFound < Prism::Error; end
 class Prism::DuplicateColumn < Prism::Error; end
+class Prism::MissingAlias < Prism::Error; end
 class Prism::DtypeError < Prism::Error; end
 class Prism::UnsupportedOperation < Prism::Error; end
 ```
@@ -836,18 +852,32 @@ via the `checked` helper in `spec/prism/expr_spec.cr`).
 - Arrow's `merge` compacts its inputs, so `fill_null`/`coalesce` use `zip`,
   which is row-aligned (C13).
 
-### Phase 3 — eager verbs
+### Phase 3 — eager verbs (done)
 
-- [ ] `select` (names, exprs, aliased exprs), `filter`, `with_column`,
-      `with_columns` (macro), `drop`, `rename`, `cast`, `sort_by`,
-      `distinct`, `drop_nulls`, `fill_null`, `with_row_index`
-- [ ] Chunk-preserving execution for element-wise verbs (§5.5)
-- [ ] `sort_by` multi-key with per-key direction/null placement via
-      `lexsort_to_indices` + `take_record_batch`
-- [ ] Column-name validation everywhere (`Prism::ColumnNotFound`)
+- [x] `select` (names, exprs, aliased exprs), `filter`, `with_column`,
+      `with_columns`, `drop`, `rename`, `cast`, `sort_by`, `distinct`,
+      `drop_nulls`, `fill_null`, `with_row_index`
+- [x] Chunk-preserving execution for element-wise verbs (§5.5)
+- [x] `sort_by` multi-key with per-key direction/null placement via
+      `lexsort_to_indices` + `take_record_batch`, with `Expr#asc`/`#desc`
+- [x] Column-name validation everywhere (`Prism::ColumnNotFound`)
 
-**Acceptance:** each verb has a spec that checks values *and* schema, plus one
-spec proving chunks are preserved (input with 3 batches yields 3 batches).
+**Acceptance:** each verb has a spec that checks values *and* schema, plus
+chunk-count assertions: element-wise verbs keep their chunks, `sort_by` and
+`distinct` collapse to one. Specs: `spec/prism/verbs_spec.cr` (39 examples).
+
+**Notes carried forward:**
+
+- `rename` cannot use `RecordBatch#with_schema`: it requires the new schema to
+  be a superset, so a rename is rejected. Batches are rebuilt around the same
+  arrays instead, which stays copy-free (C16).
+- `Field#with_name` mutates in place, so rename copies the field first — otherwise
+  it would rename the source frame's schema too (C16).
+- `select` is a Crystal keyword (channel select). `df.select(...)` is fine,
+  but a receiverless `select(...)` inside the class parses as the keyword;
+  internal calls use `self.select` (C17).
+- `distinct` keeps the *smallest original row index* per key group rather than
+  trusting sort stability, then restores the original order.
 
 ### Phase 4 — group_by + aggregation
 

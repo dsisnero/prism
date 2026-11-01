@@ -82,6 +82,13 @@ also avoids name collisions when `arrow-cr` adds types.
   dtype-dispatched extraction; do not add a dtype `case` anywhere else.
 - `value`/`value?` on Arrow arrays return the raw physical slot (`0.0` for a
   null float). Use `[]` / `[]?` for null-aware access.
+- `select` is a keyword (channel select): a receiverless `select(...)` inside
+  `DataFrame` parses as the keyword. Use `self.select(...)` internally.
+- Arrow's `Field#with_name` / `with_metadata` / `with_nullable` mutate the
+  receiver. Copy first (`field.copy.with_name(...)`) or you will rename the
+  source frame's schema.
+- Named-argument APIs use `**named` on a method (a `NamedTuple`), never a macro:
+  a macro expands at the call site without the receiver.
 - `Arrow::DataType::Kind` is a plain enum; use `kind.int64?` predicates rather
   than comparing to symbols.
 - Avoid `not_nil!` on Arrow results. Kernels return `ArrayBase?` in some paths;

@@ -23,6 +23,12 @@ require "./prism/expression/nodes"
 require "./prism/expression/dsl"
 require "./prism/expression/operators"
 
+require "./prism/verbs/filter"
+require "./prism/verbs/select"
+require "./prism/verbs/mutate"
+require "./prism/verbs/sort"
+require "./prism/verbs/distinct"
+
 module Prism
   VERSION = "0.1.0"
 end

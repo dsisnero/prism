@@ -7,6 +7,13 @@ module Prism
   # microsecond-precision timestamp.
   alias LiteralValue = Int64 | UInt64 | Float64 | Bool | String | Bytes | Time | Nil
 
+  # Every value `Prism.lit` accepts. Written out rather than using `Number`
+  # because Crystal cannot use a virtual type such as `Number` as a generic
+  # argument (`Hash(String, Number)` does not compile).
+  alias LiteralInput = Int8 | Int16 | Int32 | Int64 | Int128 |
+                       UInt8 | UInt16 | UInt32 | UInt64 | UInt128 |
+                       Float32 | Float64 | Bool | String | Bytes | Time | Nil
+
   # Builds the Arrow dtype and the length-1 array for a `LiteralValue`.
   module Literals
     extend self

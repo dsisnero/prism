@@ -33,6 +33,13 @@ module Prism
   class SchemaError < Error
   end
 
+  # Raised when an expression is selected without a name to give its column.
+  class MissingAlias < Error
+    def initialize(expression : String)
+      super("expression #{expression} needs an alias to be selected; use .alias(\"name\")")
+    end
+  end
+
   # Raised when an operation cannot apply to the given Arrow data type.
   class DtypeError < Error
   end

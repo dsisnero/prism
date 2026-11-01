@@ -7,6 +7,12 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3 eager verbs on `Prism::DataFrame`: `select` (names, projections,
+  aliased expressions), `filter`, `with_column`/`with_columns`, `drop`,
+  `rename`, `cast`, `sort_by` (multi-key with `asc`/`desc` and null placement),
+  `distinct`, `drop_nulls`, `fill_null`, and `with_row_index`.
+- Chunk-preserving execution for element-wise verbs, with specs asserting chunk
+  counts; `sort_by` and `distinct` collapse to a single batch by design.
 - Phase 2 expression engine: `Prism::Expr` AST (`Col`, `Lit`, `Binary`, `Neg`,
   `Not`, `IsNull`, `IsNotNull`, `Cast`, `Alias`, `FillNull`, `Coalesce`),
   `Prism.col`/`Prism.lit` plus `Prism::DSL`, operator overloads, and the
