@@ -235,6 +235,36 @@ Null keys form one group. `null_keys: :first | :last` controls placement
 (:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows
 before grouping.
 
+## Joins
+
+Hash join with the **right side as the build side**, following Polars' model:
+
+```text
+right keys -> Hash(Array(Value), [row indices])     # build
+left keys  -> probe, emitting (left row, right row) pairs
+pairs      -> Arrow.take per column -> compose -> suffix/coalesce -> schema
+```
+
+Only the key columns are materialized into Crystal values, because `arrow-cr`
+exposes no Arrow-native hashing and `Arrow.partition` requires sorted input.
+Payload columns stay in Arrow and are gathered by index.
+
+Semantics match Polars: null keys do not match unless `nulls_equal: true`; key
+columns are coalesced for inner/left/right and kept apart for `full` unless
+`coalesce: true`; colliding non-key columns from the right get `suffix`
+(`_right`); column order is left then right. Semi/anti are membership filters
+that emit left rows only.
+
+Outer joins gather rows through `Arrow.take` with a nullable index array.
+`Arrow.take_record_batch` cannot be used for that: it validates against the
+source schema, which declares non-nullable columns that the join nulls. The join
+therefore rebuilds the batch against a relaxed schema and restores precise
+nullability when composing the result.
+
+`Prism.concat` stacks frames vertically (schemas must match) and `hstack` places
+columns side by side (row counts must match, names must not collide). Both
+collapse to a single batch, since combining is the point.
+
 ## Distinct
 
 `arrow-cr` has no dedupe kernel, and `ArrayBase#uniq` is a Crystal-level sort

@@ -20,15 +20,17 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 5 — joins and concatenation.
+**Current focus:** Phase 6 — IO (Parquet, CSV, IPC read and write).
 
 **Next up:**
 
-1. Phase 5: `join` inner/left/right/outer/semi/anti on one or more keys.
-2. Phase 5: `left_on`/`right_on` with differing names, and collision suffixes.
-3. Phase 5: `Prism.concat` (vertical) and `hstack` (horizontal).
-4. Phase 5: cardinality and null-fill specs per join type, including duplicate
-   keys (many-to-many) and empty inputs.
+1. Phase 6: `Prism.read_parquet` / `write_parquet` on path and `IO`, with
+   `batch_size`, `columns`, and compression options.
+2. Phase 6: guarantee `ArrowWriter#close` runs (a dropped writer loses the
+   footer) and validate the schema before writing (C10).
+3. Phase 6: `read_csv` / `write_csv` and `read_ipc` / `write_ipc` via `arrow-cr`.
+4. Phase 6: round-trip specs through `IO::Memory`, plus one file-based spec in
+   `temp/` for path handling.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -37,15 +39,15 @@ implicit.
 | 2 | Expressions: AST, DSL, evaluation, coercion | **done** |
 | 3 | Eager verbs: `select`, `filter`, `with_column`, `sort_by`, … | **done** |
 | 4 | `group_by` + aggregations | **done** |
-| 5 | Joins and row/column concatenation | in progress |
-| 6 | IO: Parquet, CSV, IPC (read + write, streaming) | not started |
+| 5 | Joins and row/column concatenation | **done** |
+| 6 | IO: Parquet, CSV, IPC (read + write, streaming) | in progress |
 | 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | not started |
 | 8 | Compile-time typed schemas | not started |
 | 9 | Display, examples, benchmarks, v0.1.0 hardening | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: group_by and aggregations (Phase 4)`.
-**Gates:** `make lint` and `make test` — both green (168 examples).
+**Last commit:** `feat: joins and concatenation (Phase 5)`.
+**Gates:** `make lint` and `make test` — both green (192 examples).
 
 ---
 
@@ -283,6 +285,15 @@ uses `Aggregates.count_distinct` (typed sort + partition) rather than
 non-stable `unique` sorts, which is the shape used here. The stable path is
 therefore O(n log n) rather than O(n); a hash path would first need Arrow-native
 hashing, which `arrow-cr` does not expose.
+
+#### C19. `Arrow.take_record_batch` reuses the source schema
+
+`take_record_batch` gathers columns and then validates them against the *source*
+schema, so taking with a null index into a non-nullable column raises
+`ArrowError: Column 'id' is declared as non-nullable but contains null values`.
+Outer joins need exactly that. **Decision:** `Prism::Join` gathers column by
+column with `Arrow.take` and rebuilds the batch against a relaxed (all-nullable)
+schema, then `compose` restores the precise nullability on the final schema.
 
 ### 3.4 Verified end-to-end sketch
 
@@ -962,15 +973,38 @@ zero rows out, correct schema). Specs: `spec/prism/group_by_spec.cr`
   intuition. Polars leaves order unspecified by default and offers
   `maintain_order: true` for the same result.
 
-### Phase 5 — joins and concatenation
+### Phase 5 — joins and concatenation (done)
 
-- [ ] `join` inner/left/right/outer/semi/anti on one or more keys
-- [ ] `left_on`/`right_on` with differing names; suffix handling for collisions
-- [ ] `Prism.concat` (vertical, schema-compatible) and `hstack` (horizontal)
-- [ ] `vstack` alias if it reads better in docs; decide in-phase
+- [x] `join` inner/left/right/full/semi/anti on one or more keys
+- [x] `left_on`/`right_on` with differing names; `suffix` handling for collisions
+- [x] `Prism.concat` (vertical, schema-compatible) and `hstack` (horizontal)
+- [x] `:outer` accepted as an alias for `:full`; no `vstack` alias (would shadow
+      `concat` for no benefit)
 
 **Acceptance:** join cardinality and null-fill behaviour asserted per join type,
-including duplicate keys (many-to-many) and empty inputs.
+including duplicate keys (many-to-many) and empty inputs. Specs:
+`spec/prism/join_spec.cr` (24 examples).
+
+**Notes carried forward:**
+
+- Hash join with the **right side as the build side**, matching Polars' model.
+  Polars samples both sides and picks the smaller; we always build right, which
+  keeps the output order = left order + unmatched right rows. Choosing the
+  smaller side is a later optimization (it needs the output order reversed back).
+- **Null keys never match** unless `nulls_equal: true`, matching Polars and SQL.
+  `nulls_equal` applies to every join type.
+- **Coalescing:** key columns are merged (right copy dropped) for inner/left/
+  right, and kept apart for `full` unless `coalesce: true` — the same defaults as
+  Polars, where `coalesce=None` coalesces except for full joins.
+- **Column order** is left columns then right columns (suffixed where they
+  collide), which is Polars' rule and is why a full join reads
+  `[id, name, score, id_right, label]`.
+- **Semi/anti are membership filters**: they emit left rows and left columns
+  only, so repeated right keys cannot duplicate rows.
+- Only key columns are materialized into Crystal values, because `arrow-cr`
+  exposes no Arrow-native hashing. Payload columns stay in Arrow and are
+  gathered with `Arrow.take`. A sort-merge join would avoid the materialization
+  at O(n log n); noted for Phase 9.
 
 ### Phase 6 — IO
 

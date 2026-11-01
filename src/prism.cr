@@ -37,6 +37,9 @@ require "./prism/verbs/distinct"
 
 require "./prism/group_by"
 
+require "./prism/combine"
+require "./prism/join"
+
 module Prism
   VERSION = "0.1.0"
 end

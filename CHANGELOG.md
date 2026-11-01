@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 5 joins: `DataFrame#join` with `:inner`, `:left`, `:right`, `:full`
+  (`:outer`), `:semi`, and `:anti`, on one or several keys via `on:` or
+  `left_on:`/`right_on:`, plus `suffix`, `nulls_equal`, and `coalesce` options.
+- `Prism.concat` for vertical stacking and `DataFrame#hstack` for horizontal.
 - Phase 4 `group_by` + aggregations: `GroupBy#aggregate` (named arguments or a
   Hash) and `GroupBy#agg` (aliased expressions) over one or more keys, with
   `sum`, `mean`, `min`, `max`, `count`, `count_all`, `n_unique`, `first`,
