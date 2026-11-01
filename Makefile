@@ -2,7 +2,7 @@ CRYSTAL ?= crystal
 AMEBA   ?= ameba
 SHARDS  ?= shards
 
-.PHONY: all install update format format-check lint test docs clean sidecars
+.PHONY: all install update format format-check lint test bench docs clean sidecars
 
 all: format-check lint test
 
@@ -18,16 +18,19 @@ update:
 	$(SHARDS) update
 
 format: sidecars
-	$(CRYSTAL) tool format src spec
+	$(CRYSTAL) tool format src spec bench
 
 format-check: sidecars
-	$(CRYSTAL) tool format --check src spec
+	$(CRYSTAL) tool format --check src spec bench
 
 lint: sidecars
-	$(AMEBA) src spec
+	$(AMEBA) src spec bench
 
 test: sidecars
 	$(CRYSTAL) spec
+
+bench: sidecars
+	$(CRYSTAL) run --release bench/main.cr
 
 docs: sidecars
 	$(CRYSTAL) docs -o api

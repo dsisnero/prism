@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (307 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (310 examples, roughly 30 s warm),
 then take the first unchecked item under Phase 9d in §12. This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
@@ -28,22 +28,23 @@ place that tracks status; do not re-derive it from `git log`.
 
 **Next up** (in order, each roughly one commit):
 
-1. **Benchmarks** — `bench/` for filter, select and `group_by` on 1e6 rows, plus
-   Parquet read/write with and without projection/predicate pushdown. Phase 9e and
-   any later optimization decision (including the physical top-k behind a pinned
-   slice) needs these numbers.
-2. **`arrow-row` switch** — **blocked**, waiting on the `arrow-cr` port. When it
-   lands: replace the boxed `Array(Value)` keys in `src/prism/join.cr` and
-   `src/prism/distinct.cr` with encoded row bytes (`Hash(Bytes, …)` over views into
-   the row buffer), which makes `distinct`/`n_unique` O(n) and makes NaN/±0 keys
-   match. Re-run `spec/prism/{join,distinct}_spec.cr` (they are the guards).
+1. **`arrow-row` switch** — **blocked**, waiting on the `arrow-cr` port. The
+   benchmarks say it is not the first bottleneck: `distinct` / `n_unique` /
+   join are 144–284 ms on 1e6 rows and sort-bound, so this is a later win.
+   When the port lands: replace the boxed `Array(Value)` keys in
+   `src/prism/join.cr` and `src/prism/distinct.cr` with encoded row bytes
+   (`Hash(Bytes, …)` over views into the row buffer), which makes
+   `distinct`/`n_unique` O(n) and makes NaN/±0 keys match. Re-run
+   `spec/prism/{join,distinct}_spec.cr` (they are the guards).
 
-**Just landed (9d):** projection pruning through joins
-(`Plan::Join#input_requirements` attributes each output name to its side; keys are
-always kept, a suffixed name pins the right column, the shadowed left column is
-retained so the suffix stays valid, semi/anti read only keys from the right), and a
-slice pinned to `Sort`/`GroupBy`/`Distinct` (`Plan::Slice`, nested limits compose,
-`explain` shows `slice: offset=… count=…`).
+**Just landed (9d — this closes every unblocked item):** projection pruning
+through joins (`Plan::Join#input_requirements` attributes each output name to its
+side; keys are always kept, a suffixed name pins the right column, the shadowed
+left column is retained so the suffix stays valid, semi/anti read only keys from
+the right), a slice pinned to `Sort`/`GroupBy`/`Distinct` (`Plan::Slice`, nested
+limits compose, `explain` shows `slice: offset=… count=…`), `DataFrame#sort_by_slice`
+so a pinned slice gathers only its window, and `make bench` with numbers in
+[docs/benchmarks.md](benchmarks.md).
 
 **Then Phase 9e:** examples for the README workflows (including an interactive
 viewer on `bubbletea` + `bubbles` + `ultraviolet`, development dependencies only),
@@ -70,13 +71,13 @@ memory notes for `#to_arrow`, and the `v0.1.0` tag.
 | 9a | Display: plain table, optional `lipgloss` styling | **done** |
 | 9b | API parity: lazy verbs, `Series` element-wise methods | **done** |
 | 9c | Expression coverage: literal folding, decimals, dictionaries | **done** |
-| 9d | Optimizer and performance parity (joins, slice, `arrow-row`) | in progress |
+| 9d | Optimizer and performance parity (joins, slice, benchmarks) | **done**, except `arrow-row` (blocked) |
 | 9e | Examples, benchmarks, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
 **Last feature commit:** `8065fa6` — Phase 9d slice pinned to `Sort`/`GroupBy`/`Distinct`.
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (308) and costs ~13 s; run it before a release.
+adds the compile-failure spec (311) and costs ~13 s; run it before a release.
 
 ---
 
@@ -676,6 +677,7 @@ df.drop("tmp")
 df.rename("old" => "new")
 df.sort_by("total_revenue", order: :desc)
 df.sort_by(col("a").desc, col("b").asc, nulls: :last)
+df.sort_by_slice([col("a").desc], 0, 10)  # sorts, gathers only rows 0..10
 df.distinct
 df.distinct("region")
 df.drop_nulls("region")
@@ -1315,11 +1317,15 @@ a struct array: decimals materialize instead of raising.
 - [x] Projection pruning through joins: map suffixed output names back to the
       side that produced them
 - [x] Slice attached to `Sort`/`GroupBy`/`Distinct` as Polars does (`Plan::Slice`),
-      with nested limits composing instead of stacking; the physical top-k that
-      would gather only the window is deferred to the benchmark results
-- [ ] Benchmarks: `filter`, `select`, `group_by` on 1e6 rows, Parquet read/write
-      with and without pushdown — do these before the `arrow-row` switch so the
-      change can be measured
+      with nested limits composing instead of stacking, and `DataFrame#sort_by_slice`
+      gathering only the window's indices
+- [x] Benchmarks: `filter`, `select`, `group_by` on 1e6 rows, Parquet read/write
+      with and without pushdown — `make bench`, results in
+      [`docs/benchmarks.md`](../docs/benchmarks.md) (§14)
+- [x] Window gather for a pinned slice: `DataFrame#sort_by_slice` collects only
+      the window's indices, so `sort_by + head(10)` no longer copies every row
+      (229 ms → ≈160 ms per the benchmarks). A bounded-heap top-k stays an
+      `arrow-cr` kernel, not a Prism change.
 - [ ] Switch join/distinct keys to `arrow-row` once the port lands (**blocked on
       `arrow-cr`**); removes per-row key boxing, makes `distinct` O(n), and fixes
       NaN/±0 key equality (C18, §14)
@@ -1527,14 +1533,49 @@ Arquero's deferred `BitSet` mask makes eager `filter` free, but every subsequent
 operation — and every edge — must honor the mask. That is a lazy engine wearing
 eager clothes. Our split is explicit: eager verbs materialize (Arrow's
 `filter_record_batch` semantics, documented), and `LazyFrame` is where work is
-deferred and pushed into the Parquet reader. Revisit only if Phase 9 benchmarks
-show filter-dominated workloads.
+deferred and pushed into the Parquet reader. The benchmarks settled the question
+they were meant to settle: a half-frame `filter` over 1e6 rows is 53 ms and a
+projection is zero-copy, so filter-dominated workloads are not the bottleneck
+(see [`docs/benchmarks.md`](../docs/benchmarks.md)).
 
-### Benchmarks (Phase 9)
+### Benchmarks (Phase 9d)
 
-Filter throughput, `group_by` on 1e6 rows, Parquet read/write with and without
-projection pushdown, and a copy-count check that the "never allocates" list
-above stays true.
+`make bench` runs [`bench/main.cr`](../bench/main.cr) over one 1e6-row frame;
+scenarios, numbers and the reading of them live in
+[`docs/benchmarks.md`](../docs/benchmarks.md). Headlines (Apple M4, Crystal
+1.22.2, best of five):
+
+| Path | Time |
+| --- | ---: |
+| `filter` on half the rows | 53 ms |
+| `select` / `to_arrow` (one chunk) | 0 ms (same buffers) |
+| `sort_by` one key / two keys | 240 ms / 1.0 s |
+| `sort_by` + `limit 10`, eager / window gathered | 229 ms / ≈160 ms |
+| `group_by` 4 keys / 1e5 keys | 249 ms / 439 ms |
+| `distinct` / `n_unique` on 1e5 keys | 163 ms / 144 ms |
+| join 1e6 → 1e5 on boxed keys | 284 ms |
+| Parquet read all / 2 of 4 columns / `limit 100` | 149 ms / 90 ms / 4 ms |
+| Parquet predicate, unclustered / clustered | 174 ms / 118 ms |
+| Lazy scan+filter+select vs eager | 133 ms vs 153 ms |
+
+What they decide:
+
+- **A pinned slice gathers only its window** (`DataFrame#sort_by_slice`, wired
+  into `Plan::Sort#execute`): `sort + head(10)` went from 229 ms to roughly
+  160 ms, 30% of it the 1e6-row copy it no longer makes. The sort is still
+  `O(n log n)` — a bounded-heap top-k is an `arrow-cr` kernel this port does not
+  have, not a Prism change.
+- **`arrow-row` is not the first bottleneck.** The row-keyed paths are
+  sort-bound at 144–284 ms; a single sort costs 240 ms, so an O(n) hash path
+  would help these specific shapes but not the pipeline. Stays blocked on the
+  `arrow-cr` port, and is no longer the top item once it lands.
+- **Predicate pushdown depends on the data, not the optimizer.** On unclustered
+  columns the row filter costs more than it saves (174 ms vs 149 ms) because no
+  row group can be skipped; on a clustered column it saves 30–45%. Worth
+  documenting for users rather than optimizing here.
+- The copy-count check stays a spec ("a projected `select` is the same
+  buffers"), not a counter: Crystal has no per-operation allocation hook, and
+  `GC.stats` deltas are too coarse to attribute.
 
 ## 15. Risks and open questions
 
@@ -1601,7 +1642,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | --- | --- | --- |
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d (done) |
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
-| Physical top-k for a pinned slice | the sort itself stays O(n log n); needs benchmark numbers first | 9d (after benchmarks) |
+| Physical top-k for a pinned slice | a bounded heap is an `arrow-cr` kernel, not a Prism one; the gather half landed in 9d | 9d (gather done) |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |

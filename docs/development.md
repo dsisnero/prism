@@ -71,12 +71,19 @@ typically 20–60 s including the dependency compile. Iterating on one file with
 `crystal spec spec/prism/expr_spec.cr` does not avoid the dependency compile;
 budget for it.
 
+`make bench` compiles the same dependency graph in `--release` (the first build
+can take a while — the whole surface is optimized at O3, and considerably longer
+while the machine is busy) and prints the 1e6-row table; the scenarios and
+current numbers are in [benchmarks.md](benchmarks.md). Its fixtures are generated
+into `temp/bench/`, so nothing is committed.
+
 ## Repository layout
 
 ```text
 src/prism.cr            # entrypoint: requires everything, Prism::VERSION
 src/prism/              # all library code, one directory per concern
 spec/                   # mirrors src/prism/
+bench/                  # benchmarks (make bench); see docs/benchmarks.md
 plans/plan.md           # implementation plan — the resume source of truth
 docs/                   # operator docs, linked from README
 temp/                   # gitignored scratch; generated fixtures live here

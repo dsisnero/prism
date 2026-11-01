@@ -157,9 +157,13 @@ module Prism
       end
 
       def execute : DataFrame
-        sorted = @input.execute.sort_by(@keys)
+        input = @input.execute
         slice = @slice
-        slice ? sorted.slice(slice.offset, slice.count) : sorted
+        if slice
+          input.sort_by_slice(@keys, slice.offset, slice.count)
+        else
+          input.sort_by(@keys)
+        end
       end
 
       def describe(io : IO, indent : Int) : Nil

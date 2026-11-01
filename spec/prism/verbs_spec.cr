@@ -227,6 +227,30 @@ describe Prism::DataFrame do
     it "collapses chunks because it reorders rows" do
       chunk_count(chunked_frame.sort_by("qty")).should eq(1)
     end
+
+    it "returns the same rows when it gathers only a window" do
+      frame = chunked_frame
+      keys = [Prism::SortKey.new(col("qty"), true)]
+
+      windowed = frame.sort_by_slice(keys, 1, 2)
+      windowed.should eq(frame.sort_by("qty", order: :desc).slice(1, 2))
+      windowed["qty"].to_a.should eq([3_i64, 2_i64])
+    end
+
+    it "clamps a window that runs past the end" do
+      frame = verbs_frame
+      keys = [Prism::SortKey.new(col("qty"))]
+
+      frame.sort_by_slice(keys, 2, 100)["qty"].to_a.should eq([3_i64, 4_i64])
+      frame.sort_by_slice(keys, 10, 2).row_count.should eq(0)
+    end
+
+    it "rejects a negative window" do
+      keys = [Prism::SortKey.new(col("qty"))]
+
+      expect_raises(ArgumentError, /offset/) { verbs_frame.sort_by_slice(keys, -1, 2) }
+      expect_raises(ArgumentError, /count/) { verbs_frame.sort_by_slice(keys, 0, -2) }
+    end
   end
 
   describe "#distinct" do

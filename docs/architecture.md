@@ -184,12 +184,14 @@ Eager verbs split into two groups by cost:
 | Group | Verbs | Effect |
 | --- | --- | --- |
 | Element-wise | `select`, `filter`, `with_column(s)`, `drop`, `rename`, `cast`, `fill_null`, `drop_nulls`, `with_row_index` | map over chunks, preserve chunking, reuse untouched arrays |
-| Row-reordering | `sort_by`, `distinct` | collapse to one batch, since the output row set differs |
+| Row-reordering | `sort_by`, `sort_by_slice`, `distinct` | collapse to one batch, since the output row set differs |
 
 `select` projects a bare column without copying it; only computed expressions
 produce new arrays. `rename` changes only the schema and re-wraps the same
 arrays — Arrow's `RecordBatch#with_schema` cannot express a rename (it demands a
-superset), so the batch is rebuilt around the existing columns.
+superset), so the batch is rebuilt around the existing columns. `sort_by_slice`
+is the windowed form used by a pinned slice: it sorts, then gathers only the
+requested range of the sort indices.
 
 Named-argument verbs (`with_columns`) use Crystal's `**named` parameter, not a
 macro: a macro expands at the call site without the receiver. `select` is a
@@ -233,10 +235,11 @@ Pass order, mirroring Polars:
    it is.
 
 Plan-level CSE is deferred, because repeated subexpressions are already memoized
-per chunk during evaluation. A pinned slice is executed by trimming the node's
-own output; the physical top-k (gathering only the window from the sort
-indices) is a benchmark-driven follow-up, because the sort itself is still
-`O(n log n)`.
+per chunk during evaluation. A pinned slice on `Sort` gathers only its window
+(`DataFrame#sort_by_slice`), so `sort + head(10)` copies 10 rows instead of every
+row; the sort itself stays `O(n log n)`, because a bounded-heap top-k is an
+`arrow-cr` kernel that this port does not model. `GroupBy` and `Distinct` apply
+the window to their own output.
 
 `explain` renders the plan and lists the pushdowns that reached each scan
 (`projection:`, `predicate:`, `limit:`), so a silently disabled pass fails a

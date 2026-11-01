@@ -21,9 +21,10 @@ plan. Do not rename anything else piecemeal.
 ```bash
 make install   # shards install
 make update    # shards update
-make format    # crystal tool format src spec
-make lint      # ameba src spec
+make format    # crystal tool format src spec bench
+make lint      # ameba src spec bench
 make test      # crystal spec
+make bench     # crystal run --release bench/main.cr
 make docs      # crystal docs -o api
 make clean     # remove temp/, api/, .crystal-cache
 ```
@@ -39,6 +40,7 @@ volume they can otherwise be mistaken for `*_spec.cr` files. See
 - [Development](docs/development.md)
 - [Coding Guidelines](docs/coding-guidelines.md)
 - [Testing](docs/testing.md)
+- [Benchmarks](docs/benchmarks.md)
 - [PR Workflow](docs/pr-workflow.md)
 - [Implementation plan](plans/plan.md)
 

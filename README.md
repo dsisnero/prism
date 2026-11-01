@@ -101,6 +101,7 @@ df.to_arrow == batch   # schema and values preserved
 - [Development](docs/development.md)
 - [Coding Guidelines](docs/coding-guidelines.md)
 - [Testing](docs/testing.md)
+- [Benchmarks](docs/benchmarks.md)
 - [Resuming work](docs/resuming.md)
 - [PR Workflow](docs/pr-workflow.md)
 - [Changelog](CHANGELOG.md)
@@ -110,6 +111,7 @@ df.to_arrow == batch   # schema and values preserved
 ```bash
 make install
 make test
+make bench    # 1e6-row timings, see docs/benchmarks.md
 ```
 
 See [docs/development.md](docs/development.md) for the sibling-checkout layout,
