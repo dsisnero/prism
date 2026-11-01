@@ -55,6 +55,14 @@ to [Semantic Versioning](https://semver.org/).
 - Recorded the design influences for the hybrid architecture (Polars, Kotlin
   DataFrame, RedAmber, Arquero, Explorer) in `CLAUDE.md` and plan §4.1.
 
+### Changed
+
+- `n_unique` no longer uses `ArrayBase#uniq` (a Crystal `DynComparator` sort that
+  allocates an index per row). It now counts distinct values with the typed
+  `sort_to_indices` + `Arrow.partition` path, the same machinery behind
+  `DataFrame#distinct`.
+- Added `Series#unique` and `Series#n_unique`, sharing that path.
+
 ### Fixed
 
 - Literal-first casting is now lossless: a float literal against an integer

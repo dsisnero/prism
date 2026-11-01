@@ -86,6 +86,26 @@ module Prism
       Values.extract_at(chunk, local)
     end
 
+    # Distinct values, keeping the first occurrence of each in original order.
+    # Nulls are a value, so at most one null survives.
+    def unique : Series
+      return self if size <= 1
+
+      array = to_arrow
+      order = Arrow.lexsort_to_indices([Arrow::SortColumn.new(array)])
+      sorted = Arrow.take(array, order)
+      ranges = Arrow.partition([sorted]).ranges
+      indices = Distinct.first_occurrence_indices(order, ranges)
+      selected = Arrow::PrimitiveArray(UInt32).from_values(indices)
+
+      Series.new(@name, [Arrow.take(array, selected)] of Arrow::ArrayBase, @dtype)
+    end
+
+    # Number of distinct non-null values.
+    def n_unique : Int64
+      Aggregates.count_distinct(to_arrow)
+    end
+
     # Edge: returns the column as one Arrow array, concatenating chunks.
     #
     # A single-chunk series returns its chunk without copying; multi-chunk

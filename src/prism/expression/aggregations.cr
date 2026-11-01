@@ -97,9 +97,7 @@ module Prism
       in .count?     then series.count
       in .count_all? then series.size
       in .n_unique?
-        # Distinct non-null values, consistent with the other aggregates
-        # skipping nulls.
-        Arrow.filter(array, Arrow.is_not_null(array)).uniq.len.to_i64
+        Aggregates.count_distinct(array)
       in .std?      then Aggregates.standard_deviation(array)
       in .variance? then Aggregates.variance(array)
       in .median?   then Aggregates.median(array)

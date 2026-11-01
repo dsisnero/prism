@@ -45,7 +45,7 @@ implicit.
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
 **Last commit:** `feat: group_by and aggregations (Phase 4)`.
-**Gates:** `make lint` and `make test` — both green (158 examples).
+**Gates:** `make lint` and `make test` — both green (168 examples).
 
 ---
 
@@ -264,6 +264,25 @@ batch.num_rows)`; that keeps the arrays and copies nothing.
 inside `DataFrame` is parsed as the keyword and fails with "expecting when, else
 or end". **Decision:** internal calls use `self.select(...)`; the public method
 name is unchanged because `df.select(...)` parses fine.
+
+#### C18. There is no dedupe kernel, and `uniq` is the slow path
+
+Verified in `arrow-cr`: no `unique`/`count_distinct`/`value_counts` kernel exists
+(nor in `arrow-rs`). What exists is:
+
+| API | What it actually is |
+| --- | --- |
+| `Arrow.partition` | typed boundary detection via `cmp::distinct` on adjacent rows — the Arrow-native primitive |
+| `Arrow.sort_to_indices` | typed per-dtype sorts (`sort_primitive`, `sort_byte_items`, …) |
+| `ArrayBase#uniq` | a **Crystal-level** sort driven by a `DynComparator` closure, allocating one `Int32` per row |
+| `Arrow.distinct(lhs, rhs)` | element-wise comparison of two arrays, *not* dedupe |
+
+**Decision:** distinct goes through sort → `partition` → `take`, and `n_unique`
+uses `Aggregates.count_distinct` (typed sort + partition) rather than
+`array.uniq`. Polars' `unique_stable` uses a Rust hash set instead; its
+non-stable `unique` sorts, which is the shape used here. The stable path is
+therefore O(n log n) rather than O(n); a hash path would first need Arrow-native
+hashing, which `arrow-cr` does not expose.
 
 ### 3.4 Verified end-to-end sketch
 
@@ -597,8 +616,12 @@ UserSchema.schema                             # => Arrow::Schema
 ### 6.2 `Series` surface
 
 `name`, `dtype`, `size`, `count`, `null_count`, `to_a`, `to_arrow`, `each`,
-`sum`, `mean`, `min`, `max`, `unique`, `is_null`, `fill_null`, `cast`,
-`value(i)`, `==` (element-wise, returns `BooleanArray` per Arrow semantics).
+`each_chunk`, `sum`, `mean`, `min`, `max`, `unique`, `n_unique`, `[]`/`[]?`,
+`value(i)`.
+
+Implemented so far (Phases 1–4): everything above except `is_null`,
+`fill_null`, `cast` and element-wise `==`, which land with the verb work that
+needs them.
 
 ## 7. Deviations from the proposed sample API
 
@@ -895,7 +918,10 @@ chunk-count assertions: element-wise verbs keep their chunks, `sort_by` and
   but a receiverless `select(...)` inside the class parses as the keyword;
   internal calls use `self.select` (C17).
 - `distinct` keeps the *smallest original row index* per key group rather than
-  trusting sort stability, then restores the original order.
+  trusting sort stability, then restores the original order (C18).
+- `Series#unique` and `Series#n_unique` reuse the same machinery for a single
+  column, and `n_unique` in `group_by` uses `Aggregates.count_distinct` instead
+  of the slow `ArrayBase#uniq` (C18).
 
 ### Phase 4 — group_by + aggregation (done)
 

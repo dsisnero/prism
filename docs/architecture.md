@@ -235,6 +235,23 @@ Null keys form one group. `null_keys: :first | :last` controls placement
 (:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows
 before grouping.
 
+## Distinct
+
+`arrow-cr` has no dedupe kernel, and `ArrayBase#uniq` is a Crystal-level sort
+driven by a `DynComparator` closure — correct, but it allocates an index per row
+and pays an indirect call per comparison. `DataFrame#distinct`, `Series#unique`,
+and the `n_unique` aggregate therefore use the Arrow-native primitives:
+`sort_to_indices` (typed per-dtype sorts), `Arrow.partition` (typed
+`cmp::distinct` on adjacent rows), and `Arrow.take`.
+
+Keeping the *first* occurrence is not free: Arrow's sort is not guaranteed
+stable, so a run's first sorted position is not necessarily its earliest row.
+`Prism::Distinct.first_occurrence_indices` takes the smallest original index per
+run and sorts those ascending to restore input order.
+
+Cost is O(n log n). Polars' `unique_stable` is O(n) with a Rust hash set; matching
+that would need Arrow-native hashing, which this dependency does not expose.
+
 ## Parity and divergence
 
 `arrow-cr` is a behaviour-faithful port of `arrow-rs`; `parquet-cr` likewise for

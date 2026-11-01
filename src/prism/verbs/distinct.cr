@@ -40,13 +40,11 @@ module Prism
         key_arrays.map { |array| Arrow::SortColumn.new(array) }.to_a
       )
       sorted_keys = key_arrays.map { |array| Arrow.take(array, order) }.to_a
-      positions = order.as(Arrow::PrimitiveArray(UInt32))
-
-      kept = Arrow.partition(sorted_keys).ranges.map do |range|
-        (range.begin...range.end).min_of { |position| positions.value(position) }
-      end
-
-      selected = Arrow::PrimitiveArray(UInt32).from_values(kept.sort!)
+      indices = Distinct.first_occurrence_indices(
+        order,
+        Arrow.partition(sorted_keys).ranges,
+      )
+      selected = Arrow::PrimitiveArray(UInt32).from_values(indices)
       DataFrame.new(@schema, [Arrow.take_record_batch(batch, selected)])
     end
 
