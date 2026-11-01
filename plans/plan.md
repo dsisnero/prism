@@ -20,14 +20,41 @@ implicit.
 
 ## Where we are
 
-**Current focus:** Phase 9 — parity, performance, display, release
-(§12 lists the sub-phases 9a–9e).
+**Start here:** run `make lint && make test` (289 examples, roughly 30 s warm),
+then take the first unchecked item under Phase 9d in §12. This block is the only
+place that tracks status; do not re-derive it from `git log`.
 
-**Next up:**
+**Current focus:** Phase 9d — optimizer and performance parity.
 
-1. Phase 9d: projection pruning through joins, slice pinned to
-   `Sort`/`GroupBy`/`Distinct`, and the `arrow-row` switch once it lands.
-2. Phase 9e: examples (including the bubbletea viewer), benchmarks, v0.1.0 tag.
+**Next up** (in order, each roughly one commit):
+
+1. **Projection pruning through joins** — `prune_projections` in
+   `src/prism/plan/optimizer.cr` stops at `Plan::Join` because mapping a suffixed
+   output name (`value_right`) back to the side that produced it is missing.
+   Acceptance: `explain` shows a pruned projection below each join input, and the
+   result still equals the eager join.
+2. **Slice pinned to `Sort`/`GroupBy`/`Distinct`** — Polars attaches a slice to
+   those nodes ("limit 10 after the sort") instead of pushing it below them. Add
+   the slot to those plan nodes and teach `push_limits`; assert through `explain`.
+3. **Benchmarks** — `bench/` for filter, select and `group_by` on 1e6 rows, plus
+   Parquet read/write with and without projection/predicate pushdown. Phase 9e and
+   any later optimization decision needs these numbers.
+4. **`arrow-row` switch** — **blocked**, waiting on the `arrow-cr` port. When it
+   lands: replace the boxed `Array(Value)` keys in `src/prism/join.cr` and
+   `src/prism/distinct.cr` with encoded row bytes (`Hash(Bytes, …)` over views into
+   the row buffer), which makes `distinct`/`n_unique` O(n) and makes NaN/±0 keys
+   match. Re-run `spec/prism/{join,distinct}_spec.cr` (they are the guards).
+
+**Then Phase 9e:** examples for the README workflows (including an interactive
+viewer on `bubbletea` + `bubbles` + `ultraviolet`, development dependencies only),
+memory notes for `#to_arrow`, and the `v0.1.0` tag.
+
+**Owner actions, not code:**
+
+- Say when `arrow-row` lands in `arrow-cr`; item 4 above becomes unblocked.
+- Decide whether to do the repo folder / GitHub rename (Phase 10). The shard and
+  entrypoint are already `prism`; only the folder and repository still say
+  `dataframe`.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -40,11 +67,17 @@ implicit.
 | 6 | IO: Parquet, CSV, IPC (read + write, streaming) | **done** |
 | 7 | `LazyFrame` + optimizer (projection/predicate pushdown) | **done** |
 | 8 | Compile-time typed schemas | **done** |
-| 9 | Display, examples, benchmarks, v0.1.0 hardening | in progress |
+| 9a | Display: plain table, optional `lipgloss` styling | **done** |
+| 9b | API parity: lazy verbs, `Series` element-wise methods | **done** |
+| 9c | Expression coverage: literal folding, decimals, dictionaries | **done** |
+| 9d | Optimizer and performance parity (joins, slice, `arrow-row`) | in progress |
+| 9e | Examples, benchmarks, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last commit:** `feat: decimal comparisons and literal folding (Phase 9c)`.
-**Gates:** `make lint` and `make test` — both green (289 examples).
+**Last feature commit:** `4657482` — Phase 9c (decimal comparisons and literal
+folding). The plan block refresh that follows it is docs-only.
+**Gates:** `make lint` and `make test` green, 289 examples. `PRISM_COMPILE_SPECS=1`
+adds the compile-failure spec (290) and costs ~13 s; run it before a release.
 
 ---
 
@@ -1279,11 +1312,12 @@ a struct array: decimals materialize instead of raising.
       side that produced them (Phase 7 stops at joins)
 - [ ] Slice attached to `Sort`/`GroupBy`/`Distinct` as Polars does, instead of
       only pushing limits into the scan
-- [ ] Switch join/distinct keys to `arrow-row` once the port lands (blocked on
-      `arrow-cr`); removes per-row key boxing, makes `distinct` O(n), and fixes
+- [ ] Benchmarks: `filter`, `select`, `group_by` on 1e6 rows, Parquet read/write
+      with and without pushdown — do these before the `arrow-row` switch so the
+      change can be measured
+- [ ] Switch join/distinct keys to `arrow-row` once the port lands (**blocked on
+      `arrow-cr`**); removes per-row key boxing, makes `distinct` O(n), and fixes
       NaN/±0 key equality (C18, §14)
-- [ ] Benchmarks: `filter`, `select`, `group_by` on 1e6 rows, Parquet
-      read/write with and without pushdown
 
 #### 9e. Release
 
