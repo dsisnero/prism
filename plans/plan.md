@@ -1654,7 +1654,8 @@ What they decide:
 **Open questions** (decide in-phase, record here):
 
 - Should `DataFrame#[]` accept a `Range`/`Slice` for row slicing, or keep rows out
-  of `[]` entirely? (Phase 3)
+  of `[]` entirely? (Phase 3) — deferred to post-v0.1 as a RedAmber-derived
+  ergonomic (see §17); today rows come from `slice`/`head`/`tail` only.
 - Null-key policy default for `group_by` on `Utf8` vs numeric columns: one
   policy or per-dtype defaults? (Phase 4)
 - ~~`n_unique` on floats: use Arrow total order (NaN payloads distinct) or
@@ -1711,6 +1712,18 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |
 | Display layer | not needed to validate semantics | 9a (done) |
 | Repository folder + GitHub rename | owner-gated | 10 |
+| `group_by(k).sum/mean/count/min/max/median/std/var/n_unique(*cols)` (RedAmber-derived one-call aggregates) | `aggregate(name: expr)` already covers the semantics; this is ergonomics, and it needs a naming rule (input name, Polars-style) | post-v0.1 |
+| `sort_by("-col")` descending shorthand (RedAmber) | `order: :desc` covers it; the `-` prefix is Ruby sugar and makes a leading-dash column name unreachable in shorthand | post-v0.1 |
+| `slice(1..3)`, `df[1..3]` rows, `df[["a","b"]]` columns (RedAmber indexing) | `slice(offset, count)` / `select(...)` cover it; accepting `Range`/arrays closes the §15 question below | post-v0.1 |
+| `remove(expr)`, the inverse of `filter` (RedAmber) | needs its own null rule — keep rows where the predicate is false **or** null, which is not `filter(pred.not)` | post-v0.1 |
+| Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` exists | post-v0.1 |
+
+RedAmber's headline ergonomic is **bare column names inside blocks**
+(`slice { carat > 1 }`), which works because Ruby `instance_eval`s the block
+against the frame. Crystal dispatches statically, so an untyped frame cannot
+resolve `carat`; `with obj yield` would need the columns as methods on a known
+type, which is exactly what the typed frames give (`typed.filter(&.active)`).
+Recorded here so nobody plans around copying it.
 
 Deliberately **not** planned: Arquero-style deferred `BitSet` filters (§14),
 hash-based grouping (§12 C5), and a `vstack` alias for `concat` (§12 Phase 5).
