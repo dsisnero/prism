@@ -52,7 +52,8 @@ sales
   `#to_arrow` copies when the frame is chunked, and
   [the docs say exactly when](docs/architecture.md#memory-what-to_arrow-costs).
 - **Typed columns when you want them.** `define_schema` generates compile-time
-  accessors, so `typed.select(&.salary)` with a misspelt field is a build error.
+  accessors, so `typed.select(&.salary)` with a misspelt field is a build error,
+  and `typed.rows` yields nominal rows with those fields.
 - **Nested data, not a flat-only API.** List, fixed-size-list, struct and map
   columns materialize as arrays and hashes the way Polars' `to_list` does, and
   they work as `distinct` / `n_unique` / `group_by` keys through the same
@@ -97,6 +98,21 @@ puts orders.head(2)   # aligned table with dtypes and nulls
 `(col("a") == 1) & (col("b") == 2)` is required. `col("a").eq(1).and(col("b").eq(2))`
 is the precedence-safe spelling, and `!` cannot be overloaded — negation is
 `.not`.
+
+### Rows
+
+Columns are the fast path; rows are a materialization edge. `rows`, `row` and
+`each_row` hand back the same `Prism::Value` shapes as `Series#to_a` — nulls are
+`nil`, nested cells are containers — in one name-keyed hash per row:
+
+```crystal
+orders.rows.first              # => {"order_id" => 1, "region" => "east", ...}
+orders.row(1)["region"]        # => "west"
+orders.each_row { |row| ... }  # one hash per row, one chunk at a time
+```
+
+A declared schema gives the same rows nominal fields instead of string keys
+(see [Compile-time typed columns](#compile-time-typed-columns)).
 
 ### Masks from columns
 
@@ -164,6 +180,10 @@ Prism.define_schema UserSchema, id: Int64, name: String, active: Bool, salary: F
 
 typed = UserSchema.from_arrow(batch)
 typed.filter(&.active).select(&.salary)   # a misspelt field is a compile error
+
+typed.rows.first.salary                   # => Float64? — a nominal row
+typed.row(1)                              # => UserSchema::Row
+typed.row(1).to_h                         # => {"id" => 2, "name" => "bob", ...}
 ```
 
 ### Interoperability

@@ -95,6 +95,53 @@ module Prism
       @batches.each { |batch| yield batch }
     end
 
+    # Edge: yields each row as a `Hash` keyed by column name, in schema order.
+    #
+    # Rows are a materialization boundary. Each column chunk is converted to
+    # Crystal values once per batch, then rows are read out of those arrays, so
+    # a row costs one hash allocation rather than a fresh decode per column.
+    # Values follow `Prism::Value`: nulls are `nil`, temporals are `Time`,
+    # decimals are `BigDecimal`, and nested cells are containers.
+    #
+    # Use `#each_batch` when the Arrow buffers are what you want; this is for
+    # the row-shaped world (JSON, templates, hand checks).
+    def each_row(& : RowHash ->) : Nil
+      names = column_names
+      @batches.each do |batch|
+        columns = names.map { |name| Values.extract(batch[name]) }
+        batch.num_rows.times do |index|
+          values = {} of String => Value
+          names.each_with_index { |name, position| values[name] = columns[position][index] }
+          yield values
+        end
+      end
+    end
+
+    # Edge: every row as a name-keyed `Hash`, in frame order.
+    #
+    # ```
+    # df.rows.first["region"] # => "east"
+    # ```
+    def rows : Array(RowHash)
+      out = [] of RowHash
+      each_row { |row| out << row }
+      out
+    end
+
+    # Edge: one row by position, as a name-keyed `Hash`.
+    #
+    # Raises `IndexError` when `index` is outside the frame, matching
+    # `Series#[]`; negative indices are not accepted (use `#slice(range)` for
+    # Ruby-style row ranges).
+    def row(index : Int) : RowHash
+      batch, offset = locate_row(index)
+      values = {} of String => Value
+      column_names.each_with_index do |name, position|
+        values[name] = Values.extract_at(batch.column(position), offset)
+      end
+      values
+    end
+
     # Returns the frame as one Arrow batch, concatenating chunks if needed.
     #
     # A single-chunk frame returns its batch without copying.
@@ -190,6 +237,25 @@ module Prism
       resolved = index.to_i64
       resolved += total if resolved < 0
       resolved.clamp(0_i64, total)
+    end
+
+    # Batch and in-batch offset holding row `index`; raises `IndexError` outside
+    # the frame. Shared by `#row` and the generated typed-frame rows.
+    private def locate_row(index : Int) : Tuple(Arrow::RecordBatch, Int32)
+      total = row_count
+      if index < 0 || index >= total
+        raise IndexError.new("row #{index} is outside frame of #{total} rows")
+      end
+
+      remaining = index.to_i64
+      @batches.each do |batch|
+        width = batch.num_rows.to_i64
+        return {batch, remaining.to_i32} if remaining < width
+
+        remaining -= width
+      end
+
+      raise IndexError.new("row #{index} is outside frame of #{total} rows")
     end
 
     def ==(other : DataFrame) : Bool

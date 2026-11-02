@@ -68,6 +68,16 @@ module Prism
     def dtype_for(type : T.class) : Arrow::DataType forall T
       {% raise "Prism.define_schema does not support #{T}; supported: Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, String, Bytes, Time" %}
     end
+
+    # Reads a required field from a name-keyed row hash.
+    #
+    # A missing key is a schema mismatch, so it raises `Prism::DtypeError` naming
+    # the field instead of a bare `KeyError`.
+    def row_value(values : RowHash, name : String) : Value
+      return values[name] if values.has_key?(name)
+
+      raise DtypeError.new("row is missing field #{name.inspect}")
+    end
   end
 
   # Verbs shared by every generated typed frame.
@@ -213,6 +223,48 @@ module Prism
       end
     {% end %}
 
+    # A nominal row for this schema.
+    #
+    # Every field is nullable because `define_schema` declares each Arrow field
+    # nullable, so a decoded row must be able to say "null" without lying. Values
+    # are the same Crystal types `Prism::Value` produces for the declared Arrow
+    # dtype (`Int64`, `String`, `Bool`, `Float64`, `Bytes`, `Time`), so a row is
+    # a typed view of what `Prism::DataFrame#row` returns as a hash.
+    struct Row
+      {% for field, type in fields %}
+        getter {{field.id}} : {{type}}?
+      {% end %}
+
+      def initialize(
+        {% for field, type in fields %}
+          @{{field.id}} : {{type}}?,
+        {% end %}
+      )
+      end
+
+      # Builds a row from a name-keyed hash, such as `Prism::DataFrame#row`.
+      #
+      # Raises `Prism::DtypeError` when a declared field is missing, and
+      # `TypeCastError` when a value has the wrong Crystal type (a mismatch
+      # `from_dataframe` would have rejected for a whole frame).
+      def self.from_hash(values : ::Prism::RowHash) : Row
+        new(
+          {% for field, type in fields %}
+            ::Prism::Typed.row_value(values, {{field.id.stringify}}).as({{type}}?),
+          {% end %}
+        )
+      end
+
+      # Field values as a name-keyed hash, matching `Prism::DataFrame#row`.
+      def to_h : ::Prism::RowHash
+        row = ::Prism::RowHash.new
+        {% for field, type in fields %}
+          row[{{field.id.stringify}}] = @{{field.id}}
+        {% end %}
+        row
+      end
+    end
+
     def self.from_arrow(batch : ::Arrow::RecordBatch) : Frame
       from_dataframe(::Prism.from_arrow(batch))
     end
@@ -250,6 +302,46 @@ module Prism
           @frame[{{field.id.stringify}}]
         end
       {% end %}
+
+      # Edge: yields one nominal `Row` per row, batch by batch.
+      #
+      # Columns are materialized once per batch and rows are read out of those
+      # arrays, so streaming a frame costs one chunk of values at a time rather
+      # than the whole frame.
+      def each_row(& : Row ->) : Nil
+        @frame.each_batch do |batch|
+          {% for field, type in fields %}
+            values_{{field.id}} = ::Prism::Values.extract(batch[{{field.id.stringify}}])
+          {% end %}
+
+          batch.num_rows.times do |index|
+            yield Row.new(
+              {% for field, type in fields %}
+                values_{{field.id}}[index].as({{type}}?),
+              {% end %}
+            )
+          end
+        end
+      end
+
+      # Edge: every row as a nominal `Row`.
+      #
+      # ```
+      # typed.rows.map(&.salary)
+      # ```
+      def rows : Array(Row)
+        out = [] of Row
+        each_row { |row| out << row }
+        out
+      end
+
+      # Edge: one row by position; raises `IndexError` when out of range.
+      #
+      # Delegates to `Prism::DataFrame#row` and re-types it, so the dynamic and
+      # nominal views agree on ordering, nulls and bounds checks.
+      def row(index : Int) : Row
+        Row.from_hash(@frame.row(index))
+      end
     end
   end
 end

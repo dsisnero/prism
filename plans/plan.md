@@ -23,24 +23,20 @@ implicit.
 _Updated 2026-11-02._
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(405 examples, ~30 s warm). The table below is the only place that tracks status;
+(422 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `v0.1.1` is tagged and published at
 [`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
-Phase 12 ergonomics work (unreleased). Phases 0–12 are closed apart from the
-cosmetic local folder rename.
+Phase 12 ergonomics work and the Phase 13 row layer (both unreleased). Phases 0–13
+are closed apart from the cosmetic local folder rename.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Typed row structs** — `define_schema` could generate a `Row` struct so
-   `typed` frames yield nominal rows instead of `Hash(String, Value)`. See §10
-   ("Why `Values` returns containers") for why the dynamic path cannot, and what
-   this would and would not buy.
-2. **Interval column materialization** — `Value` has no month/day/nano member, so
+1. **Interval column materialization** — `Value` has no month/day/nano member, so
    interval columns still cannot materialize; a dictionary-encoded *float* key is
    compared by value but not canonicalized.
-3. **Vectorized per-group aggregation** — the largest in-memory cost by far:
+2. **Vectorized per-group aggregation** — the largest in-memory cost by far:
    ~95% of a 1e5-group `group_by` is per-group overhead, not the sort (§14). It
    needs one kernel across all groups instead of a slice per group, which is a
    redesign of the aggregate layer. Take it only with a benchmark in hand — the
@@ -50,15 +46,15 @@ cosmetic local folder rename.
 follow-up: the sort is 35 ms of a 1005 ms 1e5-key group-by, so a hash table would
 buy ~4% while giving up contiguous group views and deterministic order (§14).
 
-**Gates:** `make lint` + `make test` green, **405 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**406**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**409**, ~1 min); with both
-set the suite is **410**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **422 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**423**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**426**, ~1 min); with both
+set the suite is **427**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
-benchmark-closes-hash-grouping notes follow it. Everything is on `main`; nothing
-is released since `v0.1.1`.
+benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit.
+Everything is on `main`; nothing is released since `v0.1.1`.
 
 **Owner actions, not code:**
 
@@ -84,6 +80,7 @@ is released since `v0.1.1`.
 | 10 | Repo/GitHub rename `dataframe` → `prism` | **done** (local folder optional) |
 | 11 | Post-v0.1.0: decimal arithmetic, nested materialization, `v0.1.1` | **done** |
 | 12 | RedAmber ergonomics: masks, `remove`, ranges, `-` sorts, one-call aggregates | **done** |
+| 13 | Rows: `DataFrame#rows` and `define_schema`-generated `S::Row` | **done** |
 
 ---
 
@@ -611,7 +608,8 @@ resuming session can jump straight to the relevant file.
 | `Prism::Expr` | immutable AST (§5.4) |
 | `Prism::GroupBy` | `@frame : DataFrame`, `@keys : Array(String)`, `@options` |
 | `Prism::LazyFrame` | `@plan : Plan::Node` |
-| `Prism::Schema` (typed) | macro-generated struct with `Expr` accessors |
+| `Prism::Schema` (typed) | macro-generated struct with `Expr` accessors, plus a `Row` struct |
+| `Prism::RowHash` | `Hash(String, Value)`; one materialized row |
 
 ### 5.4 Expression model
 
@@ -702,6 +700,9 @@ df["region"]        # => Prism::Series
 df.to_arrow         # => Arrow::RecordBatch
 df.to_s             # aligned text table
 df.head(5); df.tail(5); df.slice(1, 10)
+df.rows             # => [{"id" => 1, ...}] one Prism::RowHash per row
+df.row(0)           # => Prism::RowHash; IndexError outside the frame
+df.each_row { |row| ... }   # one hash per row, one chunk at a time
 
 # --- expressions --------------------------------------------------------
 col("price") * col("qty")
@@ -770,6 +771,9 @@ Prism.define_schema UserSchema, id: Int64, name: String, active: Bool, salary: F
 typed = UserSchema.from_arrow(record_batch)   # Prism::TypedFrame(UserSchema)
 typed.filter(&.active).select(&.salary)       # compile error on a misspelt field
 typed.salary                                  # => Arrow::PrimitiveArray(Float64)
+typed.rows                                    # => Array(UserSchema::Row)
+typed.row(0).salary                           # => Float64? (nullable)
+UserSchema::Row.from_hash(df.row(0))         # dynamic -> nominal row
 UserSchema.schema                             # => Arrow::Schema
 ```
 
@@ -1047,10 +1051,13 @@ generated `struct`/`class`, and that is a boundary constraint, not an omission:
   other tools hand back, and it keeps field *order* and per-level nulls.
 - **What a struct would buy** — nominal typing (`row.x`), no string keys, fewer
   allocations — only exists where the schema is known at compile time. That is
-  exactly the `define_schema` boundary, so the honest split is: dynamic boundary →
-  containers; static boundary → typed accessors. A generated `S::Row` struct is
-  therefore possible *for a declared schema* (see §17), with the same caveat as
+  exactly the `define_schema` boundary, so the honest split is: dynamic
+  boundary → containers; static boundary → typed accessors. A generated `S::Row`
+  struct is therefore possible *for a declared schema*, with the same caveat as
   typed frames: it stops applying the moment a verb changes the schema.
+  **Implemented in Phase 13** (`typed.rows`, `S::Row.from_hash`), alongside the
+  dynamic `DataFrame#rows` the typed row mirrors; the runtime path still returns
+  containers, exactly as argued here.
 
 ## 11. IO
 
@@ -1561,6 +1568,61 @@ series,lazy}_spec.cr` (405 examples total).
   overload-free (`filter(&)`), because the block's return type decides between
   the expression and mask paths.
 
+### Phase 13 — Row materialization (done)
+
+The §17 "typed row structs" candidate, plus the dynamic row API it is the typed
+counterpart of. Rows are an edge (§14), so nothing here changes execution: it is
+the `Value` shape that `Series#to_a` already produces, one row at a time.
+
+- [x] `DataFrame#each_row` / `#rows` / `#row` — the dynamic boundary: one
+      `Prism::RowHash` (`Hash(String, Value)`) per row, columns materialized once
+      per batch, values following `Value` (nulls `nil`, nested cells containers,
+      timestamps `Time`), `IndexError` outside the frame
+- [x] `Prism::RowHash` alias names the dynamic row type, so a hand-built row can
+      be annotated without repeating the `Value` union
+- [x] `define_schema` generates `S::Row`: typed nullable fields, positional
+      `initialize`, `to_h` back to `RowHash`, `S::Row.from_hash`, and
+      `S::Frame#each_row` / `#rows` / `#row`; field-wise `==`/`hash` come from
+      Crystal's struct defaults, so a row is usable as a `Hash`/`Set` key
+- [x] Typed rows decode every declared dtype: `Int`/`UInt` widths, `Float32/64`,
+      `Bool`, `String`, `Bytes`, `Time` (microsecond timestamp)
+
+**Acceptance:** the same frame of values, reached both ways, yields the same row:
+`typed.rows` equals `typed.row(i)`, `Row#to_h` equals `DataFrame#row(i)`, rows
+stream in frame order across chunk boundaries, nulls stay `nil` in typed fields,
+and `row` raises `IndexError` out of range. Empty, zero-column and zero-chunk
+frames are covered. Specs: `spec/prism/dataframe_spec.cr` (37 examples, 7 new)
+and `spec/prism/typed_spec.cr` (25 examples, 10 new); the suite is 422.
+
+**Notes carried forward:**
+
+- **Two row shapes, one rule.** The dynamic row is a `Hash(String, Value)`; the
+  nominal row exists only where the schema is compile-time data. That is §10's
+  boundary restated at row granularity: `Values.extract` learns its dtype at run
+  time and must return one closed type, while `S::Row` is generated per
+  declaration.
+- **Typed fields are nullable** (`T?`) because `define_schema` declares every
+  Arrow field nullable, so a decoded row must be able to say "null". A non-null
+  declaration would need either a schema-level `nullable:` option or a runtime
+  check; both are out of scope here.
+- **`each_row` extracts each column once per batch**, then indexes into those
+  arrays — no per-cell dtype dispatch. `S::Frame#row(i)` delegates to
+  `DataFrame#row(i)` and re-types the hash through `S::Row.from_hash`, so the two
+  views cannot disagree about order, nulls or bounds.
+- **A literal partial hash is a compile error.** `S::Row.from_hash({"id" => 1_i64})`
+  infers `Hash(String, Int64)` and fails where a field's cast cannot apply, which
+  is the right outcome (a row must cover every declared field) but reads oddly;
+  the runtime `Prism::DtypeError` for a missing field only fires for a hash
+  already typed as `Prism::RowHash`. Build the hash with the alias when testing
+  that path.
+- **`Row` needs no generated `==`/`hash`.** Crystal already compares and hashes
+  structs field by field (verified with heap strings and `Bytes`, not just
+  literals), so emitting them would only restate an inherited default. A spec
+  pins the behaviour — equality, `uniq` and hashing — because the row API
+  promises rows work as `Hash`/`Set` keys.
+- **`DataFrame#row` takes no negative index**, matching `Series#[]`; Ruby-style
+  negative positions live in `#slice(range)` only.
+
 ## 13. Testing strategy
 
 - Spec layout mirrors `src/prism/`. See
@@ -1590,6 +1652,7 @@ These are the only places allowed to allocate or materialize:
 | Edge | Why it allocates |
 | --- | --- |
 | `Series#to_a`, `Series#each`, `Series#[]` | Crystal values are not Arrow buffers |
+| `DataFrame#rows`, `#row`, `#each_row` | one hash (or `S::Row`) per row |
 | `Series#to_arrow`, `DataFrame#to_arrow` | one contiguous array; concat when chunked |
 | `DataFrame#to_s`, display | formatting needs per-value strings |
 | Parquet/CSV/IPC writers | encoding walks values |
@@ -1906,7 +1969,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` existed | 12 (done) |
 | Hash-based grouping | the stated gate was "only if a benchmark shows grouping dominating"; a probe put the key sort at 35 ms of a 1005 ms 1e5-key group-by, so hashing would buy ~4% for the group views and deterministic order | 12 follow-up (measured, declined) |
 | Vectorized per-group aggregation | the real cost is per group (~4 µs for `count`, ~2.5 µs per extra aggregate at 1e5 groups); it needs one kernel across all groups instead of one slice per group, which is a redesign of the aggregate layer | candidate (needs a design, numbers in §14) |
-| Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | post-v0.1 (candidate) |
+| Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | 13 (done) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**
 (`slice { carat > 1 }`), which works because Ruby `instance_eval`s the block

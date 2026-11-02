@@ -222,6 +222,61 @@ describe Prism::DataFrame do
     end
   end
 
+  describe "row materialization" do
+    it "returns one name-keyed hash per row, in schema order" do
+      rows = frame.rows
+
+      rows.size.should eq(4)
+      rows.first.should eq(
+        {"region" => "east", "price" => 10.0, "qty" => 1_i64}
+      )
+      rows.map(&.keys).uniq.should eq([["region", "price", "qty"]])
+    end
+
+    it "keeps nulls as nil rather than a zero value" do
+      last = frame.rows.last
+
+      last["region"].should be_nil
+      last["price"].should be_nil
+      last["qty"].should eq(4_i64)
+    end
+
+    it "yields rows in frame order across chunk boundaries" do
+      df = Prism.from_batches(split_batch(sample_batch))
+      seen = [] of Prism::Value
+
+      df.each_row { |row| seen << row["region"] }
+
+      seen.should eq(["east", "west", "east", nil])
+      df.rows.should eq(frame.rows)
+    end
+
+    it "reads a single row by position, from any chunk" do
+      frame.row(0)["region"].should eq("east")
+      Prism.from_batches(split_batch(sample_batch)).row(3)["qty"].should eq(4_i64)
+    end
+
+    it "raises IndexError outside the frame, negative indices included" do
+      expect_raises(IndexError, /row 4/) { frame.row(4) }
+      expect_raises(IndexError, /row -1/) { frame.row(-1) }
+    end
+
+    it "gives every row an empty hash when the frame has no columns" do
+      batch = Arrow::RecordBatch.from_columns(
+        {} of String => Arrow::ArrayBase, row_count: 2
+      )
+      df = Prism.from_arrow(batch)
+
+      df.rows.should eq([{} of String => Prism::Value, {} of String => Prism::Value])
+      df.row(1).should be_empty
+    end
+
+    it "returns no rows for an empty frame" do
+      Prism.from_batches([] of Arrow::RecordBatch, schema: sample_batch.schema)
+        .rows.should be_empty
+    end
+  end
+
   describe "empty and zero-column frames" do
     it "reports a zero-column frame's row count" do
       batch = Arrow::RecordBatch.from_columns(

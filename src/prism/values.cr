@@ -21,6 +21,13 @@ module Prism
                 Array(Value) | Hash(String, Value) | Hash(Value, Value) |
                 Nil
 
+  # One materialized row: column name to value, in schema order.
+  #
+  # This is the dynamic row shape (`DataFrame#row`, `#rows`, `#each_row`) and
+  # the input `Row.from_hash` on a generated typed schema accepts. The name
+  # exists so callers can annotate a hand-built row without repeating the union.
+  alias RowHash = Hash(String, Value)
+
   # Materializes Arrow arrays into Crystal values and reads single values.
   #
   # This is the one place in the library allowed to switch on

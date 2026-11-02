@@ -36,6 +36,8 @@ lazy optimizer never touches buffers.
 | `GroupBy` | `DataFrame` + key names + options | executes on `aggregate` |
 | `LazyFrame` | plan node tree | nothing read until `collect` |
 | `Schema` (typed) | macro-generated struct | `define_schema` |
+| `RowHash` | `Hash(String, Value)` | one materialized row, column order kept |
+| `S::Row` (typed) | macro-generated struct | nominal row for a declared schema |
 | `Value` | recursive alias: scalars, `Array(Value)`, `Hash(String, Value)`, `Hash(Value, Value)` | nested columns materialize as containers |
 
 There is no `Prism::DataType`. Data types are `Arrow::DataType` values, schemas
@@ -70,6 +72,8 @@ Kernels belong to Arrow; this library's job is to not add copies.
 | Edge | Why |
 | --- | --- |
 | `Series#to_a`, `Series#each`, `Series#[]` | Crystal values are not Arrow buffers |
+| `DataFrame#rows`, `#row`, `#each_row` | one hash per row; one chunk of values at a time |
+| `S::Frame#rows`, `#row`, `#each_row` | same, into the declared row struct |
 | `Series#to_arrow`, `DataFrame#to_arrow` | one contiguous array; concat when chunked |
 | `DataFrame#to_s` | formatting needs per-value strings |
 | file writers | encoding walks values |
@@ -87,6 +91,25 @@ Kernels belong to Arrow; this library's job is to not add copies.
 
 `Series` holds `Array(Arrow::ArrayBase)` rather than a chunked-array type because
 `arrow-rs` deliberately has none and recommends exactly this representation.
+
+### Rows: two boundaries, one shape
+
+Columns are the primary representation; rows are a convenience at the edge, and
+there are exactly two row shapes:
+
+| Boundary | Shape | Why |
+| --- | --- | --- |
+| Dynamic (`DataFrame#rows`, `#row`, `#each_row`) | `Prism::RowHash` = `Hash(String, Value)` | the schema is runtime data, so the row type cannot be nominal |
+| Declared (`define_schema`) | `S::Row`, fields typed `T?` | here the schema *is* compile-time data, so the row can have real accessors |
+
+A generated `S::Row` is possible only because the field list is known at compile
+time; `Values.extract` sees an `Arrow::DataType` at run time and must return one
+closed type for every frame (that is what keeps `Value` a single alias rather
+than an open union of user structs). Fields are nullable because
+`define_schema` declares every Arrow field nullable, so a null row value has
+somewhere to go. `S::Row.from_hash` re-enters the typed row from the dynamic
+one, and `S::Frame#rows` streams chunk by chunk — a column is materialized once
+per batch, never the whole frame.
 
 ### Memory: what `#to_arrow` costs
 

@@ -8,6 +8,14 @@ Prism.define_schema UserSchema,
   active: Bool,
   salary: Float64
 
+# A second declaration pins the remaining supported types, so typed rows prove
+# each Crystal type maps to the Arrow dtype it claims (and back).
+Prism.define_schema MetricSchema,
+  at: Time,
+  blob: Bytes,
+  small: Int32,
+  ratio: Float32
+
 private def user_batch : Arrow::RecordBatch
   Arrow::RecordBatch.from_columns({
     id:     Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64]),
@@ -136,6 +144,105 @@ describe Prism::Typed do
       typed.frame.should be_a(Prism::DataFrame)
       typed.lazy.should be_a(Prism::LazyFrame)
       typed.lazy.filter(UserSchema.active).collect.row_count.should eq(2)
+    end
+  end
+
+  describe "typed rows" do
+    it "materializes one nominal row per row, with typed fields" do
+      rows = typed_users.rows
+
+      rows.size.should eq(3)
+      rows.first.should be_a(UserSchema::Row)
+      rows.first.id.should eq(1_i64)
+      rows.first.name.should eq("ann")
+      rows.first.active.should be_true
+      rows.first.salary.should eq(100.0)
+    end
+
+    it "keeps nulls as nil in typed fields" do
+      row = typed_users.rows.last
+
+      row.name.should be_nil
+      row.salary.should be_nil
+      row.active.should be_true
+    end
+
+    it "streams rows in order across chunk boundaries" do
+      batches = [user_batch.slice(0, 2), user_batch.slice(2, 1)]
+      typed = UserSchema.from_dataframe(Prism.from_batches(batches))
+      ids = [] of Int64?
+
+      typed.each_row { |row| ids << row.id }
+
+      ids.should eq([1_i64, 2_i64, 3_i64])
+    end
+
+    it "reads one row by position and re-types the dynamic row" do
+      row = typed_users.row(1)
+
+      row.should eq(UserSchema::Row.new(2_i64, "bob", false, 200.0))
+      row.to_h.should eq(typed_users.frame.row(1))
+    end
+
+    it "raises IndexError outside the frame" do
+      expect_raises(IndexError, /row 3/) { typed_users.row(3) }
+    end
+
+    it "has no rows when the frame has no chunks" do
+      typed = UserSchema.from_dataframe(
+        Prism.from_batches([] of Arrow::RecordBatch, schema: UserSchema.schema)
+      )
+
+      typed.rows.should be_empty
+    end
+
+    it "compares and hashes structurally, so rows work in sets" do
+      rows = typed_users.rows
+
+      rows[0].should eq(UserSchema::Row.new(1_i64, "ann", true, 100.0))
+      rows[0].should_not eq(rows[1])
+      rows.uniq.size.should eq(3)
+    end
+
+    it "rebuilds a row from a name-keyed hash" do
+      hash = typed_users.frame.row(0)
+
+      UserSchema::Row.from_hash(hash).should eq(typed_users.rows[0])
+    end
+
+    it "names a missing field instead of raising KeyError" do
+      partial = Prism::RowHash.new
+      partial["id"] = 1_i64
+      partial["name"] = "ann"
+      partial["active"] = true
+
+      expect_raises(Prism::DtypeError, /salary/) do
+        UserSchema::Row.from_hash(partial)
+      end
+    end
+
+    it "decodes every declared dtype to its Crystal value" do
+      micros = 1_700_000_000_000_000_i64
+      batch = Arrow::RecordBatch.from_columns({
+        at: Arrow::PrimitiveArray(Int64).from_values([micros, micros])
+          .with_data_type(Arrow::DataType.timestamp(Arrow::TimeUnit::Microsecond)),
+        blob:  Arrow::BinaryArray.from_nullable([Bytes[1_u8, 2_u8], nil]),
+        small: Arrow::Int32Array.from_values([7_i32, 8_i32]),
+        ratio: Arrow::Float32Array.from_nullable([1.5_f32, nil]),
+      })
+      typed = MetricSchema.from_arrow(batch)
+
+      first = typed.rows.first
+      first.at.should eq(Time.unix(1_700_000_000))
+      first.blob.should eq(Bytes[1_u8, 2_u8])
+      first.small.should eq(7_i32)
+      first.ratio.should eq(1.5_f32)
+
+      # Nulls survive the typed decode unchanged.
+      last = typed.rows.last
+      last.blob.should be_nil
+      last.ratio.should be_nil
+      last.small.should eq(8_i32)
     end
   end
 
