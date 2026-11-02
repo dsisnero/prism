@@ -87,6 +87,27 @@ Kernels belong to Arrow; this library's job is to not add copies.
 `Series` holds `Array(Arrow::ArrayBase)` rather than a chunked-array type because
 `arrow-rs` deliberately has none and recommends exactly this representation.
 
+### Memory: what `#to_arrow` costs
+
+`#to_arrow` is the one place a chunked frame becomes one contiguous batch, and it
+is where an unwary pipeline pays:
+
+- **One chunk: free.** `Arrow.concat_batches` returns a batch over the existing
+  arrays, so the columns are the *same* objects (pinned by a spec). A `Series`
+  over one chunk returns that chunk outright.
+- **Many chunks: one full copy.** Values and validity buffers for every column
+  are concatenated into fresh allocations. A 1e6-row frame of four columns that
+  arrived as 1k-row batches allocates a second copy of the whole table (for the
+  bench frame, ~24 MB: 8 MB `Int64` + 8 MB `Float64` + offsets/payloads for two
+  string columns), and both copies are live until the frame is dropped.
+- **Zero rows: an empty batch,** no allocation.
+
+Row-reordering verbs (`sort_by`, `group_by`, `distinct`, `join`, `concat`) call
+it, because the output is a different row set anyway. Element-wise verbs never
+do. So the way to stay inside one chunk is to read with a large `batch_size`,
+and the way to avoid the copy is to consume `#each_batch` in a loop instead of
+building a `DataFrame` over many chunks.
+
 ### What is actually zero-copy (Arrow's rules, not ours)
 
 - `RecordBatch#slice` and `#project` are **views** — no buffer copy.

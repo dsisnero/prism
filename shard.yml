@@ -20,7 +20,15 @@ development_dependencies:
   ameba:
     github: crystal-ameba/ameba
     version: ~> 1.6
-  # Optional: only used by `require "prism/lipgloss"` (styled CLI tables).
-  # Kept as a development dependency so consumers are not forced to install it.
+  # Optional: only used by `require "prism/lipgloss"` (styled CLI tables) and by
+  # the interactive example. Kept as a development dependency so consumers are
+  # not forced to install it. Fetched from GitHub rather than a sibling checkout
+  # because `bubbletea` depends on it too, and shards refuses two sources for one
+  # shard name; the sibling `../lipgloss` is at the same commit.
   lipgloss:
-    path: ../lipgloss
+    github: dsisnero/lipgloss
+  # Examples only: the interactive viewer (examples/viewer.cr).
+  bubbletea:
+    github: dsisnero/bubbletea.cr
+  bubbles:
+    github: dsisnero/bubbles

@@ -39,6 +39,13 @@ dependencies:
     path: ../parquet-cr
 ```
 
+`development_dependencies` add three things that are not needed to *use* Prism:
+`ameba`, `lipgloss` (for `require "prism/lipgloss"` styled tables) and
+`bubbletea` + `bubbles` (for `examples/viewer.cr`). `lipgloss` is fetched from
+GitHub rather than the sibling checkout because `bubbletea` depends on it and
+shards refuses one shard name from two sources; the sibling is at the same
+commit.
+
 For a consumer (or after publishing), swap to the git form:
 
 ```yaml
@@ -83,6 +90,7 @@ into `temp/bench/`, so nothing is committed.
 src/prism.cr            # entrypoint: requires everything, Prism::VERSION
 src/prism/              # all library code, one directory per concern
 spec/                   # mirrors src/prism/
+examples/               # runnable README workflows (make examples)
 bench/                  # benchmarks (make bench); see docs/benchmarks.md
 plans/plan.md           # implementation plan — the resume source of truth
 docs/                   # operator docs, linked from README

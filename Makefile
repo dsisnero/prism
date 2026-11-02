@@ -2,7 +2,7 @@ CRYSTAL ?= crystal
 AMEBA   ?= ameba
 SHARDS  ?= shards
 
-.PHONY: all install update format format-check lint test bench docs clean sidecars
+.PHONY: all install update format format-check lint test examples bench docs clean sidecars
 
 all: format-check lint test
 
@@ -18,16 +18,21 @@ update:
 	$(SHARDS) update
 
 format: sidecars
-	$(CRYSTAL) tool format src spec bench
+	$(CRYSTAL) tool format src spec bench examples
 
 format-check: sidecars
-	$(CRYSTAL) tool format --check src spec bench
+	$(CRYSTAL) tool format --check src spec bench examples
 
 lint: sidecars
-	$(AMEBA) src spec bench
+	$(AMEBA) src spec bench examples
 
 test: sidecars
 	$(CRYSTAL) spec
+
+# Builds and runs the examples; `spec/examples_spec.cr` does the same for CI.
+examples: sidecars
+	$(CRYSTAL) run --no-color examples/quickstart.cr
+	$(CRYSTAL) run --no-color examples/parquet.cr
 
 bench: sidecars
 	$(CRYSTAL) run --release bench/main.cr

@@ -21,9 +21,10 @@ plan. Do not rename anything else piecemeal.
 ```bash
 make install   # shards install
 make update    # shards update
-make format    # crystal tool format src spec bench
-make lint      # ameba src spec bench
+make format    # crystal tool format src spec bench examples
+make lint      # ameba src spec bench examples
 make test      # crystal spec
+make examples  # run examples/quickstart.cr and examples/parquet.cr
 make bench     # crystal run --release bench/main.cr
 make docs      # crystal docs -o api
 make clean     # remove temp/, api/, .crystal-cache

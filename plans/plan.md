@@ -21,17 +21,23 @@ implicit.
 ## Where we are
 
 **Start here:** run `make lint && make test` (324 examples, roughly 30 s warm),
-then take the first unchecked item under Phase 9e in §12. This block is the only
+then take the first unchecked item under Phase 9e in §12 (`v0.1.0` tag). This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
-**Current focus:** Phase 9e — examples and the v0.1.0 tag. Phase 9d is closed.
+**Current focus:** Phase 9e — examples and memory notes are in; only the
+`v0.1.0` tag is left, and it needs the owner's go-ahead.
 
 **Next up** (in order, each roughly one commit):
 
-1. **Phase 9e — examples** — `examples/` for the README workflows, including the
-   interactive viewer on `bubbletea` + `bubbles` + `ultraviolet` (development
-   dependencies only).
-2. **Phase 9e — release** — memory notes for `#to_arrow`, then the `v0.1.0` tag.
+1. **`v0.1.0` tag** — run `PRISM_COMPILE_SPECS=1` and `PRISM_EXAMPLE_SPECS=1`
+   first (325 and 328 examples respectively), then tag and write the release
+   notes from `CHANGELOG.md`. Owner-gated: the tag is a publication decision.
+2. **Phase 10 rename** — the folder and GitHub repository (`dataframe` →
+   `prism`), then the `path:` → `github:` dependency swap in `shard.yml`.
+
+**Just landed (9e):** `examples/quickstart.cr`, `examples/parquet.cr` and
+`examples/viewer.cr` (bubbletea + bubbles + ultraviolet, dev deps only), gated
+example specs, a `make examples` target, and the `#to_arrow` memory notes.
 
 **Just landed (9d, now complete):** projection pruning through joins
 (`Plan::Join#input_requirements` attributes each output name to its side; keys are
@@ -65,7 +71,7 @@ and `n_unique` — O(n) instead of a sort, with float keys canonicalized so
 | 9b | API parity: lazy verbs, `Series` element-wise methods | **done** |
 | 9c | Expression coverage: literal folding, decimals, dictionaries | **done** |
 | 9d | Optimizer and performance parity (joins, slice, benchmarks, `arrow-row`) | **done** |
-| 9e | Examples, release notes, v0.1.0 tag | not started |
+| 9e | Examples, memory notes, v0.1.0 tag | **in progress** (tag left) |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
 **Last feature commit:** `715dae3` — Phase 9d float-key canonicalization and
@@ -1341,12 +1347,30 @@ a struct array: decimals materialize instead of raising.
 
 #### 9e. Release
 
-- [ ] `examples/` for the README workflows, including an interactive viewer
-      built on `dsisnero/bubbletea` + `dsisnero/bubbles` (table viewport) and
-      `dsisnero/ultraviolet` for terminal I/O — the TUI counterpart to
-      `to_styled`, as a development dependency only
-- [ ] Memory notes: `#to_arrow` copy cost documented
-- [ ] v0.1.0 tag
+- [x] `examples/` for the README workflows: `quickstart.cr` (expressions,
+      `group_by`, join), `parquet.cr` (write/read, projection + predicate
+      pushdown, `explain`) and `viewer.cr`, an interactive table browser on
+      `dsisnero/bubbletea` + `dsisnero/bubbles` (table viewport) with
+      `dsisnero/ultraviolet` — the TUI counterpart to `to_styled`. All three are
+      development-dependency only, and compile-or-run checked by
+      `spec/examples_spec.cr` (`PRISM_EXAMPLE_SPECS=1`).
+- [x] Memory notes: `#to_arrow` copy cost documented in
+      [docs/architecture.md](../docs/architecture.md#memory-what-to_arrow-costs),
+      including what is free (one chunk, zero rows), what copies (one chunked
+      concatenation), and how to avoid it (`each_batch`, larger `batch_size`).
+- [ ] v0.1.0 tag — needs the owner's go-ahead and both opt-in spec suites green
+
+**Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
+and executes each one and asserts the summary lines it prints (`rows: 5, columns:
+4`, `rows read: 5`, `projection: [region, qty]`), so a README snippet that stops
+working fails a spec. Compiling one example costs a full dependency build, hence
+the `PRISM_EXAMPLE_SPECS=1` gate, matching `PRISM_COMPILE_SPECS`.
+
+The viewer needed a dependency change: `lipgloss` moved from `path: ../lipgloss`
+to `github: dsisnero/lipgloss` because `bubbletea` depends on it and shards
+refuses one shard name from two sources (the sibling checkout is at the same
+commit, `cdf2115`). `bubbletea` and `bubbles` are development dependencies, so a
+consumer installs none of it.
 
 ### Phase 10 — repository rename (owner-gated)
 

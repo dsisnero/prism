@@ -82,6 +82,19 @@ typed = UserSchema.from_arrow(record_batch)
 typed.filter(&.active).select(&.salary)   # a misspelt field is a compile error
 ```
 
+### Examples
+
+Runnable versions of the snippets above live in [`examples/`](examples/):
+
+```bash
+make examples                        # quickstart + Parquet pushdown, prints tables
+crystal run examples/quickstart.cr   # in-memory: expressions, group_by, join
+crystal run examples/parquet.cr      # write/read, projection + predicate pushdown
+crystal run examples/viewer.cr       # interactive table browser (bubbletea + bubbles)
+```
+
+The viewer needs the development dependencies (`make install`) and quits with `q`.
+
 ### Interoperability
 
 Every boundary is an Arrow type: `Prism::DataFrame` wraps
@@ -111,7 +124,8 @@ df.to_arrow == batch   # schema and values preserved
 ```bash
 make install
 make test
-make bench    # 1e6-row timings, see docs/benchmarks.md
+make examples   # runnable README workflows, see examples/
+make bench      # 1e6-row timings, see docs/benchmarks.md
 ```
 
 See [docs/development.md](docs/development.md) for the sibling-checkout layout,

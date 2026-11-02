@@ -134,6 +134,21 @@ output.should contain("salry")
 Keep these few and slow-path; they are the only way to test a compile-time
 guarantee.
 
+## Example specs
+
+`examples/*.cr` are compiled and run, because they are the code readers copy out
+of the README and they rot silently otherwise. Each one costs a full dependency
+compile, so they are gated the same way:
+
+```bash
+PRISM_EXAMPLE_SPECS=1 crystal spec spec/examples_spec.cr
+```
+
+Each example prints a few stable summary lines (`rows read: 5`, `projection:
+[region, qty]`), and the spec asserts on those rather than on table formatting.
+`examples/viewer.cr` needs a terminal, so it is only compiled
+(`crystal build --no-codegen`).
+
 ## Determinism
 
 No randomness without a seed. Group order, sort order with ties, and null
