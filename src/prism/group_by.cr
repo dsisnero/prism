@@ -118,15 +118,25 @@ module Prism
         return empty_result(schema, key_arrays, columns, batch, types)
       end
 
+      # Grouping compares canonical keys, so `-0.0`/`0.0` and every NaN fall into
+      # one group; the emitted key values stay the original ones.
+      canonical_keys = RowKeys.canonical(key_arrays)
+      recanonicalized = canonical_keys.zip(key_arrays).any? { |(left, right)| !left.same?(right) }
+
       nulls_first = @null_keys != :last
-      sort_columns = key_arrays.map do |array|
+      sort_columns = canonical_keys.map do |array|
         Arrow::SortColumn.new(array, Arrow::SortOptions.new(false, nulls_first))
       end.to_a
       order = Arrow.lexsort_to_indices(sort_columns)
 
       sorted_batch = Arrow.take_record_batch(batch, order)
       sorted_keys = key_arrays.map { |array| Arrow.take(array, order) }.to_a
-      ranges = Arrow.partition(sorted_keys).ranges
+      partition_keys = if recanonicalized
+                         canonical_keys.map { |array| Arrow.take(array, order) }.to_a
+                       else
+                         sorted_keys
+                       end
+      ranges = Arrow.partition(partition_keys).ranges
 
       first_rows = Arrow::PrimitiveArray(UInt32).from_values(
         ranges.map(&.begin.to_u32)

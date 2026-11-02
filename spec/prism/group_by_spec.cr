@@ -148,6 +148,25 @@ describe Prism::GroupBy do
     end
   end
 
+  describe "float keys" do
+    it "groups signed zero and every NaN together, agreeing with distinct" do
+      signaling_nan = 0x7FF0_0000_0000_0001_u64.unsafe_as(Float64)
+      frame = Prism.from_columns({
+        f: Arrow::Float64Array.from_values(
+          [0.0, -0.0, Float64::NAN, signaling_nan, 1.0]
+        ),
+        v: Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64, 5_i64]),
+      })
+
+      grouped = frame.group_by("f").aggregate(total: col("v").sum)
+
+      # {0.0, NaN, 1.0}: -0.0 joins 0.0 and both NaNs are one key.
+      grouped.row_count.should eq(3)
+      frame.distinct("f").row_count.should eq(3)
+      grouped["total"].to_a.should eq([3_i64, 7_i64, 5_i64])
+    end
+  end
+
   describe "result shape" do
     it "puts key columns first, then aggregates, with derived dtypes" do
       grouped = group_frame.group_by("region").aggregate(

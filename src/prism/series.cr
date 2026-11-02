@@ -147,13 +147,13 @@ module Prism
     end
 
     # Distinct values, keeping the first occurrence of each in original order.
-    # Nulls are a value, so at most one null survives; NaNs match each other and
-    # `-0.0`/`0.0` stay apart, because keys are compared as `arrow-row` bytes
-    # (see `Prism::RowKeys`).
+    # Nulls are a value, so at most one null survives. Floats are canonicalized
+    # before keying (`Prism::RowKeys`), so `-0.0` and `0.0` are one value and so
+    # is every NaN.
     def unique : Series
       return self if size <= 1
 
-      array = to_arrow
+      array = RowKeys.canonical(to_arrow)
       rows = RowKeys.converter([array], [@name]).convert_columns([array])
       kept = RowKeys.first_occurrences(rows)
       return self if kept.size == array.len

@@ -74,10 +74,12 @@ here), so even discounted for that the first two are ~2.5x, and the join is the
 smallest win — ~1.3x — because a 1e6-row encode, probe and 1e6-row gather is not
 dominated by key hashing.
 
-The encoding also fixed two semantics that no amount of tuning would have:
-NaN keys now match (Crystal's `==` kept them apart, so a NaN could never join or
-dedupe), and `-0.0`/`0.0` are now distinct keys, which is Arrow's total order —
-and exactly what Polars does, since it hashes the same physical bits.
+The encoding also fixed two semantics that no amount of tuning would have: NaN
+keys now match (Crystal's `==` kept them apart, so a NaN could never join or
+dedupe), and keys follow `==` rather than `totalOrder`, so `-0.0` and `0.0` are
+one key. That needs one normalizing pass over float key columns, because the row
+format stores `totalOrder` bits — the same `canonical_f64` step Polars takes
+before hashing. Int and string keys pay nothing for it.
 
 **Pushdown pays, and row-group pruning needs clustered data.** Reading 2 of 4
 columns is 74 ms against 117 ms for all of them (37% saved). `limit 100` is 3 ms

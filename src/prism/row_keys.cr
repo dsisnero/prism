@@ -1,28 +1,66 @@
 require "set"
 
 module Prism
-  # Canonical row keys, built with `arrow-cr`'s port of the `arrow-row` crate.
+  # Key handling shared by every keyed operation: joins, `distinct`, `unique`,
+  # `n_unique` and `group_by`.
   #
   # `Arrow::RowConverter` encodes one or more columns into big-endian bytes whose
   # `memcmp` order matches the sort order (null sentinel, sign-flipped integers,
   # IEEE `totalOrder` floats, block-encoded strings). Equal keys encode to equal
-  # bytes, so a `Hash`/`Set` over encoded rows turns joins, `distinct` and
-  # `n_unique` into O(n) passes with no per-row boxing. This is why Arrow has no
-  # hashing kernel: `arrow-row` *is* the primitive, and this module is the only
-  # place Prism touches it.
+  # bytes, so a `Hash`/`Set` over encoded rows turns joins and `distinct` into
+  # O(n) passes with no per-row boxing. This is why Arrow has no hashing kernel:
+  # `arrow-row` *is* the primitive, and this module is the only place Prism
+  # touches it.
   #
-  # Three consequences of encoding rather than comparing Crystal values, all
-  # intentional:
+  # Two things differ between "equal under `==`" and "equal bytes":
   #
-  # - Two NaN keys **match**. `Float64#==` says otherwise, so the earlier
-  #   value-keyed path could not join or dedupe NaNs at all.
-  # - `-0.0` and `0.0` encode differently, so they are **distinct** keys. That is
-  #   Arrow's total order, and Polars hashes the same physical bits.
-  # - Nulls encode like a value, i.e. they form one key of their own. A join that
-  #   must *not* match nulls (`nulls_equal: false`) therefore checks the null
-  #   bitmaps rather than the encoding (`#complete?`).
+  # - **Floats.** The row format is `totalOrder`, so `-0.0` and `0.0` encode
+  #   differently and NaNs encode by payload. Keying must follow `==`, not
+  #   ordering — `-0.0 == 0.0` is true and `NaN != NaN`, while for keys every NaN
+  #   is one value (SQL, Polars and pandas all agree). `#canonical` normalizes
+  #   float key columns first, exactly as Polars' `canonical_f64` does, and also
+  #   passes them to `group_by`, so every keyed verb agrees on what one key is.
+  # - **Nulls.** A null encodes like a value, i.e. all nulls are one key. That is
+  #   what `distinct` and `group_by` want; a join that must *not* match nulls
+  #   (`nulls_equal: false`) checks the key columns' null bitmaps instead.
   module RowKeys
     extend self
+
+    # Canonical quiet-NaN bit patterns and the sign bits of the three float
+    # widths (`totalOrder` would otherwise keep payloads and signed zero apart).
+    F16_SIGN          = 0x8000_u16
+    F16_EXPONENT      = 0x7C00_u16
+    F16_MANTISSA      = 0x03FF_u16
+    F16_CANONICAL_NAN = 0x7E00_u16
+
+    F32_SIGN          = 0x8000_0000_u32
+    F32_EXPONENT      = 0x7F80_0000_u32
+    F32_MANTISSA      = 0x007F_FFFF_u32
+    F32_CANONICAL_NAN = 0x7FC0_0000_u32
+
+    F64_SIGN          = 0x8000_0000_0000_0000_u64
+    F64_EXPONENT      = 0x7FF0_0000_0000_0000_u64
+    F64_MANTISSA      = 0x000F_FFFF_FFFF_FFFF_u64
+    F64_CANONICAL_NAN = 0x7FF8_0000_0000_0000_u64
+
+    # Key columns in canonical form: `-0.0` becomes `0.0` and every NaN becomes
+    # one quiet NaN. Arrays of other dtypes (and float columns that already need
+    # no change) are returned as-is, so the common path copies nothing.
+    def canonical(arrays : Array(Arrow::ArrayBase)) : Array(Arrow::ArrayBase)
+      arrays.map { |array| canonical(array) }
+    end
+
+    def canonical(array : Arrow::ArrayBase) : Arrow::ArrayBase
+      # Widen first: the method is specialized per call-site type, and a
+      # narrower one (a `NullArray`, say) has no float array to cast to.
+      source = array.as(Arrow::ArrayBase)
+      case source.data_type.kind
+      when .float64? then canonical_f64(source.as(Arrow::PrimitiveArray(Float64)))
+      when .float32? then canonical_f32(source.as(Arrow::PrimitiveArray(Float32)))
+      when .float16? then canonical_f16(source.as(Arrow::PrimitiveArray(Arrow::Float16)))
+      else                source
+      end
+    end
 
     # A converter for `arrays`, one key column each.
     #
@@ -78,6 +116,107 @@ module Prism
       seen = Set(Arrow::Row).new(rows.num_rows)
       rows.num_rows.times { |row| seen.add?(rows.row(row)) }
       seen.size
+    end
+
+    # --- float canonicalization -------------------------------------------
+
+    # Floats are normalized in two passes: scan for anything to change (no
+    # allocation, and the common case of a clean column copies nothing), then
+    # rebuild only when it found something.
+    private def canonical_f64(
+      array : Arrow::PrimitiveArray(Float64),
+    ) : Arrow::PrimitiveArray(Float64)
+      changed = false
+      index = 0
+      while index < array.len
+        bits = array.values[index].unsafe_as(UInt64)
+        if canonical_f64_bits(bits) != bits
+          changed = true
+          break
+        end
+        index += 1
+      end
+      return array unless changed
+
+      values = Array(Float64).new(array.len) do |position|
+        canonical_f64_bits(array.values[position].unsafe_as(UInt64)).unsafe_as(Float64)
+      end
+      Arrow::PrimitiveArray(Float64).new(
+        Arrow::ScalarBuffer(Float64).from(values), array.nulls, array.data_type
+      )
+    end
+
+    private def canonical_f32(
+      array : Arrow::PrimitiveArray(Float32),
+    ) : Arrow::PrimitiveArray(Float32)
+      changed = false
+      index = 0
+      while index < array.len
+        bits = array.values[index].unsafe_as(UInt32)
+        if canonical_f32_bits(bits) != bits
+          changed = true
+          break
+        end
+        index += 1
+      end
+      return array unless changed
+
+      values = Array(Float32).new(array.len) do |position|
+        canonical_f32_bits(array.values[position].unsafe_as(UInt32)).unsafe_as(Float32)
+      end
+      Arrow::PrimitiveArray(Float32).new(
+        Arrow::ScalarBuffer(Float32).from(values), array.nulls, array.data_type
+      )
+    end
+
+    private def canonical_f16(
+      array : Arrow::PrimitiveArray(Arrow::Float16),
+    ) : Arrow::PrimitiveArray(Arrow::Float16)
+      changed = false
+      index = 0
+      while index < array.len
+        bits = array.values[index].bits
+        if canonical_f16_bits(bits) != bits
+          changed = true
+          break
+        end
+        index += 1
+      end
+      return array unless changed
+
+      values = Array(Arrow::Float16).new(array.len) do |position|
+        Arrow::Float16.from_bits(canonical_f16_bits(array.values[position].bits))
+      end
+      Arrow::PrimitiveArray(Arrow::Float16).new(
+        Arrow::ScalarBuffer(Arrow::Float16).from(values), array.nulls, array.data_type
+      )
+    end
+
+    private def canonical_f64_bits(bits : UInt64) : UInt64
+      return 0_u64 if bits == F64_SIGN
+      return F64_CANONICAL_NAN if nan?(bits, F64_EXPONENT, F64_MANTISSA)
+
+      bits
+    end
+
+    private def canonical_f32_bits(bits : UInt32) : UInt32
+      return 0_u32 if bits == F32_SIGN
+      return F32_CANONICAL_NAN if nan?(bits, F32_EXPONENT, F32_MANTISSA)
+
+      bits
+    end
+
+    private def canonical_f16_bits(bits : UInt16) : UInt16
+      return 0_u16 if bits == F16_SIGN
+      return F16_CANONICAL_NAN if nan?(bits, F16_EXPONENT, F16_MANTISSA)
+
+      bits
+    end
+
+    # A NaN has an all-ones exponent and a non-zero mantissa (the sign bit is
+    # irrelevant: `-NaN` and `NaN` are the same key).
+    private def nan?(bits, exponent, mantissa) : Bool
+      (bits & exponent) == exponent && (bits & mantissa) != 0
     end
   end
 end

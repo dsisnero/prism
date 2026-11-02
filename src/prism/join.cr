@@ -81,6 +81,11 @@ module Prism
       how : Symbol,
       nulls_equal : Bool,
     ) : Tuple(Array(UInt32?), Array(UInt32?))
+      # Keys are compared as canonical bytes, so `-0.0`/`0.0` and NaN payloads
+      # are one key each rather than distinct total-order values.
+      left_columns = RowKeys.canonical(left_columns)
+      right_columns = RowKeys.canonical(right_columns)
+
       converter = RowKeys.converter(left_columns, names)
       left_rows_encoded = converter.convert_columns(left_columns)
       right_rows_encoded = converter.convert_columns(right_columns)

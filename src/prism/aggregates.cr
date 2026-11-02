@@ -43,6 +43,7 @@ module Prism
       # A null column has no non-null values, and it has no encoding either.
       return 0_i64 if array.len == 0 || array.data_type.kind.null?
 
+      array = RowKeys.canonical(array)
       rows = RowKeys.converter([array], [name]).convert_columns([array])
       (RowKeys.distinct_count(rows) - (array.null_count > 0 ? 1 : 0)).to_i64
     end

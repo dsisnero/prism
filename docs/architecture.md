@@ -325,9 +325,11 @@ pairs      -> Arrow.take per column -> compose -> suffix/coalesce -> schema
 
 Keys are encoded as `arrow-row` rows (`Prism::RowKeys`): one canonical byte
 string per key, hashed and compared as bytes with no per-row boxing, and the
-same arena also answers `distinct` and `n_unique`. Nulls encode like values, so
-`nulls_equal: false` is enforced by testing the key columns' null bitmaps before
-indexing or probing, not by special-casing the encoding.
+same arena also answers `distinct`, `n_unique` and `group_by`. Float key columns
+are canonicalized first (`-0.0 → 0.0`, every NaN → one quiet NaN), because the
+row format is `totalOrder` and keying must follow `==` instead. Nulls encode like
+values, so `nulls_equal: false` is enforced by testing the key columns' null
+bitmaps before indexing or probing, not by special-casing the encoding.
 
 Payload columns stay in Arrow and are gathered by index.
 
@@ -364,15 +366,20 @@ and the *first* occurrence is simply the first time the encoding is seen, so
 input order comes for free (the previous sort-plus-partition path had to scan
 each run for its smallest original index).
 
-Three semantics follow from the encoding, deliberately: two NaN keys match
-(Crystal's `==` says otherwise), `-0.0` and `0.0` are distinct (Arrow's total
-order, and Polars hashes the same physical bits), and nulls form one key of their
-own — which is what `distinct` wants, and what `n_unique` subtracts because the
-aggregate counts non-null values.
+Floats need one normalizing pass before they are encoded. The row format stores
+IEEE `totalOrder` bits — correct for sorting, wrong for keys — so `-0.0` would
+encode differently from `0.0` and NaNs would differ by payload. `RowKeys.canonical`
+maps `-0.0` to `0.0` and every NaN to one quiet NaN, exactly like Polars'
+`canonical_f64`, so keying follows `==` (plus "all NaNs are one key", which is
+what SQL, Polars and pandas do). Nulls form one key of their own, which is what
+`distinct` wants, and what `n_unique` subtracts because the aggregate counts
+non-null values.
 
 Grouping is still sort-based on purpose: it yields contiguous `[start, len]`
 ranges as `RecordBatch#slice` views and a deterministic output order, which a
-hash table would give up. See [Grouping](#grouping).
+hash table would give up. It sorts *canonical* keys but emits the original key
+values, so `group_by` and `distinct` agree on what one key is. See
+[Grouping](#grouping).
 
 ## Display
 

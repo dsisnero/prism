@@ -3,8 +3,9 @@ module Prism
     # Drops duplicate rows, keeping the first occurrence of each key.
     #
     # Keys are compared as `arrow-row` bytes (`Prism::RowKeys`), so this is
-    # O(n): NaNs match each other, `-0.0`/`0.0` stay apart, and nulls are a key
-    # of their own. With no arguments every column is part of the key.
+    # O(n). Floats are canonicalized first, so `-0.0`/`0.0` are one key and every
+    # NaN is one key; nulls are a key of their own. With no arguments every
+    # column is part of the key.
     def distinct : DataFrame
       distinct_columns(column_names)
     end
@@ -42,11 +43,11 @@ module Prism
       key_arrays = keys.map do |name|
         batch.column_by_name(name) || raise ColumnNotFound.new(name, batch.column_names)
       end
+      key_arrays = RowKeys.canonical(key_arrays)
 
       rows = RowKeys.converter(key_arrays, keys).convert_columns(key_arrays)
       kept = RowKeys.first_occurrences(rows)
       return self if kept.size == batch.num_rows
-
       selected = Arrow::PrimitiveArray(UInt32).from_values(kept)
       DataFrame.new(@schema, [Arrow.take_record_batch(batch, selected)])
     end

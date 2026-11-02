@@ -38,28 +38,31 @@ describe Prism::Series do
       series.unique.should be(series)
     end
 
-    it "distinguishes signed zero and NaN payloads, like Arrow's total order" do
+    it "canonicalizes floats before keying, like Polars: one NaN, one zero" do
       zeros = Prism::Series.new(
         "z",
         [Arrow::Float64Array.from_values([0.0, -0.0, Float64::NAN, Float64::NAN])] of Arrow::ArrayBase,
         Arrow::DataType.float64
       )
 
-      zeros.unique.size.should eq(3)
+      # `-0.0 == 0.0`, and every NaN is one key, so two distinct values remain.
+      zeros.unique.to_a.size.should eq(2)
+      zeros.n_unique.should eq(2)
     end
 
-    it "keeps one NaN key, unlike Crystal's ==" do
+    it "keeps one NaN key even across payloads, unlike Crystal's ==" do
+      signaling_nan = 0x7FF0_0000_0000_0001_u64.unsafe_as(Float64)
       series = Prism::Series.new(
         "f",
         [Arrow::Float64Array.from_values(
-          [Float64::NAN, Float64::NAN, 1.0, 0.0, -0.0]
+          [Float64::NAN, signaling_nan, 1.0, 0.0, -0.0]
         )] of Arrow::ArrayBase,
         Arrow::DataType.float64
       )
 
-      # NaN encodes to one canonical key; 0.0 and -0.0 stay apart.
-      series.unique.size.should eq(4)
-      series.n_unique.should eq(4)
+      # NaN → canonical quiet NaN, -0.0 → 0.0: {NaN, 1.0, 0.0}.
+      series.unique.size.should eq(3)
+      series.n_unique.should eq(3)
     end
 
     it "deduplicates dictionary-encoded values by value, not by key index" do
@@ -70,6 +73,39 @@ describe Prism::Series do
 
       series.unique.to_a.should eq(["west", "east"])
       series.n_unique.should eq(2)
+    end
+
+    it "canonicalizes float32 keys as well" do
+      series = Prism::Series.new(
+        "f",
+        [Arrow::Float32Array.from_values(
+          [0.0_f32, -0.0_f32, Float32::NAN, Float32::NAN]
+        )] of Arrow::ArrayBase,
+        Arrow::DataType.float32
+      )
+
+      series.unique.size.should eq(2)
+    end
+
+    it "canonicalizes float16 keys as well" do
+      array = Arrow::Float16Array.from_values([
+        Arrow::Float16.from_f32(0.0_f32),
+        Arrow::Float16.from_f32(-0.0_f32),
+        Arrow::Float16::NAN,
+      ])
+      series = Prism::Series.new("f", [array.as(Arrow::ArrayBase)], array.data_type)
+
+      series.unique.size.should eq(2)
+    end
+
+    it "keeps nulls as one key while canonicalizing floats" do
+      series = Prism::Series.new(
+        "f",
+        [Arrow::Float64Array.from_nullable([0.0, -0.0, nil])] of Arrow::ArrayBase,
+        Arrow::DataType.float64
+      )
+
+      series.unique.to_a.should eq([0.0, nil])
     end
   end
 

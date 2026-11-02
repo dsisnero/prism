@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (318 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (323 examples, roughly 30 s warm),
 then take the first unchecked item under Phase 9e in §12. This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
@@ -41,8 +41,8 @@ slice pinned to `Sort`/`GroupBy`/`Distinct` (`Plan::Slice`, nested limits compos
 `explain` shows `slice: offset=… count=…`, and `DataFrame#sort_by_slice` gathers
 only the window), `make bench` with numbers in [docs/benchmarks.md](benchmarks.md),
 and `arrow-row` key encoding (`Prism::RowKeys`) for joins, `distinct`, `unique`
-and `n_unique` — O(n) instead of a sort, with NaN keys matching and ±0 staying
-distinct.
+and `n_unique` — O(n) instead of a sort, with float keys canonicalized so
+`-0.0`/`0.0` are one key and every NaN is one key.
 
 **Owner actions, not code:**
 
@@ -71,7 +71,7 @@ distinct.
 **Last feature commit:** `49bb2fa` — Phase 9d `arrow-row` keys for joins,
 `distinct` and `n_unique` (`Prism::RowKeys`); this closes Phase 9d.
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (319) and costs ~13 s; run it before a release.
+adds the compile-failure spec (324) and costs ~13 s; run it before a release.
 
 ---
 
@@ -322,7 +322,10 @@ primitive that makes O(n) distinct and unboxed join keys possible.
 **Resolved 2026-11-01:** `arrow-row` landed in `arrow-cr` (Phase 13 there), so
 `Prism::RowKeys` uses `Arrow::RowConverter` for joins, `distinct`, `unique` and
 `n_unique`. The earlier sort-based distinct path and the boxed `Array(Value)`
-join keys are gone; see [§14](#native-row-encoding-for-keys).
+join keys are gone; see [§14](#native-row-encoding-for-keys). Because the row
+format is `totalOrder`, float key columns are canonicalized before encoding, so
+keying follows `==` (`-0.0 == 0.0`, every NaN one key) and `group_by` — which
+sorts canonical keys — agrees with `distinct`.
 
 #### C19. `Arrow.take_record_batch` reuses the source schema
 
@@ -1328,8 +1331,9 @@ a struct array: decimals materialize instead of raising.
       `arrow-cr` kernel, not a Prism change.
 - [x] Switch join/distinct keys to `arrow-row` (`Prism::RowKeys`): joins hash
       canonical byte rows from `Arrow::RowConverter` instead of boxed values,
-      `distinct`/`unique`/`n_unique` became O(n), NaN keys match, and ±0 stay
-      distinct (C18, §14)
+      `distinct`/`unique`/`n_unique` became O(n), and float keys are
+      canonicalized (`-0.0`/`0.0` one key, every NaN one key) so keying follows
+      `==` and `group_by` agrees (C18, §14)
 
 #### 9e. Release
 
@@ -1473,7 +1477,7 @@ Implemented in Phase 9d. `Prism::RowKeys` is the only place Prism touches
 | Join keys | one `Array(Value)` per row, boxed | one canonical row view per row, hashed as bytes |
 | `distinct` / `unique` | O(n log n) sort + partition | O(n) seen-set |
 | `n_unique` | O(n log n) | O(n) |
-| NaN / signed-zero keys | Crystal `==`, so NaN never matched NaN | canonical encoding: NaNs match, `-0.0`/`0.0` stay distinct |
+| NaN / signed-zero keys | Crystal `==`, so NaN never matched NaN | canonicalized floats: every NaN is one key, `-0.0` joins `0.0` (Polars `canonical_f64`) |
 
 Why this shape:
 
@@ -1481,9 +1485,12 @@ Why this shape:
   IPC, not hashing, so no Arrow implementation ships a hash function. What
   `arrow-row` provides is a canonical byte encoding built for `memcmp`; hashing
   those bytes is then Crystal's job, and `Bytes`/`Row` hash by content.
-- **Polars parity on both float edge cases.** Polars hashes the physical bits,
-  so `-0.0` and `0.0` are different keys there and NaNs group together. Prism
-  matches both, and `spec/prism/{join,distinct}_spec.cr` pins them.
+- **Floats are canonicalized, not hashed as bits.** `arrow-row` stores IEEE
+  `totalOrder`, which is right for sorting and wrong for keys: it would make
+  `-0.0` a different key from `0.0` and NaNs differ by payload. Polars solves
+  this with `canonical_f64` (`x + 0.0`, then one quiet NaN); `RowKeys.canonical`
+  does the same, so keying follows `==` plus "all NaNs are one key".
+  `spec/prism/{join,distinct,group_by}_spec.cr` pin it.
 - **Nulls are a value in the encoding.** `distinct` wants exactly that (one null
   key); a join that must not match nulls (`nulls_equal: false`) checks the key
   columns' null bitmaps before indexing or probing, which costs nothing when the
@@ -1582,7 +1589,7 @@ What they decide:
 | Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
 | NaN join keys never match | **Fixed** by the `arrow-row` encoding (§14): NaNs encode canonically and match. Pinned by a join spec |
-| `-0.0` and `0.0` are distinct keys | Consequence of the same encoding (Arrow total order, and Polars hashes the same bits). Pinned by a join spec, so nobody "fixes" it by accident |
+| Floats keyed by `totalOrder` bits would split `-0.0`/`0.0` and NaN payloads | `RowKeys.canonical` normalizes float key columns before encoding (Polars `canonical_f64`); `join`, `distinct` and `group_by` specs pin that they agree |
 | Proving joins/distinct need hashing | Settled: Phase 9 benchmarks showed `distinct`/`n_unique` were sort-bound, and `arrow-row` (option B) landed in `arrow-cr`; §14 records the measurements |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
@@ -1593,8 +1600,8 @@ What they decide:
 - Null-key policy default for `group_by` on `Utf8` vs numeric columns: one
   policy or per-dtype defaults? (Phase 4)
 - ~~`n_unique` on floats: use Arrow total order (NaN payloads distinct) or
-  IEEE-equality grouping?~~ Decided in 9d: the row encoding is total order, so
-  NaNs form one key and `-0.0`/`0.0` stay apart.
+  IEEE-equality grouping?~~ Decided in 9d: float keys are canonicalized like
+  Polars' `canonical_f64`, so every NaN is one key and `-0.0`/`0.0` are one key.
 - Join suffix scheme: `_right` vs `_y` vs error. (Phase 5)
 
 ## 16. Definition of done

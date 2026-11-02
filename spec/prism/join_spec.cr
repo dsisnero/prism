@@ -127,11 +127,24 @@ describe Prism::DataFrame do
       joined["f"].to_a.first.as(Float64).nan?.should be_true
     end
 
-    it "keeps signed zero distinct, like Arrow's total order" do
+    it "matches signed zero keys, because -0.0 == 0.0" do
       left = Prism.from_columns({f: Arrow::Float64Array.from_values([0.0])})
       right = Prism.from_columns({f: Arrow::Float64Array.from_values([-0.0])})
 
-      left.join(right, on: "f").row_count.should eq(0)
+      left.join(right, on: "f").row_count.should eq(1)
+    end
+
+    it "matches NaN keys across payloads" do
+      signaling_nan = 0x7FF0_0000_0000_0001_u64.unsafe_as(Float64)
+
+      left = Prism.from_columns({
+        f: Arrow::Float64Array.from_values([Float64::NAN]),
+      })
+      right = Prism.from_columns({
+        f: Arrow::Float64Array.from_values([signaling_nan]),
+      })
+
+      left.join(right, on: "f").row_count.should eq(1)
     end
 
     it "joins dictionary-encoded keys by value, not by key index" do
