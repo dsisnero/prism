@@ -1435,7 +1435,9 @@ a struct array: decimals materialize instead of raising.
       green (340 examples at the time; a version-consistency spec followed)
 - [x] v0.1.1 tag — the two post-0.1.0 features (decimal arithmetic, nested
       materialization) released on `2026-11-02` after
-      `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (365)
+      `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (365),
+      and verified as a consumer: a fresh project with
+      `prism: github: dsisnero/prism` resolves `0.1.1` and runs `group_by`
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:
