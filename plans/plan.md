@@ -76,8 +76,9 @@ and `n_unique` — O(n) instead of a sort, with float keys canonicalized so
 | 9e | Examples, memory notes, v0.1.0 tag | **in progress** (tag left) |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last feature commit:** `17e1ef1` — Phase 9e examples, example specs and the
-`#to_arrow` memory notes (`v0.1.0` tag left, owner-gated).
+**Last feature commit:** `8263edd` — Phase 9e verb oracles
+(`spec/prism/property_spec.cr`). The `v0.1.0` tag is the only 9e item left, and
+it is owner-gated.
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (325) and costs ~13 s; run it before a release.
 
