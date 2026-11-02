@@ -20,41 +20,55 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (360 examples, roughly 30 s warm),
-then pick the first item from the **post-v0.1 backlog** below. This block is the
-only place that tracks status; do not re-derive it from `git log`.
+_Updated 2026-11-02._
 
-**Current focus:** released. `v0.1.0` is tagged and published at
-[`dsisnero/prism`](https://github.com/dsisnero/prism); Phases 0–10 are closed
-apart from the cosmetic local folder rename.
+**Start here:** `git status` (must be clean), then `make lint && make test`
+(360 examples, ~30 s warm). The table below is the only place that tracks status;
+do not re-derive it from `git log`.
 
-**Next up — post-v0.1 backlog** (in order, each roughly one commit):
+**State:** `v0.1.0` is tagged and published at
+[`dsisnero/prism`](https://github.com/dsisnero/prism) (tag `511dd15`). Two features
+have landed since and sit under `CHANGELOG.md`'s `## [Unreleased]`: decimal
+arithmetic and nested materialization. Phases 0–10 are closed apart from the
+cosmetic local folder rename.
 
-1. **Hash-based grouping** — only if a real workload shows grouping dominating;
-   it would trade contiguous group views and deterministic order for O(n).
-2. **RedAmber ergonomics** — one-call group aggregates, `sort_by("-col")`,
-   range indexing, `remove`, boolean-mask filtering (§17 has the full list with
-   the reason each is not free).
+**Next up, in order** (each is one atomic commit; the first needs an owner
+decision):
 
-**Just landed (post-0.1.0):** decimal arithmetic (Hive rules, so `dtype` and
-`eval` agree) and nested materialization — list/large-list/list-view/fixed-size
-list become `Array(Value)`, struct becomes a field-ordered `Hash(String, Value)`,
-map becomes `Hash(Value, Value)`, nulls stay `nil` at every level, nested columns
-key `distinct`/`n_unique`/grouping through the existing `arrow-row` path, and the
-table renders containers (`[1, 2]`, `{x: 1, y: "a"}`) with nested strings quoted.
+1. **Cut `v0.1.1`** (owner call) — two features are unreleased. Run
+   `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` (365), move
+   `Unreleased` under `## [0.1.1] - <date>`, bump `version:` in `shard.yml` and
+   `Prism::VERSION` (a spec asserts they match), tag, push, `gh release create`.
+   The runbook is in [docs/development.md](../docs/development.md#releasing).
+2. **RedAmber ergonomics** — one-call group aggregates
+   (`group_by(k).sum/mean/count/...`), `sort_by("-col")`, range slicing and
+   `df[rows]`, `remove(expr)`, boolean-mask filtering. §17 lists each with the
+   reason it is not free; `remove` needs its own null rule (keep rows where the
+   predicate is false **or** null).
+3. **Hash-based grouping** — only if a benchmark shows grouping dominating; it
+   would trade contiguous group views and deterministic order for O(n).
+4. **Typed row structs** — `define_schema` could generate a `Row` struct so
+   `typed` frames yield nominal rows instead of `Hash(String, Value)`. See §10
+   ("Why `Values` returns containers") for why the dynamic path cannot, and what
+   this would and would not buy.
 
-**What 0.1.0 contains:** Arrow-backed tables and series, the expression engine,
-eager verbs, `group_by`, joins, Parquet/CSV/IPC, the lazy planner with
-predicate/projection/slice pushdown and join pruning, `arrow-row` keys,
-typed schemas, display (plus optional `lipgloss` styling), benchmarks and
-examples. [`CHANGELOG.md`](../CHANGELOG.md) is the complete list; the phase
-checklists below are the working history.
+**Also open (small):** interval columns still cannot materialize (`Value` has no
+month/day/nano member), and a dictionary-encoded *float* key is compared by value
+but not canonicalized.
+
+**Gates:** `make lint` + `make test` green, **360 examples**. `PRISM_COMPILE_SPECS=1`
+adds the compile-failure spec (**361**, ~13 s) and `PRISM_EXAMPLE_SPECS=1` adds the
+four example specs (**364**, ~1 min); with both set the suite is **365**. Run both
+before a release.
+
+**Last commits:** `598dbad` nested materialization (last feature), `f963518`
+resume block. `main == origin/main`.
 
 **Owner actions, not code:**
 
-- Nothing blocking. The optional one is renaming the local checkout folder
-  `dataframe/` → `prism/` (Phase 10); the repository itself is already
-  `dsisnero/prism`.
+- Decide whether to cut `v0.1.1` now (item 1 above) or keep accumulating.
+- Optional: rename the local checkout folder `dataframe/` → `prism/` (Phase 10).
+  The repository is already `dsisnero/prism`; nothing references the folder name.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -979,6 +993,30 @@ else is a compile error naming the supported set.
 `S.from_dataframe(...)` to re-enter the typed layer. Kotlin achieves
 pipeline-wide refinement with a compiler plugin; Crystal macros cannot.
 
+### Why `Values` returns containers instead of structs
+
+A struct row materializes as `Hash(String, Value)` (field-ordered) rather than a
+generated `struct`/`class`, and that is a boundary constraint, not an omission:
+
+- **The schema is runtime data.** `Values.extract(array)` sees an
+  `Arrow::DataType` it learns at run time. A generated struct would have to be one
+  type *per nested schema*, so the return type of `extract` would become an open
+  union (`Value | Point | Address | …`) — every consumer (`to_a`, display, joins,
+  specs) would have to handle arbitrary user types, and `Values`, the single
+  dtype-dispatch point (C4), would need a macro per schema. A closed alias is what
+  keeps one representation for every frame.
+- **`NamedTuple` is not an option either.** Its keys are compile-time literals, so
+  a runtime field list cannot build one.
+- **Containers match Polars.** `to_list`/`to_dicts` convert a struct to a dict, a
+  map to a dict and a list to a list, so "struct row → `Hash`" is the same shape
+  other tools hand back, and it keeps field *order* and per-level nulls.
+- **What a struct would buy** — nominal typing (`row.x`), no string keys, fewer
+  allocations — only exists where the schema is known at compile time. That is
+  exactly the `define_schema` boundary, so the honest split is: dynamic boundary →
+  containers; static boundary → typed accessors. A generated `S::Row` struct is
+  therefore possible *for a declared schema* (see §17), with the same caveat as
+  typed frames: it stops applying the moment a verb changes the schema.
+
 ## 11. IO
 
 - `Prism.read_parquet(path, columns:, batch_size:, predicate: nil) → DataFrame`
@@ -1749,6 +1787,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | `slice(1..3)`, `df[1..3]` rows, `df[["a","b"]]` columns (RedAmber indexing) | `slice(offset, count)` / `select(...)` cover it; accepting `Range`/arrays closes the §15 question below | post-v0.1 |
 | `remove(expr)`, the inverse of `filter` (RedAmber) | needs its own null rule — keep rows where the predicate is false **or** null, which is not `filter(pred.not)` | post-v0.1 |
 | Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` exists | post-v0.1 |
+| Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | post-v0.1 (candidate) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**
 (`slice { carat > 1 }`), which works because Ruby `instance_eval`s the block

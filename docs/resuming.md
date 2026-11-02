@@ -11,7 +11,17 @@ back to a known-good state.
 - The current phase's checklist lower in the same file — it is the working
   queue for this session.
 
-## 2. Confirm the working tree
+## 2. Confirm the checkout exists
+
+This repository lives on an external volume. If the volume is not mounted, every
+path under it is missing and every command fails with "No such file or
+directory" — that is a mount problem, not a code problem. Check with:
+
+```bash
+ls -d "$(git rev-parse --show-toplevel)" 2>/dev/null || echo "volume not mounted"
+```
+
+## 3. Confirm the working tree
 
 ```bash
 git log --oneline -10
@@ -21,7 +31,7 @@ git status
 The last commit should be the previous feature, committed atomically. If the
 tree is dirty, finish or stash before starting.
 
-## 3. Confirm a clean baseline
+## 4. Confirm a clean baseline
 
 ```bash
 make lint
@@ -32,7 +42,14 @@ Both must pass before changing anything. The first `make test` compiles
 `arrow-cr` and `parquet-cr` and takes roughly 20–60 s on a warm cache; expect
 longer from cold.
 
-## 4. Pick the next feature
+Before a release, also run the opt-in suites — they shell out to the compiler and
+are skipped by `make test`:
+
+```bash
+PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test
+```
+
+## 5. Pick the next feature
 
 Take the first unchecked item in **Next up** (or the next `[ ]` in the current
 phase). For each feature:
@@ -45,7 +62,7 @@ phase). For each feature:
    status + **Where we are** refresh, divergence notes).
 4. Commit atomically using the `feat: ...` message format.
 
-## 5. Check dependency state
+## 6. Check dependency state
 
 ```bash
 shards check               # or: make install
