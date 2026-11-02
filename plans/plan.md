@@ -55,8 +55,8 @@ adds the compile-failure spec (**361**, ~13 s) and `PRISM_EXAMPLE_SPECS=1` adds 
 four example specs (**364**, ~1 min); with both set the suite is **365**. Run both
 before a release.
 
-**Last commits:** `2cbe4d7` v0.1.1 release (tagged), `5298e83` resume block,
-`598dbad` nested materialization (last feature). `main == origin/main`.
+**Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`); the
+last feature commit is `598dbad` (nested materialization). `main == origin/main`.
 
 **Owner actions, not code:**
 
