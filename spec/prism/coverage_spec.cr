@@ -113,13 +113,11 @@ describe "decimal expressions" do
     Prism::Values.extract(compared).should eq([false, true, nil])
   end
 
-  it "rejects decimal arithmetic until its scaling is modelled" do
-    expect_raises(Prism::UnsupportedOperation, /decimal/) do
-      (col("amount") + lit(2)).dtype(decimal_schema)
-    end
-    expect_raises(Prism::UnsupportedOperation, /decimal/) do
-      (col("amount") * col("qty")).dtype(decimal_schema)
-    end
+  it "runs decimal arithmetic with the kernels' Hive scale rules" do
+    # Full coverage of the rules lives in spec/prism/decimal_arithmetic_spec.cr.
+    sum = (col("amount") + lit(2)).dtype(decimal_schema)
+
+    sum.should eq(Arrow::DataType.decimal128(11, 2))
   end
 
   it "rejects unifying a decimal column with a float column" do

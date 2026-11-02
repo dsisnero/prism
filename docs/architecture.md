@@ -412,6 +412,39 @@ hash table would give up. It sorts *canonical* keys but emits the original key
 values, so `group_by` and `distinct` agree on what one key is. See
 [Grouping](#grouping).
 
+## Decimals
+
+Decimals are fixed-point, so their arithmetic cannot simply promise "the wider
+dtype": Arrow's kernels implement Hive's scale rules, and the *result* dtype
+depends on both operands. Prism declares exactly what the kernel returns, which
+is what makes `expr.dtype(schema)` trustworthy before any row is read:
+
+| Operation | Result scale | Result precision |
+| --- | --- | --- |
+| `+`, `-` | `max(s1, s2)` | `max(s1, s2) + max(p1 - s1, p2 - s2) + 1` |
+| `*` | `s1 + s2` | `p1 + p2 + 1` |
+| `/` | `s1 + 4` | `(s1 + 4 - s1 + s2) + p1` |
+| `%` | `max(s1, s2)` | `max(s1, s2) + min(p1 - s1, p2 - s2)` |
+| `-x` | `s1` | `p1` |
+
+Precision caps at the kind's maximum (38 for `Decimal128`); a product whose scale
+would exceed it raises `Prism::DtypeError` at planning time rather than
+overflowing inside the kernel. Operand promotion is deliberately narrow:
+
+- an **integer** operand becomes a decimal with scale 0 and its width's digit
+  count (`Int64` → `decimal(19, 0)`), so the Hive rule then widens precision;
+- an integer **literal** adopts the column's scale instead, so
+  `decimal(10, 2) + 1` stays at scale 2;
+- a **float** operand falls back to `Float64`, losing the scale (documented, not
+  silent — comparisons against floats still raise);
+- mixed decimal **widths** (`Decimal32`/`64`/`128`/`256`) are promoted to the
+  wider kind first, because the kernels reject two kinds in one operation;
+- a `Null` column or `nil` literal adopts the other side's dtype, so the result
+  is all null with the dtype the rule produces.
+
+`Prism::Values` materializes decimals as `BigDecimal`, so the scale survives all
+the way to `to_a` instead of appearing as a scaled integer.
+
 ## Display
 
 `DataFrame#to_s` and `#inspect` render an aligned table with a shape line, a dtype

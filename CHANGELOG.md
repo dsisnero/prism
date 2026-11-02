@@ -4,6 +4,29 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) and the structure of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Decimal arithmetic: `+`, `-`, `*`, `/`, `%` and unary `-` on `Decimal32/64/128/256`
+  columns now run on `arrow-cr`'s kernels, declaring exactly the dtype those
+  kernels return (Hive's rules: `add`/`sub` take `max(s1, s2)` and one extra
+  digit, `mul` adds both scales and both precisions plus one, `div` scales to
+  `s1 + 4`, `rem` keeps the wider scale). Integer operands are promoted to
+  decimal with scale 0, integer literals adopt the column's scale, a float
+  operand falls back to `Float64`, and mixed decimal widths are promoted to the
+  wider storage kind instead of failing inside the kernel. A product whose scale
+  would exceed the kind's maximum raises `Prism::DtypeError` at planning time.
+- A decimal column combined with a `Null` column (or `nil` literal) now yields an
+  all-null result of the right dtype, for arithmetic and comparisons alike,
+  instead of raising `DtypeError`.
+
+### Tests
+
+- `spec/prism/decimal_arithmetic_spec.cr` pins every rule above against the
+  kernel's own result dtype (the `dtype`/`eval` agreement check), and the coverage
+  spec no longer asserts that decimal arithmetic is unimplemented.
+
 ## [0.1.0] - 2026-11-01
 
 The first release. Prism is a DataFrame library over Apache Arrow: chunked

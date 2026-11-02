@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (337 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (352 examples, roughly 30 s warm),
 then pick the first item from the **post-v0.1 backlog** below. This block is the
 only place that tracks status; do not re-derive it from `git log`.
 
@@ -30,16 +30,18 @@ apart from the cosmetic local folder rename.
 
 **Next up — post-v0.1 backlog** (in order, each roughly one commit):
 
-1. **Decimal arithmetic** — `arrow-cr`'s decimal kernels grow precision per the
-   Arrow spec, so this needs a per-operator result-dtype rule before Prism can
-   declare one; today it raises `UnsupportedOperation` with a cast hint.
-2. **Nested (`list`/`struct`) materialization** — needs a tagged `Prism::Value`
+1. **Nested (`list`/`struct`) materialization** — needs a tagged `Prism::Value`
    struct, since Crystal cannot express a recursive union alias.
-3. **Hash-based grouping** — only if a real workload shows grouping dominating;
+2. **Hash-based grouping** — only if a real workload shows grouping dominating;
    it would trade contiguous group views and deterministic order for O(n).
-4. **RedAmber ergonomics** — one-call group aggregates, `sort_by("-col")`,
+3. **RedAmber ergonomics** — one-call group aggregates, `sort_by("-col")`,
    range indexing, `remove`, boolean-mask filtering (§17 has the full list with
    the reason each is not free).
+
+**Just landed (post-0.1.0):** decimal arithmetic — `+`, `-`, `*`, `/`, `%` and
+unary `-` drive `arrow-cr`'s kernels with Arrow's Hive rules, so `dtype` and
+`eval` agree; integers promote to scale 0, literals adopt the column's scale,
+floats fall back to `Float64`, and a scale overflow fails at planning time.
 
 **What 0.1.0 contains:** Arrow-backed tables and series, the expression engine,
 eager verbs, `group_by`, joins, Parquet/CSV/IPC, the lazy planner with
@@ -809,6 +811,24 @@ the column instead (`col("i64") * 1.5` is `Float64`, not `Int64` with `1.5`
 truncated to `1`), and a `Float64` literal does not narrow into a `Float32`
 column. Without that guard the "cast the literal" rule silently changes values.
 
+Decimal ⊕ decimal does **not** unify to comparison precision: Arrow's kernels
+implement Hive's rules and derive the result dtype from both operands, so Prism
+declares exactly what the kernel returns.
+
+| Operation | Result scale | Result precision |
+| --- | --- | --- |
+| `+`, `-` | `max(s1, s2)` | `max(s1, s2) + max(p1 - s1, p2 - s2) + 1` |
+| `*` | `s1 + s2` | `p1 + p2 + 1` |
+| `/` | `s1 + 4` | `(s1 + 4 - s1 + s2) + p1` |
+| `%` | `max(s1, s2)` | `max(s1, s2) + min(p1 - s1, p2 - s2)` |
+| `-x` | `s1` | `p1` |
+
+Precision caps at the kind's maximum (38 for `Decimal128`); a product whose scale
+would exceed it raises `Prism::DtypeError` before any data is read. Integer
+operands are promoted to scale 0 with their width's digit count (19 for `Int64`),
+integer *literals* adopt the column's scale, and mixed decimal widths are
+promoted to the wider storage kind (a lossless cast).
+
 Non-numeric operands (`Utf8 + Int64`) raise `Prism::DtypeError` at
 `dtype(schema)` time — before any data is touched.
 
@@ -1313,11 +1333,12 @@ C16).
       `BigDecimal` so the scale survives (the raw scaled integer would drop it)
 - [x] Out-of-range literal folds to a constant boolean, as Polars does
 - [x] Dictionary arrays materialize as their decoded values
-- [ ] Decimal **arithmetic** — deferred: `arrow-cr`'s decimal kernels grow
-      precision per the Arrow spec (`p -> p + 1` for addition), so the dtype the
-      expression declares and the dtype the kernel produces disagree. Modelling
-      it needs a per-operator result-dtype rule; until then arithmetic on
-      decimals raises `UnsupportedOperation` with a cast hint.
+- [x] Decimal **arithmetic**: `Coerce.arithmetic_operands` keeps each side's
+      precision and scale, `Coerce.arithmetic_dtype` applies Arrow's Hive rules
+      (the same rules the kernels implement, so `dtype` equals `eval`'s dtype),
+      integers promote to scale 0, floats fall back to `Float64`, and a scale
+      overflow raises at planning time. Done post-v0.1; see
+      `spec/prism/decimal_arithmetic_spec.cr`.
 - [ ] Nested (`list`/`struct`) materialization — deferred: it needs a recursive
       `Value` union, which Crystal cannot express as an alias; a tagged
       `Prism::Value` struct is the way in (§17).
@@ -1703,7 +1724,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
 | Physical top-k for a pinned slice | a bounded heap is an `arrow-cr` kernel, not a Prism one; the gather half landed in 9d | 9d (gather done) |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
-| Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 |
+| Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 (done) |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |
 | Nested list/struct in `Values` | needs a recursive `Value` union; Crystal aliases cannot recurse | post-v0.1 |
 | `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b (done) |

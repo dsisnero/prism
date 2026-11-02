@@ -129,6 +129,8 @@ module Prism
 
       decimal = left.decimal? ? left : right
       other = left.decimal? ? right : left
+      return decimal if other.kind.null?
+
       if other.integer?
         return Arrow::DataType.decimal128(38, decimal.scale || 0)
       end
@@ -136,6 +138,188 @@ module Prism
       raise DtypeError.new(
         "cannot combine #{left} with #{right}; cast the decimal to a float explicitly"
       )
+    end
+
+    # Operand dtypes for arithmetic when a decimal is involved, or `nil` when the
+    # ordinary rules apply.
+    #
+    # Decimals do not unify to comparison precision here: Arrow's kernels
+    # implement Hive's decimal rules and derive the *result* dtype from both
+    # operands, so each side keeps its own precision and scale. What they do not
+    # accept is two different decimal widths, so both are promoted to the wider
+    # kind (a lossless cast: only the storage width changes).
+    def arithmetic_operands(
+      left : Expr,
+      right : Expr,
+      schema : Arrow::Schema,
+      cache : TypeCache? = nil,
+    ) : Tuple(Arrow::DataType, Arrow::DataType)?
+      left_dtype = cache ? cache.dtype(left) : left.dtype(schema)
+      right_dtype = cache ? cache.dtype(right) : right.dtype(schema)
+      return nil unless left_dtype.decimal? || right_dtype.decimal?
+
+      # A float anywhere makes the operation float; the scale is lost, which
+      # §8.2 documents.
+      if left_dtype.floating? || right_dtype.floating?
+        return {Arrow::DataType.float64, Arrow::DataType.float64}
+      end
+
+      # A null or a literal adopts the decimal side wholesale, so
+      # `decimal(10, 2) + 1` stays at scale 2 rather than promoting to scale 0.
+      if adopted = adopted_decimal(left, right, left_dtype, right_dtype)
+        return {adopted, adopted}
+      end
+
+      decimal_pair(left_dtype, right_dtype)
+    end
+
+    # The decimal dtype a null or literal side takes on, or `nil`.
+    private def adopted_decimal(
+      left : Expr,
+      right : Expr,
+      left_dtype : Arrow::DataType,
+      right_dtype : Arrow::DataType,
+    ) : Arrow::DataType?
+      decimal = left_dtype.decimal? ? left_dtype : right_dtype
+      return decimal if left_dtype.kind.null? || right_dtype.kind.null?
+      return nil if left.literal? == right.literal?
+
+      literal = left.literal? ? left_dtype : right_dtype
+      Arrow.can_cast_types(literal, decimal) ? decimal : nil
+    end
+
+    # Both sides as decimals, promoted to the wider storage kind.
+    private def decimal_pair(
+      left_dtype : Arrow::DataType,
+      right_dtype : Arrow::DataType,
+    ) : Tuple(Arrow::DataType, Arrow::DataType)?
+      left_operand = decimal_operand(left_dtype)
+      right_operand = decimal_operand(right_dtype)
+      return nil unless left_operand && right_operand
+
+      rank = Math.max(decimal_rank(left_operand.kind), decimal_rank(right_operand.kind))
+      {with_decimal_rank(left_operand, rank), with_decimal_rank(right_operand, rank)}
+    end
+
+    # The dtype an arithmetic operation produces from its operands.
+    #
+    # These are the Hive rules `arrow-cr`'s kernels implement, so the declared
+    # dtype is exactly the dtype the kernel returns:
+    #
+    #   add/sub: scale = max(s1, s2), precision = scale + max(p1 - s1, p2 - s2) + 1
+    #   mul:     scale = s1 + s2,     precision = p1 + p2 + 1
+    #   div:     scale = s1 + 4,      precision = (scale - s1 + s2) + p1
+    #   rem:     scale = max(s1, s2), precision = scale + min(p1 - s1, p2 - s2)
+    def arithmetic_dtype(
+      op : BinaryOp,
+      operands : Tuple(Arrow::DataType, Arrow::DataType),
+    ) : Arrow::DataType
+      left, right = operands
+      return left unless left.decimal? && right.decimal?
+
+      rank = Math.max(decimal_rank(left.kind), decimal_rank(right.kind))
+      max_precision = decimal_max_precision(rank)
+      max_scale = decimal_max_scale(rank)
+      p1, s1 = precision(left), scale(left)
+      p2, s2 = precision(right), scale(right)
+
+      case
+      when op.add? || op.sub?
+        result_scale = Math.max(s1, s2)
+        result_precision = cap(Math.max(p1 - s1, p2 - s2) + result_scale + 1, max_precision)
+      when op.mul?
+        result_scale = s1 + s2
+        if result_scale > max_scale
+          raise DtypeError.new(
+            "a decimal product of #{left} and #{right} needs scale #{result_scale}, " \
+            "but the maximum is #{max_scale}; scale an operand down first"
+          )
+        end
+        result_precision = cap(p1 + p2 + 1, max_precision)
+      when op.div?
+        result_scale = cap(s1 + 4, max_scale)
+        result_precision = cap(result_scale - s1 + s2 + p1, max_precision)
+      else
+        result_scale = Math.max(s1, s2)
+        result_precision = cap(Math.min(p1 - s1, p2 - s2) + result_scale, max_precision)
+      end
+
+      decimal_data_type(rank, result_precision, result_scale)
+    end
+
+    # Integers become decimals with scale 0 and the digits their width can hold;
+    # anything else answers `nil` so the caller falls back to the normal rules.
+    private def decimal_operand(dtype : Arrow::DataType) : Arrow::DataType?
+      return dtype if dtype.decimal?
+
+      precision = integer_precision(dtype.kind)
+      precision && Arrow::DataType.decimal128(precision, 0)
+    end
+
+    private def integer_precision(kind : Arrow::DataType::Kind) : Int32?
+      case kind
+      when .int8?, Arrow::DataType::Kind::UInt8   then 3
+      when .int16?, Arrow::DataType::Kind::UInt16 then 5
+      when .int32?, Arrow::DataType::Kind::UInt32 then 10
+      when .int64?                                then 19
+      when Arrow::DataType::Kind::UInt64          then 20
+      else                                             nil
+      end
+    end
+
+    # 32/64/128/256: how many bits the decimal's storage takes.
+    private def decimal_rank(kind : Arrow::DataType::Kind) : Int32
+      case kind
+      when .decimal32?  then 32
+      when .decimal64?  then 64
+      when .decimal256? then 256
+      else                   128
+      end
+    end
+
+    private def decimal_max_precision(rank : Int32) : Int32
+      case rank
+      when  32 then Arrow::DECIMAL32_MAX_PRECISION.to_i
+      when  64 then Arrow::DECIMAL64_MAX_PRECISION.to_i
+      when 256 then Arrow::DECIMAL256_MAX_PRECISION.to_i
+      else          Arrow::DECIMAL128_MAX_PRECISION.to_i
+      end
+    end
+
+    private def decimal_max_scale(rank : Int32) : Int32
+      case rank
+      when  32 then Arrow::DECIMAL32_MAX_SCALE.to_i
+      when  64 then Arrow::DECIMAL64_MAX_SCALE.to_i
+      when 256 then Arrow::DECIMAL256_MAX_SCALE.to_i
+      else          Arrow::DECIMAL128_MAX_SCALE.to_i
+      end
+    end
+
+    private def decimal_data_type(rank : Int32, precision : Int32, scale : Int32) : Arrow::DataType
+      case rank
+      when  32 then Arrow::DataType.decimal32(precision, scale)
+      when  64 then Arrow::DataType.decimal64(precision, scale)
+      when 256 then Arrow::DataType.decimal256(precision, scale)
+      else          Arrow::DataType.decimal128(precision, scale)
+      end
+    end
+
+    private def with_decimal_rank(dtype : Arrow::DataType, rank : Int32) : Arrow::DataType
+      return dtype if decimal_rank(dtype.kind) == rank
+
+      decimal_data_type(rank, precision(dtype), scale(dtype))
+    end
+
+    private def precision(dtype : Arrow::DataType) : Int32
+      (dtype.precision || 0).to_i
+    end
+
+    private def scale(dtype : Arrow::DataType) : Int32
+      (dtype.scale || 0).to_i
+    end
+
+    private def cap(value : Int32, maximum : Int32) : Int32
+      value < maximum ? value : maximum
     end
 
     private def same_family?(left : Arrow::DataType, right : Arrow::DataType) : Bool

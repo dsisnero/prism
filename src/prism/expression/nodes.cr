@@ -127,10 +127,10 @@ module Prism
       elsif @op.comparison?
         Coerce.target(@left, @right, schema)
         Arrow::DataType.boolean
+      elsif operands = Coerce.arithmetic_operands(@left, @right, schema)
+        Coerce.arithmetic_dtype(@op, operands)
       else
-        target = Coerce.target(@left, @right, schema)
-        reject_unsupported_decimal(@op, target)
-        target
+        Coerce.target(@left, @right, schema)
       end
     end
 
@@ -145,8 +145,14 @@ module Prism
         return folded
       end
 
+      # Decimal arithmetic keeps each side's precision and scale: the kernel
+      # derives the result dtype from both, so casting to one common dtype first
+      # would declare the wrong answer.
+      if operands = Coerce.arithmetic_operands(@left, @right, ctx.schema, ctx.types)
+        return eval_decimal(ctx, operands)
+      end
+
       target = ctx.coercion_target(@left, @right)
-      reject_unsupported_decimal(@op, target)
       check_literals_fit(target)
 
       left = Coerce.cast(ctx.evaluate(@left), target)
@@ -155,17 +161,17 @@ module Prism
       Kernels.apply_op(@op, left, right)
     end
 
-    # Decimal arithmetic is not implemented yet: the kernels grow precision per
-    # the Arrow spec, so the declared dtype and the produced dtype disagree.
-    # Comparisons are supported (they return Boolean, so no scale is involved).
-    private def reject_unsupported_decimal(op : BinaryOp, target : Arrow::DataType) : Nil
-      return if op.comparison?
-      return unless target.decimal?
+    private def eval_decimal(
+      ctx : EvalContext,
+      operands : Tuple(Arrow::DataType, Arrow::DataType),
+    ) : Arrow::ArrayBase
+      check_literal_fits(@left, operands[0])
+      check_literal_fits(@right, operands[1])
 
-      raise UnsupportedOperation.new(
-        "#{op.key_name} on decimal values is not implemented yet; " \
-        "cast the column to Float64 first"
-      )
+      left = Coerce.cast(ctx.evaluate(@left), operands[0])
+      right = Coerce.cast(ctx.evaluate(@right), operands[1])
+
+      Kernels.apply_op(@op, left, right)
     end
 
     # A comparison against a literal that cannot fit the column's dtype compares
