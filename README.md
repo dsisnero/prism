@@ -57,7 +57,9 @@ sales
 - **Nested data, not a flat-only API.** List, fixed-size-list, struct and map
   columns materialize as arrays and hashes the way Polars' `to_list` does, and
   they work as `distinct` / `n_unique` / `group_by` keys through the same
-  `arrow-row` encoding as scalar keys.
+  `arrow-row` encoding as scalar keys. Interval columns materialize as
+  `Arrow::IntervalValue` (months, days, nanoseconds), so every dtype has a value
+  shape.
 
 ## Installation
 

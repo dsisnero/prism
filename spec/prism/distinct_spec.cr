@@ -75,6 +75,21 @@ describe Prism::Series do
       series.n_unique.should eq(2)
     end
 
+    it "canonicalizes dictionary-encoded floats through their values" do
+      # The keys are distinct, so keying by key index would keep four values;
+      # the values are `0.0`, `-0.0` and two NaNs, which are two keys.
+      array = Arrow::DictionaryArray(Int32).new(
+        Arrow::PrimitiveArray(Int32).from_values([0, 1, 2, 3]),
+        Arrow::Float64Array.from_values([0.0, -0.0, Float64::NAN, Float64::NAN]),
+      ).as(Arrow::ArrayBase)
+      series = Prism::Series.new("d", [array] of Arrow::ArrayBase, array.data_type)
+
+      series.unique.size.should eq(2)
+      series.n_unique.should eq(2)
+      # Canonicalizing the dictionary values must not change the dtype.
+      series.unique.dtype.should eq(array.data_type)
+    end
+
     it "canonicalizes float32 keys as well" do
       series = Prism::Series.new(
         "f",

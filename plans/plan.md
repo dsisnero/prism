@@ -28,15 +28,13 @@ do not re-derive it from `git log`.
 
 **State:** `v0.1.1` is tagged and published at
 [`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
-Phase 12 ergonomics work and the Phase 13 row layer (both unreleased). Phases 0–13
-are closed apart from the cosmetic local folder rename.
+Phase 12 ergonomics work, the Phase 13 row layer and the Phase 14 value-coverage
+work (all unreleased). Phases 0–14 are closed apart from the cosmetic local
+folder rename.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Interval column materialization** — `Value` has no month/day/nano member, so
-   interval columns still cannot materialize; a dictionary-encoded *float* key is
-   compared by value but not canonicalized.
-2. **Vectorized per-group aggregation** — the largest in-memory cost by far:
+1. **Vectorized per-group aggregation** — the largest in-memory cost by far:
    ~95% of a 1e5-group `group_by` is per-group overhead, not the sort (§14). It
    needs one kernel across all groups instead of a slice per group, which is a
    redesign of the aggregate layer. Take it only with a benchmark in hand — the
@@ -46,15 +44,16 @@ are closed apart from the cosmetic local folder rename.
 follow-up: the sort is 35 ms of a 1005 ms 1e5-key group-by, so a hash table would
 buy ~4% while giving up contiguous group views and deterministic order (§14).
 
-**Gates:** `make lint` + `make test` green, **422 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**423**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**426**, ~1 min); with both
-set the suite is **427**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **429 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**430**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**433**, ~1 min); with both
+set the suite is **434**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
-benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit.
-Everything is on `main`; nothing is released since `v0.1.1`.
+benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit
+(`a7f1cd7`), then the Phase 14 interval and row-key commit. Everything is on
+`main`; nothing is released since `v0.1.1`.
 
 **Owner actions, not code:**
 
@@ -81,6 +80,7 @@ Everything is on `main`; nothing is released since `v0.1.1`.
 | 11 | Post-v0.1.0: decimal arithmetic, nested materialization, `v0.1.1` | **done** |
 | 12 | RedAmber ergonomics: masks, `remove`, ranges, `-` sorts, one-call aggregates | **done** |
 | 13 | Rows: `DataFrame#rows` and `define_schema`-generated `S::Row` | **done** |
+| 14 | Value coverage: interval materialization and dictionary float keys | **done** |
 
 ---
 
@@ -936,6 +936,11 @@ raised `Prism::Error` names the offending column.
   and a `Struct`/`Map` row is a `Hash`, so `Value` can no longer be assumed
   scalar: arithmetic, `to_f64`, and aggregation kernels reject containers with a
   `Prism::DtypeError`, and display renders them as `[1, 2]` / `{x: 1, y: "a"}`.
+- **Intervals lose their unit when materialized.** An interval row is an
+  `Arrow::IntervalValue` (`months`, `days`, `nanos`) whatever the column's Arrow
+  unit, so a year-month interval displays as months (`14 mons`) instead of
+  Arrow's `1 years 2 mons`. Cast the column to `Utf8` for the unit-specific
+  text; day-time values are nanoseconds by then (`millis × 1e6`).
 
 ## 9. Lazy execution and optimization
 
@@ -1623,6 +1628,60 @@ and `spec/prism/typed_spec.cr` (25 examples, 10 new); the suite is 422.
 - **`DataFrame#row` takes no negative index**, matching `Series#[]`; Ruby-style
   negative positions live in `#slice(range)` only.
 
+### Phase 14 — Value coverage: intervals (done)
+
+Closes the two gaps the Phase 13 resume block named: interval columns could not
+materialize, and a dictionary-encoded float key was compared by value but not
+canonicalized.
+
+- [x] `Value` gains `Arrow::IntervalValue`, so `Values.extract`/`extract_at`,
+      `Series#to_a`/`#[]` and `DataFrame#rows`/`#row`/`#each_row` all handle
+      interval columns (a `define_schema` schema still cannot *declare* one:
+      an interval dtype needs a unit, which the macro has no syntax for)
+- [x] All three Arrow interval units decode to the same shape: year-month keeps
+      its months, day-time converts its milliseconds to nanoseconds, and
+      month-day-nano is already `(months, days, nanos)`; packing goes through
+      `Arrow.interval_*` rather than a Prism copy
+- [x] Display renders intervals in Arrow's `IntervalMonthDayNano` style
+      (`1 mons 2 days 0.000000003 secs`, `2 hours 2 mins`, `0 secs`)
+- [x] `RowKeys.canonical` canonicalizes a dictionary's float *values* and keeps
+      the keys and dtype, so `distinct`, `unique`, `n_unique`, joins and
+      `group_by` agree on `-0.0`/`0.0` and NaN payloads for dictionary-encoded
+      float keys too
+
+**Acceptance:** every interval unit extracts consistently (`extract` equals
+`extract_at` per index) with nulls intact; display and `rows` agree on the
+canonical text; a dictionary-encoded float column yields 2 distinct values for
+`[0.0, -0.0, NaN, NaN]` instead of 3, keeps its dtype through `Series#unique`,
+and groups like the equivalent plain float column. Specs:
+`spec/prism/{values,display,dataframe,distinct,group_by}_spec.cr`; the suite is
+429.
+
+**Notes carried forward:**
+
+- **One interval shape, no unit.** `Arrow::IntervalValue` is `(months, days,
+  nanos)`, so the original interval unit is not part of a materialized value: a
+  year-month interval of 14 months renders `14 mons`, not Arrow's
+  `1 years 2 mons`. That is the price of one closed `Value` alias for every
+  frame (§10 "Why `Values` returns containers"); `Series#cast` to `Utf8` gives
+  the unit-specific Arrow text. A per-unit value type would make a row's shape
+  depend on the column's dtype, which is exactly what the alias avoids.
+- **Day-time intervals become nanoseconds** because that is the narrower
+  representation: every millisecond value is exactly representable as
+  nanoseconds in `Int64`, so the conversion loses nothing and keeps the three
+  units comparable.
+- **`Value#to_f64` still rejects intervals**, and no arithmetic kernel accepts
+  them. Interval arithmetic (the `arrow-cr` kernels for adding intervals to
+  timestamps) is not exposed by Prism yet; materialization is a row-edge
+  feature, not a numeric one.
+- **Dictionary float keys canonicalize values, not keys.** A rebuild keeps the
+  original keys, the key type and `ordered?`, so `Series#unique` can gather rows
+  from the canonical array without the dtype shifting under it.
+- **Floats nested in list/struct/map keys are still total-order.** Reaching a
+  float child means rebuilding the parent layout; the gap is documented in
+  `Prism::RowKeys` and in `docs/architecture.md` rather than silently fixed for
+  one container type.
+
 ## 13. Testing strategy
 
 - Spec layout mirrors `src/prism/`. See
@@ -1769,6 +1828,13 @@ Why this shape:
   `canonical_f64(x).to_bits()`, so `group_by`, join and
   `unique`/`n_unique` all agree on `-0.0`/`0.0` and NaN payloads.
   `spec/prism/{join,distinct,group_by}_spec.cr` pin it.
+- **Dictionary keys are canonicalized through their values** (Phase 14).
+  `arrow-row` encodes a dictionary column through its value array, so
+  canonicalizing the *values* is what makes a dictionary-encoded float key agree
+  with a plain float column. The rebuild keeps the keys, key type and
+  `ordered?`, because `Series#unique` gathers rows from the canonical array and
+  must keep the dictionary dtype. Floats nested inside a list/struct/map key are
+  the remaining gap: reaching a float child means rebuilding the parent layout.
 - **Nulls are a value in the encoding.** `distinct` wants exactly that (one null
   key), and so does `n_unique`: Polars counts null as a distinct value, so
   `n_unique == unique.size` (Phase 4 note, aligned in 9d). A join that must not
@@ -1953,7 +2019,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d (done) |
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
 | Physical top-k for a pinned slice | a bounded heap is an `arrow-cr` kernel, not a Prism one; the gather half landed in 9d | 9d (gather done) |
-| `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
+| `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (landed; see §14) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 (done) |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |
 | Nested list/struct/map in `Values` | needed a recursive `Value` alias — legal through `Array`/`Hash`, corrected the earlier assumption | post-v0.1 (done) |
@@ -1970,6 +2036,9 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Hash-based grouping | the stated gate was "only if a benchmark shows grouping dominating"; a probe put the key sort at 35 ms of a 1005 ms 1e5-key group-by, so hashing would buy ~4% for the group views and deterministic order | 12 follow-up (measured, declined) |
 | Vectorized per-group aggregation | the real cost is per group (~4 µs for `count`, ~2.5 µs per extra aggregate at 1e5 groups); it needs one kernel across all groups instead of one slice per group, which is a redesign of the aggregate layer | candidate (needs a design, numbers in §14) |
 | Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | 13 (done) |
+| Interval materialization: `Value` had no month/day/nano member, so interval columns could not reach `to_a`/`rows`/display | it needed a value shape for all three Arrow units; `Arrow::IntervalValue` is that shape, so no new type was introduced | 14 (done) |
+| Dictionary-encoded float keys were compared by value but not canonicalized | the values are what gets encoded, so canonicalizing them in place keeps the dictionary dtype and makes keying agree with plain float columns | 14 (done) |
+| Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | candidate (needs a case) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**
 (`slice { carat > 1 }`), which works because Ruby `instance_eval`s the block

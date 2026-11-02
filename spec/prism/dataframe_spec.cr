@@ -241,6 +241,18 @@ describe Prism::DataFrame do
       last["qty"].should eq(4_i64)
     end
 
+    it "materializes interval columns as month/day/nano values" do
+      months = Arrow::PrimitiveArray(Int32)
+        .from_nullable([14, nil])
+        .with_data_type(Arrow::DataType.interval(Arrow::IntervalUnit::YearMonth))
+      df = Prism.from_columns({ym: months})
+
+      df.rows.should eq([
+        Prism::RowHash{"ym" => Arrow::IntervalValue.new(14, 0, 0)},
+        Prism::RowHash{"ym" => nil},
+      ])
+    end
+
     it "yields rows in frame order across chunk boundaries" do
       df = Prism.from_batches(split_batch(sample_batch))
       seen = [] of Prism::Value

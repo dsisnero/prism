@@ -49,17 +49,62 @@ describe Prism::Values do
       extracted[0].should eq(Time.unix(1_700_000_000))
     end
 
-    it "raises for unsupported dtypes" do
-      # Nested values materialize now (see spec/prism/nested_spec.cr); intervals
-      # are the remaining gap, because `Value` has no month/day/nano member.
-      interval = Arrow::PrimitiveArray(Int128)
-        .from_values([1_i128])
-        .with_data_type(
-          Arrow::DataType.interval(Arrow::IntervalUnit::MonthDayNano)
-        )
+    it "extracts year-month intervals as months" do
+      # 14 months is one year and two months; the unit is not kept, so the value
+      # is just the month count.
+      array = Arrow::PrimitiveArray(Int32)
+        .from_nullable([14, -1, nil])
+        .with_data_type(Arrow::DataType.interval(Arrow::IntervalUnit::YearMonth))
 
-      expect_raises(Prism::UnsupportedOperation, /Interval/) do
-        Prism::Values.extract(interval)
+      extract_consistently(array).should eq([
+        Arrow::IntervalValue.new(14, 0, 0),
+        Arrow::IntervalValue.new(-1, 0, 0),
+        nil,
+      ])
+    end
+
+    it "extracts day-time intervals as days plus nanoseconds" do
+      packed = [
+        Arrow.interval_day_time(3, 7_200_000),
+        Arrow.interval_day_time(-1, -1_000),
+      ]
+      array = Arrow::PrimitiveArray(Int64)
+        .from_values(packed)
+        .with_data_type(Arrow::DataType.interval(Arrow::IntervalUnit::DayTime))
+
+      extract_consistently(array).should eq([
+        Arrow::IntervalValue.new(0, 3, 7_200_000_i64 * 1_000_000_i64),
+        Arrow::IntervalValue.new(0, -1, -1_000_i64 * 1_000_000_i64),
+      ])
+    end
+
+    it "extracts month-day-nano intervals unchanged" do
+      packed = [
+        Arrow.interval_month_day_nano(1, 2, 3),
+        Arrow.interval_month_day_nano(0, 0, 0),
+        Arrow.interval_month_day_nano(-1, -2, -3),
+      ]
+      array = Arrow::PrimitiveArray(Int128)
+        .from_values(packed)
+        .with_data_type(Arrow::DataType.interval(Arrow::IntervalUnit::MonthDayNano))
+
+      extract_consistently(array).should eq([
+        Arrow::IntervalValue.new(1, 2, 3),
+        Arrow::IntervalValue.new(0, 0, 0),
+        Arrow::IntervalValue.new(-1, -2, -3),
+      ])
+    end
+
+    it "raises for unsupported dtypes" do
+      # Unions have no canonical Crystal representation; they are the remaining
+      # gap now that nested values and intervals materialize.
+      builder = Arrow::UnionBuilder.new_dense
+      builder.append("a", 1)
+      builder.append("b", 2)
+      union = builder.build
+
+      expect_raises(Prism::UnsupportedOperation, /Union/) do
+        Prism::Values.extract(union)
       end
     end
 

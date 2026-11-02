@@ -116,5 +116,29 @@ describe Prism::Display do
 
       frame.to_s.should contain("2023-11-14")
     end
+
+    it "renders intervals as months, days and nanoseconds" do
+      spans = Arrow::PrimitiveArray(Int128)
+        .from_values([
+          Arrow.interval_month_day_nano(1, 2, 3),
+          Arrow.interval_month_day_nano(0, 0, 0),
+          Arrow.interval_month_day_nano(0, 0, 7_320_000_000_000),
+        ])
+        .with_data_type(Arrow::DataType.interval(Arrow::IntervalUnit::MonthDayNano))
+      # A year-month interval keeps only its month count, so it reads as months.
+      months = Arrow::PrimitiveArray(Int32)
+        .from_nullable([14, nil, -13])
+        .with_data_type(Arrow::DataType.interval(Arrow::IntervalUnit::YearMonth))
+      frame = Prism.from_columns({span: spans, ym: months})
+
+      rendered = frame.to_s
+
+      rendered.should contain("1 mons 2 days 0.000000003 secs")
+      rendered.should contain("0 secs")
+      rendered.should contain("2 hours 2 mins")
+      rendered.should contain("14 mons")
+      rendered.should contain("-13 mons")
+      rendered.should contain("null")
+    end
   end
 end

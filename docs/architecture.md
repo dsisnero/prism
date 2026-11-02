@@ -38,7 +38,7 @@ lazy optimizer never touches buffers.
 | `Schema` (typed) | macro-generated struct | `define_schema` |
 | `RowHash` | `Hash(String, Value)` | one materialized row, column order kept |
 | `S::Row` (typed) | macro-generated struct | nominal row for a declared schema |
-| `Value` | recursive alias: scalars, `Array(Value)`, `Hash(String, Value)`, `Hash(Value, Value)` | nested columns materialize as containers |
+| `Value` | recursive alias: scalars (including `Time`, `Time::Span`, `BigDecimal`, `Arrow::IntervalValue`) and `Array(Value)` / `Hash` containers | nested and interval columns materialize at the row edge |
 
 There is no `Prism::DataType`. Data types are `Arrow::DataType` values, schemas
 are `Arrow::Schema` values, and columns are `Arrow::ArrayBase` values. This is
@@ -187,9 +187,17 @@ overflowing literal into null and every row compares as null. Arithmetic with
 such a literal raises instead of nulling rows.
 
 Decimals compare at a common scale and materialize as `BigDecimal`, preserving
-scale; decimal arithmetic is not implemented yet because `arrow-cr`'s decimal
-kernels grow precision per the Arrow spec, so the declared and produced dtypes
-would disagree (plan §17).
+scale; decimal arithmetic follows Arrow's Hive rules, with each kernel's result
+precision and scale declared in `Prism::Coerce` so the planned and produced
+dtypes agree.
+
+Intervals materialize as `Arrow::IntervalValue` (`months`, `days`, `nanos`) for
+all three Arrow units: year-month keeps its months, day-time converts its
+milliseconds to nanoseconds, and month-day-nano is already that shape. The unit
+is not part of the value, so a year-month interval renders as months (`14 mons`)
+rather than Arrow's `1 years 2 mons`; cast the column to `Utf8` when the
+unit-specific Arrow text is needed. Rows and display therefore stay one closed
+type for every frame (§10 of the plan).
 
 Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, so
 `col("price") * 2` does not build an n-element array of 2s. Arrow's kernels
@@ -471,6 +479,14 @@ NaN before encoding (Polars' `canonical_f16/f32/f64`: `x + 0.0`, then the
 canonical quiet NaN), which is how Prism gets `polars-row` key equality out of
 `arrow-row`. Keying then follows `==` plus "all NaNs are one key", as SQL, Polars
 and pandas do.
+
+A dictionary column is keyed through its *values*, so `RowKeys.canonical`
+rebuilds it with canonicalized values and keeps the keys and the dictionary
+dtype; callers such as `Series#unique` gather rows from the canonical array and
+must not see a different dtype. Floats nested inside a list/struct/map key are
+not canonicalized — reaching a float child means rebuilding the parent layout,
+which nested key columns have not justified yet. That remaining limit is stated
+in the `Prism::RowKeys` docs.
 
 Nulls form one key of their own, which is what both `distinct` and `n_unique`
 want: Polars counts null as a distinct value (`ChunkUnique` adds one when

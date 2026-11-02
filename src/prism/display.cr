@@ -173,6 +173,8 @@ module Prism
       when Nil    then "null"
       when String then nested ? %("#{truncate(value, max_string)}") : truncate(value, max_string)
       when Bytes  then truncate(value.hexstring, max_string)
+      when Arrow::IntervalValue
+        interval_text(value)
       when Array
         "[" + value.map { |item| format_value(item, max_string, true) }.join(", ") + "]"
       when Hash(String, Value)
@@ -185,6 +187,41 @@ module Prism
         "{" + pairs.join(", ") + "}"
       else value.to_s
       end
+    end
+
+    # Arrow's `IntervalMonthDayNano` text (`1 mons 2 days 3.000000004 secs`),
+    # with zero components omitted and a zero interval as `0 secs`. A
+    # materialized interval does not carry its original unit, so a year-month
+    # interval reads as months here rather than as `{years} years {months} mons`;
+    # cast the column to a string dtype for the unit-specific Arrow text.
+    private def interval_text(interval : Arrow::IntervalValue) : String
+      return "0 secs" if interval.months == 0 && interval.days == 0 && interval.nanos == 0
+
+      parts = [] of String
+      parts << "#{interval.months} mons" unless interval.months == 0
+      parts << "#{interval.days} days" unless interval.days == 0
+      parts << nanoseconds_text(interval.nanos) unless interval.nanos == 0
+      parts.join(' ')
+    end
+
+    # Arrow's `NanosecondsFormatter`: `{hours} hours {mins} mins {secs}.{nanos}
+    # secs`, omitting zero components.
+    private def nanoseconds_text(nanoseconds : Int64) : String
+      secs = nanoseconds.tdiv(Arrow::NANOS_PER_SECOND)
+      mins = secs.tdiv(60_i64)
+      hours = mins.tdiv(60_i64)
+      secs -= mins * 60_i64
+      mins -= hours * 60_i64
+      nanos = nanoseconds.remainder(Arrow::NANOS_PER_SECOND)
+
+      parts = [] of String
+      parts << "#{hours} hours" unless hours == 0
+      parts << "#{mins} mins" unless mins == 0
+      if secs != 0 || nanos != 0
+        sign = (secs < 0 || nanos < 0) ? "-" : ""
+        parts << "#{sign}#{secs.abs}.#{nanos.abs.to_s.rjust(9, '0')} secs"
+      end
+      parts.join(' ')
     end
 
     private def truncate(text : String, limit : Int32) : String

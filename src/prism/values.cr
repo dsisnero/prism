@@ -4,11 +4,19 @@ module Prism
   # The Crystal-level representation of an Arrow value.
   #
   # Nulls are `nil`. Temporal columns become `Time` (`Time::Span` for
-  # durations), decimals become `BigDecimal`, and nested columns become
-  # containers, matching how Polars converts them: a list is an `Array`, a
-  # struct is a `Hash` keyed by field name (in schema order), and a map is a
-  # `Hash` keyed by its entries. Nulls stay `nil` at every level, so a null list
-  # is distinguishable from an empty one and from a list containing a null.
+  # durations), decimals become `BigDecimal`, intervals become
+  # `Arrow::IntervalValue`, and nested columns become containers, matching how
+  # Polars converts them: a list is an `Array`, a struct is a `Hash` keyed by
+  # field name (in schema order), and a map is a `Hash` keyed by its entries.
+  # Nulls stay `nil` at every level, so a null list is distinguishable from an
+  # empty one and from a list containing a null.
+  #
+  # An interval is one shape (`months`, `days`, `nanos`) for all three Arrow
+  # interval units: year-month keeps its months, day-time converts its
+  # milliseconds to nanoseconds, and month-day-nano is already that shape. The
+  # unit itself is not part of the value, so a year-month interval renders as
+  # months (see `Prism::Display`); pass the column through `Series#cast` to a
+  # string dtype if the unit-specific Arrow text is needed.
   #
   # The recursion is through `Array`/`Hash`, which Crystal allows in an alias
   # (`JSON::Any` is built the same way), and every member is hashable, so a
@@ -17,7 +25,7 @@ module Prism
                 UInt8 | UInt16 | UInt32 | UInt64 |
                 Arrow::Float16 | Float32 | Float64 |
                 Bool | String | Bytes | Time | Time::Span |
-                BigDecimal |
+                BigDecimal | Arrow::IntervalValue |
                 Array(Value) | Hash(String, Value) | Hash(Value, Value) |
                 Nil
 
@@ -75,6 +83,7 @@ module Prism
       when .time32?                      then collect_time(source.as(Arrow::PrimitiveArray(Int32)))
       when .time64?                      then collect_time(source.as(Arrow::PrimitiveArray(Int64)))
       when .duration?                    then collect_duration(source.as(Arrow::PrimitiveArray(Int64)))
+      when .interval?                    then collect_interval(source)
       when .list?, .large_list?          then collect_list(source.as(Arrow::ListArray))
       when .list_view?                   then collect_list(source.as(Arrow::ListViewArray))
       when .large_list_view?             then collect_list(source.as(Arrow::LargeListViewArray))
@@ -190,6 +199,7 @@ module Prism
       when .time32?     then time_at(source.as(Arrow::PrimitiveArray(Int32)), index)
       when .time64?     then time_at(source.as(Arrow::PrimitiveArray(Int64)), index)
       when .duration?   then duration_at(source.as(Arrow::PrimitiveArray(Int64)), index)
+      when .interval?   then interval_at(source, index)
       else
         raise UnsupportedOperation.new("cannot materialize #{source.data_type} values")
       end
@@ -274,6 +284,33 @@ module Prism
         out << (array.null?(i) ? nil : array.value_as_duration(i))
       end
       out
+    end
+
+    # All three interval units decode to `Arrow::IntervalValue`: Arrow's own
+    # value shape (`months`, `days`, `nanos`, with the packing helpers in
+    # `Arrow.interval_*`), so no parallel interval type is introduced here.
+    private def self.collect_interval(array : Arrow::ArrayBase) : Array(Value)
+      Array(Value).new(array.len) { |index| interval_at(array, index) }
+    end
+
+    private def self.interval_at(array : Arrow::ArrayBase, index : Int) : Value
+      return nil if array.null?(index)
+
+      case array.data_type.interval_unit
+      when Arrow::IntervalUnit::YearMonth
+        months = array.as(Arrow::PrimitiveArray(Int32)).value(index)
+        Arrow::IntervalValue.new(months, 0, 0)
+      when Arrow::IntervalUnit::DayTime
+        days, milliseconds =
+          Arrow.interval_day_time_parts(array.as(Arrow::PrimitiveArray(Int64)).value(index))
+        Arrow::IntervalValue.new(0, days, milliseconds.to_i64 * Arrow::NANOS_PER_MILLIS)
+      when Arrow::IntervalUnit::MonthDayNano
+        months, days, nanoseconds =
+          Arrow.interval_month_day_nano_parts(array.as(Arrow::PrimitiveArray(Int128)).value(index))
+        Arrow::IntervalValue.new(months, days, nanoseconds)
+      else
+        raise UnsupportedOperation.new("cannot materialize #{array.data_type} values")
+      end
     end
 
     private def self.datetime_at(array : Arrow::PrimitiveArray(T), index : Int) : Value forall T

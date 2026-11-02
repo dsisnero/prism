@@ -166,6 +166,25 @@ describe Prism::GroupBy do
       frame.distinct("f").row_count.should eq(3)
       grouped["total"].to_a.should eq([3_i64, 7_i64, 5_i64])
     end
+
+    it "groups dictionary-encoded floats by value, like plain float keys" do
+      # Grouping encodes the *values*, so a dictionary column canonicalizes the
+      # same way a plain float column does: one key for `±0.0`, one for NaN.
+      dict = Arrow::DictionaryArray(Int32).new(
+        Arrow::PrimitiveArray(Int32).from_values([0, 1, 2, 3]),
+        Arrow::Float64Array.from_values([0.0, -0.0, Float64::NAN, Float64::NAN]),
+      ).as(Arrow::ArrayBase)
+      frame = Prism.from_columns({
+        f: dict,
+        v: Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64]),
+      })
+
+      grouped = frame.group_by("f").aggregate(total: col("v").sum)
+
+      grouped.row_count.should eq(2)
+      frame.distinct("f").row_count.should eq(2)
+      grouped["total"].to_a.should eq([3_i64, 7_i64])
+    end
   end
 
   describe "result shape" do

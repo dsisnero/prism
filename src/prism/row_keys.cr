@@ -20,13 +20,16 @@ module Prism
   #   is one value (SQL, Polars and pandas all agree). `#canonical` normalizes
   #   float key columns first, exactly as Polars' `canonical_f64` does, and also
   #   passes them to `group_by`, so every keyed verb agrees on what one key is.
+  #   A dictionary column is keyed through its *values*, so its values are
+  #   canonicalized in place and the dictionary dtype (and its keys) survive.
   # - **Nulls.** A null encodes like a value, i.e. all nulls are one key. That is
   #   what `distinct` and `group_by` want; a join that must *not* match nulls
   #   (`nulls_equal: false`) checks the key columns' null bitmaps instead.
   #
-  # Known limit: a *dictionary-encoded float* key is compared by its decoded
-  # values but not canonicalized, since only top-level float columns go through
-  # `#canonical`. That dtype is rare enough to leave alone until someone needs it.
+  # Known limit: floats nested inside a list/struct/map key are not
+  # canonicalized; only a top-level float column and a dictionary's float values
+  # are. Nested key columns are rare, and rebuilding list/struct arrays to reach
+  # a float child is a larger change than the divergence is worth today.
   module RowKeys
     extend self
 
@@ -59,11 +62,37 @@ module Prism
       # narrower one (a `NullArray`, say) has no float array to cast to.
       source = array.as(Arrow::ArrayBase)
       case source.data_type.kind
-      when .float64? then canonical_f64(source.as(Arrow::PrimitiveArray(Float64)))
-      when .float32? then canonical_f32(source.as(Arrow::PrimitiveArray(Float32)))
-      when .float16? then canonical_f16(source.as(Arrow::PrimitiveArray(Arrow::Float16)))
-      else                source
+      when .float64?    then canonical_f64(source.as(Arrow::PrimitiveArray(Float64)))
+      when .float32?    then canonical_f32(source.as(Arrow::PrimitiveArray(Float32)))
+      when .float16?    then canonical_f16(source.as(Arrow::PrimitiveArray(Arrow::Float16)))
+      when .dictionary? then canonical_dictionary(source)
+      else                   source
       end
+    end
+
+    # Dictionaries are keyed through their values, so canonicalize those. The
+    # keys and the data type stay, which matters because callers such as
+    # `Series#unique` gather rows from the canonical array and must keep the
+    # original dtype.
+    private def canonical_dictionary(array : Arrow::ArrayBase) : Arrow::ArrayBase
+      case array.data_type.key.try(&.kind)
+      when Arrow::DataType::Kind::Int8   then canonical_dictionary(array.as(Arrow::DictionaryArray(Int8)))
+      when Arrow::DataType::Kind::Int16  then canonical_dictionary(array.as(Arrow::DictionaryArray(Int16)))
+      when Arrow::DataType::Kind::Int32  then canonical_dictionary(array.as(Arrow::DictionaryArray(Int32)))
+      when Arrow::DataType::Kind::Int64  then canonical_dictionary(array.as(Arrow::DictionaryArray(Int64)))
+      when Arrow::DataType::Kind::UInt8  then canonical_dictionary(array.as(Arrow::DictionaryArray(UInt8)))
+      when Arrow::DataType::Kind::UInt16 then canonical_dictionary(array.as(Arrow::DictionaryArray(UInt16)))
+      when Arrow::DataType::Kind::UInt32 then canonical_dictionary(array.as(Arrow::DictionaryArray(UInt32)))
+      when Arrow::DataType::Kind::UInt64 then canonical_dictionary(array.as(Arrow::DictionaryArray(UInt64)))
+      else                                    array
+      end
+    end
+
+    private def canonical_dictionary(array : Arrow::DictionaryArray(K)) : Arrow::ArrayBase forall K
+      values = canonical(array.values)
+      return array if values.same?(array.values)
+
+      Arrow::DictionaryArray(K).new(array.data_type, array.keys, values, array.ordered?)
     end
 
     # A converter for `arrays`, one key column each.
