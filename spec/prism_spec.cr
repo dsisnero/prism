@@ -5,7 +5,7 @@ require "./spec_helper"
 # dependency contract described in plans/plan.md §3.
 describe Prism do
   it "exposes a version" do
-    Prism::VERSION.should eq("0.1.0")
+    Prism::VERSION.should eq("0.1.1")
   end
 end
 

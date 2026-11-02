@@ -6,6 +6,12 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-02
+
+A small follow-up to `0.1.0`: the two type families that were still bottoming
+out in "unsupported dtype" now work end to end — decimals in arithmetic, and
+nested (`list`/`struct`/`map`) columns as Crystal values.
+
 ### Added
 
 - Decimal arithmetic: `+`, `-`, `*`, `/`, `%` and unary `-` on `Decimal32/64/128/256`
@@ -20,7 +26,6 @@ All notable changes to this project are documented here. This project adheres to
 - A decimal column combined with a `Null` column (or `nil` literal) now yields an
   all-null result of the right dtype, for arithmetic and comparisons alike,
   instead of raising `DtypeError`.
-
 - Nested materialization: `List`/`LargeList`/`ListView`/`LargeListView`/
   `FixedSizeList` become `Array(Prism::Value)`, `Struct` becomes a field-ordered
   `Hash(String, Prism::Value)`, and `Map` becomes `Hash(Prism::Value,
@@ -185,4 +190,5 @@ optional compile-time typed schemas.
   physical layout; on unclustered data a row filter costs more than it saves,
   which `docs/benchmarks.md` documents with numbers.
 
+[0.1.1]: https://github.com/dsisnero/prism/releases/tag/v0.1.1
 [0.1.0]: https://github.com/dsisnero/prism/releases/tag/v0.1.0

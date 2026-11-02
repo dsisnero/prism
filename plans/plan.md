@@ -26,28 +26,22 @@ _Updated 2026-11-02._
 (360 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
-**State:** `v0.1.0` is tagged and published at
-[`dsisnero/prism`](https://github.com/dsisnero/prism) (tag `511dd15`). Two features
-have landed since and sit under `CHANGELOG.md`'s `## [Unreleased]`: decimal
-arithmetic and nested materialization. Phases 0–10 are closed apart from the
-cosmetic local folder rename.
+**State:** `v0.1.1` is tagged and published at
+[`dsisnero/prism`](https://github.com/dsisnero/prism). It packages the two
+features that had been sitting under `Unreleased`: decimal arithmetic and nested
+materialization. Phases 0–10 are closed apart from the cosmetic local folder
+rename.
 
-**Next up, in order** (each is one atomic commit; the first needs an owner
-decision):
+**Next up, in order** (each is one atomic commit):
 
-1. **Cut `v0.1.1`** (owner call) — two features are unreleased. Run
-   `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` (365), move
-   `Unreleased` under `## [0.1.1] - <date>`, bump `version:` in `shard.yml` and
-   `Prism::VERSION` (a spec asserts they match), tag, push, `gh release create`.
-   The runbook is in [docs/development.md](../docs/development.md#releasing).
-2. **RedAmber ergonomics** — one-call group aggregates
+1. **RedAmber ergonomics** — one-call group aggregates
    (`group_by(k).sum/mean/count/...`), `sort_by("-col")`, range slicing and
    `df[rows]`, `remove(expr)`, boolean-mask filtering. §17 lists each with the
    reason it is not free; `remove` needs its own null rule (keep rows where the
    predicate is false **or** null).
-3. **Hash-based grouping** — only if a benchmark shows grouping dominating; it
+2. **Hash-based grouping** — only if a benchmark shows grouping dominating; it
    would trade contiguous group views and deterministic order for O(n).
-4. **Typed row structs** — `define_schema` could generate a `Row` struct so
+3. **Typed row structs** — `define_schema` could generate a `Row` struct so
    `typed` frames yield nominal rows instead of `Hash(String, Value)`. See §10
    ("Why `Values` returns containers") for why the dynamic path cannot, and what
    this would and would not buy.
@@ -61,12 +55,11 @@ adds the compile-failure spec (**361**, ~13 s) and `PRISM_EXAMPLE_SPECS=1` adds 
 four example specs (**364**, ~1 min); with both set the suite is **365**. Run both
 before a release.
 
-**Last commits:** `598dbad` nested materialization (last feature), `f963518`
-resume block. `main == origin/main`.
+**Last commits:** `_pending_` v0.1.1 release (last commit), `5298e83` resume
+block, `598dbad` nested materialization (last feature). `main == origin/main`.
 
 **Owner actions, not code:**
 
-- Decide whether to cut `v0.1.1` now (item 1 above) or keep accumulating.
 - Optional: rename the local checkout folder `dataframe/` → `prism/` (Phase 10).
   The repository is already `dsisnero/prism`; nothing references the folder name.
 
@@ -87,11 +80,7 @@ resume block. `main == origin/main`.
 | 9d | Optimizer and performance parity (joins, slice, benchmarks, `arrow-row`) | **done** |
 | 9e | Examples, memory notes, property oracles, v0.1.0 tag | **done** |
 | 10 | Repo/GitHub rename `dataframe` → `prism` | **done** (local folder optional) |
-
-**Last feature commit:** `598dbad` — nested materialization (post-v0.1.0,
-unreleased). `v0.1.0` is tagged at `511dd15`.
-**Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (325) and costs ~13 s; run it before a release.
+| 11 | Post-v0.1.0: decimal arithmetic, nested materialization, `v0.1.1` | **done** |
 
 ---
 
@@ -1444,6 +1433,9 @@ a struct array: decimals materialize instead of raising.
       with all 22 call sites migrated and the rule recorded in §4 and §9
 - [x] v0.1.0 tag — published on `dsisnero/prism` after the opt-in suites went
       green (340 examples at the time; a version-consistency spec followed)
+- [x] v0.1.1 tag — the two post-0.1.0 features (decimal arithmetic, nested
+      materialization) released on `2026-11-02` after
+      `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (365)
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:

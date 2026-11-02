@@ -166,7 +166,7 @@ Two symptoms:
 ## Releasing
 
 1. Run both opt-in suites: `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test`
-   (340 examples), plus `make lint` and `make format-check`.
+   (365 examples), plus `make lint` and `make format-check`.
 2. Move `CHANGELOG.md`'s `Unreleased` entries under the new version heading and
    refresh the **Where we are** block in `plans/plan.md`.
 3. Bump the version in `shard.yml` and `Prism::VERSION` (`src/prism.cr`) — a

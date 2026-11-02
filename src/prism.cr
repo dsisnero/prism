@@ -58,5 +58,5 @@ require "./prism/typed"
 require "./prism/display"
 
 module Prism
-  VERSION = "0.1.0"
+  VERSION = "0.1.1"
 end
