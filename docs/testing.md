@@ -134,6 +134,28 @@ output.should contain("salry")
 Keep these few and slow-path; they are the only way to test a compile-time
 guarantee.
 
+## Property checks
+
+`spec/prism/property_spec.cr` compares each verb against a hand-written
+reference over seeded random frames (120 rows, six seeds, under 100 ms):
+
+| Spec | Reference |
+| --- | --- |
+| `distinct` | first occurrence over a `Set` of key tuples |
+| `group_by` (one and two keys) | per-key `Hash` loop |
+| `join` inner/left | nested loop, null keys never match |
+| `semi`/`anti` | membership filter over the inner-join row ids |
+| `sort_by` on a nullable float | stable sort with nulls last |
+| float keys | canonical key (`-0.0`→`0.0`, one NaN) |
+| lazy vs eager | same pipeline both ways, for verbs and for the optimizer |
+| chunked vs single batch | the same rows split into three batches |
+
+They are oracles, not fuzzers: the seeds are fixed, so a failure is
+reproducible and diffable. Two mutations prove they bite — disabling
+`RowKeys.canonical` fails the float-key checks and nothing else, and re-adding
+the null subtraction to `count_distinct` fails the same file. When a verb gains
+semantics, add the case here before adding a targeted spec.
+
 ## Example specs
 
 `examples/*.cr` are compiled and run, because they are the code readers copy out

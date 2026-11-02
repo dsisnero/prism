@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (324 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (335 examples, roughly 30 s warm),
 then take the first unchecked item under Phase 9e in §12 (`v0.1.0` tag). This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
@@ -30,14 +30,16 @@ place that tracks status; do not re-derive it from `git log`.
 **Next up** (in order, each roughly one commit):
 
 1. **`v0.1.0` tag** — run `PRISM_COMPILE_SPECS=1` and `PRISM_EXAMPLE_SPECS=1`
-   first (325 and 328 examples respectively), then tag and write the release
-   notes from `CHANGELOG.md`. Owner-gated: the tag is a publication decision.
+   first (336 and 339 examples respectively, 340 together), then tag and write
+   the release notes from `CHANGELOG.md`. Owner-gated: the tag is a publication
+   decision.
 2. **Phase 10 rename** — the folder and GitHub repository (`dataframe` →
    `prism`), then the `path:` → `github:` dependency swap in `shard.yml`.
 
 **Just landed (9e):** `examples/quickstart.cr`, `examples/parquet.cr` and
 `examples/viewer.cr` (bubbletea + bubbles + ultraviolet, dev deps only), gated
-example specs, a `make examples` target, and the `#to_arrow` memory notes.
+example specs, a `make examples` target, the `#to_arrow` memory notes, and
+`spec/prism/property_spec.cr` — seeded oracles for every verb, mutation-checked.
 
 **Just landed (9d, now complete):** projection pruning through joins
 (`Plan::Join#input_requirements` attributes each output name to its side; keys are
@@ -1358,6 +1360,10 @@ a struct array: decimals materialize instead of raising.
       [docs/architecture.md](../docs/architecture.md#memory-what-to_arrow-costs),
       including what is free (one chunk, zero rows), what copies (one chunked
       concatenation), and how to avoid it (`each_batch`, larger `batch_size`).
+- [x] Property checks: `spec/prism/property_spec.cr` compares `distinct`,
+      `group_by` (one and two keys), `join` (inner/left/semi/anti), `sort_by` on
+      nullable floats, float keys, lazy-vs-eager and chunked-vs-single-batch
+      against hand-written references over seeded random frames
 - [ ] v0.1.0 tag — needs the owner's go-ahead and both opt-in spec suites green
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
@@ -1393,8 +1399,11 @@ Shard-level rename is done; the remaining items are outside this repository.
   while iterating.
 - No fixture blobs in git: generate Parquet/CSV/IPC data in `temp/` at spec time
   via writers, then read it back.
-- Property-style checks where cheap: for `dtype` vs `eval` agreement, and for
-  `sort_by` stability.
+- Property-style checks where cheap: `dtype` vs `eval` agreement, `sort_by`
+  stability, and the verb oracles in `spec/prism/property_spec.cr` (see
+  [docs/testing.md](../docs/testing.md#property-checks)). They are seeded, so a
+  failure reproduces exactly, and they were mutation-checked: disabling
+  `RowKeys.canonical` fails only the float-key checks.
 - Optimization specs assert plan shape via `explain`, not just results, so a
   silently disabled pass fails CI.
 

@@ -20,6 +20,7 @@ temp/
 
 # Local agent/tool settings
 .claude/
+.lattice-cache/
 
 # macOS AppleDouble sidecars (this checkout lives on an exFAT volume)
 ._*
