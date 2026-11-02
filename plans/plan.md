@@ -68,8 +68,8 @@ distinct.
 | 9e | Examples, release notes, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last feature commit:** `ab497a8` — Phase 9d window gather for a pinned slice,
-with the benchmark harness (`make bench`, [docs/benchmarks.md](benchmarks.md)).
+**Last feature commit:** `49bb2fa` — Phase 9d `arrow-row` keys for joins,
+`distinct` and `n_unique` (`Prism::RowKeys`); this closes Phase 9d.
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (319) and costs ~13 s; run it before a release.
 
