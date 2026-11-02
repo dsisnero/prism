@@ -147,23 +147,24 @@ module Prism
     end
 
     # Distinct values, keeping the first occurrence of each in original order.
-    # Nulls are a value, so at most one null survives.
+    # Nulls are a value, so at most one null survives; NaNs match each other and
+    # `-0.0`/`0.0` stay apart, because keys are compared as `arrow-row` bytes
+    # (see `Prism::RowKeys`).
     def unique : Series
       return self if size <= 1
 
       array = to_arrow
-      order = Arrow.lexsort_to_indices([Arrow::SortColumn.new(array)])
-      sorted = Arrow.take(array, order)
-      ranges = Arrow.partition([sorted]).ranges
-      indices = Distinct.first_occurrence_indices(order, ranges)
-      selected = Arrow::PrimitiveArray(UInt32).from_values(indices)
+      rows = RowKeys.converter([array], [@name]).convert_columns([array])
+      kept = RowKeys.first_occurrences(rows)
+      return self if kept.size == array.len
 
+      selected = Arrow::PrimitiveArray(UInt32).from_values(kept)
       Series.new(@name, [Arrow.take(array, selected)] of Arrow::ArrayBase, @dtype)
     end
 
     # Number of distinct non-null values.
     def n_unique : Int64
-      Aggregates.count_distinct(to_arrow)
+      Aggregates.count_distinct(to_arrow, @name)
     end
 
     # Edge: returns the column as one Arrow array, concatenating chunks.

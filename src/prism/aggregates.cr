@@ -35,21 +35,16 @@ module Prism
 
     # Number of distinct non-null values.
     #
-    # Uses `lexsort_to_indices` (typed per-dtype sort) plus `Arrow.partition`
-    # (which compares adjacent rows with the typed `cmp::distinct` kernel), not
-    # `ArrayBase#uniq`, which sorts through a `DynComparator` closure and
-    # allocates an index array for every row.
-    def count_distinct(array : Arrow::ArrayBase) : Int64
-      # A null column has no non-null values, and sorting is unsupported for it.
+    # Encodes the column as `arrow-row` bytes (`Prism::RowKeys`) and counts the
+    # distinct encodings, so this is O(n) instead of the sort-plus-partition it
+    # used to be. Nulls encode as one key of their own; the other aggregates
+    # skip nulls, so the count does too.
+    def count_distinct(array : Arrow::ArrayBase, name : String = "value") : Int64
+      # A null column has no non-null values, and it has no encoding either.
       return 0_i64 if array.len == 0 || array.data_type.kind.null?
 
-      order = Arrow.lexsort_to_indices([Arrow::SortColumn.new(array)])
-      sorted = Arrow.take(array, order)
-      runs = Arrow.partition([sorted]).ranges.size
-
-      # `partition` gives nulls a run of their own; the other aggregates skip
-      # nulls, so this one does too.
-      (runs - (array.null_count > 0 ? 1 : 0)).to_i64
+      rows = RowKeys.converter([array], [name]).convert_columns([array])
+      (RowKeys.distinct_count(rows) - (array.null_count > 0 ? 1 : 0)).to_i64
     end
 
     # Sample variance (`ddof` = 1), or `nil` when there are too few values.

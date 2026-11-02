@@ -25,8 +25,8 @@ require "./prism/expression/nodes"
 require "./prism/expression/dsl"
 require "./prism/expression/operators"
 
+require "./prism/row_keys"
 require "./prism/aggregates"
-require "./prism/distinct"
 require "./prism/expression/aggregations"
 
 require "./prism/verbs/filter"

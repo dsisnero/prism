@@ -10,11 +10,11 @@ module Prism
   # - `semi`/`anti` are membership filters that emit left rows and left columns
   #   only, so repeated right keys never duplicate rows.
   #
-  # Only the key columns are materialized into Crystal values; `arrow-cr`
-  # exposes no Arrow-native hashing (`Arrow.partition` needs sorted input). All
-  # payload columns stay in Arrow and are gathered with
-  # `Arrow.take_record_batch`, which accepts a nullable index array and therefore
-  # produces the null rows an outer join needs.
+  # Keys are encoded as `arrow-row` bytes (see `Prism::RowKeys`), so the hash
+  # table holds a byte view per row instead of a boxed `Array(Value)`. Payload
+  # columns stay in Arrow and are gathered with `Arrow.take_record_batch`, which
+  # accepts a nullable index array and therefore produces the null rows an outer
+  # join needs.
   module Join
     extend self
 
@@ -45,7 +45,9 @@ module Prism
       right_key_arrays = fetch_columns(right_batch, right_keys)
       check_dtypes(left_keys, left_key_arrays, right_key_arrays)
 
-      left_rows, right_rows = match(left_key_arrays, right_key_arrays, how, nulls_equal)
+      left_rows, right_rows = match(
+        left_key_arrays, right_key_arrays, left_keys, how, nulls_equal
+      )
 
       if {:semi, :anti}.includes?(how)
         taken = take_rows(left_batch, left_rows, left_batch.schema)
@@ -71,30 +73,41 @@ module Prism
       )
     end
 
+    # ameba:disable Metrics/CyclomaticComplexity
     private def match(
-      left_keys : Array(Arrow::ArrayBase),
-      right_keys : Array(Arrow::ArrayBase),
+      left_columns : Array(Arrow::ArrayBase),
+      right_columns : Array(Arrow::ArrayBase),
+      names : Array(String),
       how : Symbol,
       nulls_equal : Bool,
     ) : Tuple(Array(UInt32?), Array(UInt32?))
-      index = Hash(Array(Value), Array(Int32)).new
-      right_count = right_keys.first.len
+      converter = RowKeys.converter(left_columns, names)
+      left_rows_encoded = converter.convert_columns(left_columns)
+      right_rows_encoded = converter.convert_columns(right_columns)
+
+      # Null keys never match unless asked to, so only complete rows are indexed
+      # and only complete rows probe the table.
+      left_guards = nulls_equal ? [] of Arrow::NullBuffer : RowKeys.null_guards(left_columns)
+      right_guards = nulls_equal ? [] of Arrow::NullBuffer : RowKeys.null_guards(right_columns)
+
+      index = Hash(Arrow::Row, Array(Int32)).new
+      right_count = right_rows_encoded.num_rows
 
       right_count.times do |row|
-        key = key_at(right_keys, row, nulls_equal)
-        next unless key
+        next unless RowKeys.complete?(right_guards, row)
 
-        (index[key] ||= [] of Int32) << row
+        (index[right_rows_encoded.row(row)] ||= [] of Int32) << row
       end
 
       left_rows = [] of UInt32?
       right_rows = [] of UInt32?
       matched_right = Set(Int32).new
-      left_count = left_keys.first.len
+      left_count = left_rows_encoded.num_rows
 
       left_count.times do |row|
-        key = key_at(left_keys, row, nulls_equal)
-        candidates = key ? index[key]? : nil
+        candidates = if RowKeys.complete?(left_guards, row)
+                       index[left_rows_encoded.row(row)]?
+                     end
 
         if candidates
           case how
@@ -130,18 +143,6 @@ module Prism
       end
 
       {left_rows, right_rows}
-    end
-
-    # A key is absent (`nil`) when it contains a null and nulls are not equal.
-    private def key_at(
-      arrays : Array(Arrow::ArrayBase),
-      row : Int32,
-      nulls_equal : Bool,
-    ) : Array(Value)?
-      values = arrays.map { |array| Values.extract_at(array, row) }
-      return nil if !nulls_equal && values.any?(Nil)
-
-      values
     end
 
     # ameba:disable Metrics/CyclomaticComplexity

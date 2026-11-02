@@ -318,13 +318,17 @@ types every column as string.
 Hash join with the **right side as the build side**, following Polars' model:
 
 ```text
-right keys -> Hash(Array(Value), [row indices])     # build
-left keys  -> probe, emitting (left row, right row) pairs
+right keys -> RowConverter -> Hash(Row, [row indices])   # build
+left keys  -> RowConverter -> probe, emitting (left row, right row) pairs
 pairs      -> Arrow.take per column -> compose -> suffix/coalesce -> schema
 ```
 
-Only the key columns are materialized into Crystal values, because `arrow-cr`
-exposes no Arrow-native hashing and `Arrow.partition` requires sorted input.
+Keys are encoded as `arrow-row` rows (`Prism::RowKeys`): one canonical byte
+string per key, hashed and compared as bytes with no per-row boxing, and the
+same arena also answers `distinct` and `n_unique`. Nulls encode like values, so
+`nulls_equal: false` is enforced by testing the key columns' null bitmaps before
+indexing or probing, not by special-casing the encoding.
+
 Payload columns stay in Arrow and are gathered by index.
 
 Semantics match Polars: null keys do not match unless `nulls_equal: true`; key
@@ -347,18 +351,28 @@ collapse to a single batch, since combining is the point.
 
 `arrow-cr` has no dedupe kernel, and `ArrayBase#uniq` is a Crystal-level sort
 driven by a `DynComparator` closure — correct, but it allocates an index per row
-and pays an indirect call per comparison. `DataFrame#distinct`, `Series#unique`,
-and the `n_unique` aggregate therefore use the Arrow-native primitives:
-`sort_to_indices` (typed per-dtype sorts), `Arrow.partition` (typed
-`cmp::distinct` on adjacent rows), and `Arrow.take`.
+and pays an indirect call per comparison. `DataFrame#distinct`, `Series#unique`
+and the `n_unique` aggregate therefore encode the key columns into
+`arrow-row` rows and walk them once:
 
-Keeping the *first* occurrence is not free: Arrow's sort is not guaranteed
-stable, so a run's first sorted position is not necessarily its earliest row.
-`Prism::Distinct.first_occurrence_indices` takes the smallest original index per
-run and sorts those ascending to restore input order.
+```text
+keys -> RowConverter -> Row per row -> Set(Row) of seen bytes -> keep first index
+```
 
-Cost is O(n log n). Polars' `unique_stable` is O(n) with a Rust hash set; matching
-that would need Arrow-native hashing, which this dependency does not expose.
+Because the encoding is canonical, "seen" is a byte-set lookup: O(n), no sort,
+and the *first* occurrence is simply the first time the encoding is seen, so
+input order comes for free (the previous sort-plus-partition path had to scan
+each run for its smallest original index).
+
+Three semantics follow from the encoding, deliberately: two NaN keys match
+(Crystal's `==` says otherwise), `-0.0` and `0.0` are distinct (Arrow's total
+order, and Polars hashes the same physical bits), and nulls form one key of their
+own — which is what `distinct` wants, and what `n_unique` subtracts because the
+aggregate counts non-null values.
+
+Grouping is still sort-based on purpose: it yields contiguous `[start, len]`
+ranges as `RecordBatch#slice` views and a deterministic output order, which a
+hash table would give up. See [Grouping](#grouping).
 
 ## Display
 

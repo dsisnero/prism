@@ -2,7 +2,9 @@ module Prism
   class DataFrame
     # Drops duplicate rows, keeping the first occurrence of each key.
     #
-    # With no arguments every column is part of the key.
+    # Keys are compared as `arrow-row` bytes (`Prism::RowKeys`), so this is
+    # O(n): NaNs match each other, `-0.0`/`0.0` stay apart, and nulls are a key
+    # of their own. With no arguments every column is part of the key.
     def distinct : DataFrame
       distinct_columns(column_names)
     end
@@ -27,9 +29,9 @@ module Prism
       drop_null_columns(names.map(&.to_s).to_a)
     end
 
-    # Sort by the key columns, find each run of equal keys, keep the smallest
-    # original row index from each run, then restore the original order. No
-    # column values are materialized.
+    # Encode the key columns as `arrow-row` bytes and keep the first row of each
+    # distinct encoding, in input order. O(n): no sort, and no column values are
+    # materialized into Crystal objects.
     private def distinct_columns(keys : Array(String)) : DataFrame
       keys.each { |name| require_column!(name) }
       return self if keys.empty?
@@ -41,15 +43,11 @@ module Prism
         batch.column_by_name(name) || raise ColumnNotFound.new(name, batch.column_names)
       end
 
-      order = Arrow.lexsort_to_indices(
-        key_arrays.map { |array| Arrow::SortColumn.new(array) }.to_a
-      )
-      sorted_keys = key_arrays.map { |array| Arrow.take(array, order) }.to_a
-      indices = Distinct.first_occurrence_indices(
-        order,
-        Arrow.partition(sorted_keys).ranges,
-      )
-      selected = Arrow::PrimitiveArray(UInt32).from_values(indices)
+      rows = RowKeys.converter(key_arrays, keys).convert_columns(key_arrays)
+      kept = RowKeys.first_occurrences(rows)
+      return self if kept.size == batch.num_rows
+
+      selected = Arrow::PrimitiveArray(UInt32).from_values(kept)
       DataFrame.new(@schema, [Arrow.take_record_batch(batch, selected)])
     end
 

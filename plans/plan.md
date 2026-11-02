@@ -20,39 +20,32 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (310 examples, roughly 30 s warm),
-then take the first unchecked item under Phase 9d in §12. This block is the only
+**Start here:** run `make lint && make test` (318 examples, roughly 30 s warm),
+then take the first unchecked item under Phase 9e in §12. This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
-**Current focus:** Phase 9d — optimizer and performance parity.
+**Current focus:** Phase 9e — examples and the v0.1.0 tag. Phase 9d is closed.
 
 **Next up** (in order, each roughly one commit):
 
-1. **`arrow-row` switch** — **blocked**, waiting on the `arrow-cr` port. The
-   benchmarks say it is not the first bottleneck: `distinct` / `n_unique` /
-   join are 144–284 ms on 1e6 rows and sort-bound, so this is a later win.
-   When the port lands: replace the boxed `Array(Value)` keys in
-   `src/prism/join.cr` and `src/prism/distinct.cr` with encoded row bytes
-   (`Hash(Bytes, …)` over views into the row buffer), which makes
-   `distinct`/`n_unique` O(n) and makes NaN/±0 keys match. Re-run
-   `spec/prism/{join,distinct}_spec.cr` (they are the guards).
+1. **Phase 9e — examples** — `examples/` for the README workflows, including the
+   interactive viewer on `bubbletea` + `bubbles` + `ultraviolet` (development
+   dependencies only).
+2. **Phase 9e — release** — memory notes for `#to_arrow`, then the `v0.1.0` tag.
 
-**Just landed (9d — this closes every unblocked item):** projection pruning
-through joins (`Plan::Join#input_requirements` attributes each output name to its
-side; keys are always kept, a suffixed name pins the right column, the shadowed
-left column is retained so the suffix stays valid, semi/anti read only keys from
-the right), a slice pinned to `Sort`/`GroupBy`/`Distinct` (`Plan::Slice`, nested
-limits compose, `explain` shows `slice: offset=… count=…`), `DataFrame#sort_by_slice`
-so a pinned slice gathers only its window, and `make bench` with numbers in
-[docs/benchmarks.md](benchmarks.md).
-
-**Then Phase 9e:** examples for the README workflows (including an interactive
-viewer on `bubbletea` + `bubbles` + `ultraviolet`, development dependencies only),
-memory notes for `#to_arrow`, and the `v0.1.0` tag.
+**Just landed (9d, now complete):** projection pruning through joins
+(`Plan::Join#input_requirements` attributes each output name to its side; keys are
+always kept, a suffixed name pins the right column, the shadowed left column is
+retained so the suffix stays valid, semi/anti read only keys from the right), a
+slice pinned to `Sort`/`GroupBy`/`Distinct` (`Plan::Slice`, nested limits compose,
+`explain` shows `slice: offset=… count=…`, and `DataFrame#sort_by_slice` gathers
+only the window), `make bench` with numbers in [docs/benchmarks.md](benchmarks.md),
+and `arrow-row` key encoding (`Prism::RowKeys`) for joins, `distinct`, `unique`
+and `n_unique` — O(n) instead of a sort, with NaN keys matching and ±0 staying
+distinct.
 
 **Owner actions, not code:**
 
-- Say when `arrow-row` lands in `arrow-cr`; item 2 above becomes unblocked.
 - Decide whether to do the repo folder / GitHub rename (Phase 10). The shard and
   entrypoint are already `prism`; only the folder and repository still say
   `dataframe`.
@@ -71,14 +64,14 @@ memory notes for `#to_arrow`, and the `v0.1.0` tag.
 | 9a | Display: plain table, optional `lipgloss` styling | **done** |
 | 9b | API parity: lazy verbs, `Series` element-wise methods | **done** |
 | 9c | Expression coverage: literal folding, decimals, dictionaries | **done** |
-| 9d | Optimizer and performance parity (joins, slice, benchmarks) | **done**, except `arrow-row` (blocked) |
-| 9e | Examples, benchmarks, v0.1.0 tag | not started |
+| 9d | Optimizer and performance parity (joins, slice, benchmarks, `arrow-row`) | **done** |
+| 9e | Examples, release notes, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
 **Last feature commit:** `ab497a8` — Phase 9d window gather for a pinned slice,
 with the benchmark harness (`make bench`, [docs/benchmarks.md](benchmarks.md)).
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (311) and costs ~13 s; run it before a release.
+adds the compile-failure spec (319) and costs ~13 s; run it before a release.
 
 ---
 
@@ -324,8 +317,12 @@ specification, which defines memory layout and IPC only, and `arrow-rs` uses
 more columns (1-byte null sentinel, big-endian values, sign bit flipped for
 signed integers, IEEE `totalOrder` for floats, block encoding for strings) built
 so that `memcmp` gives the correct ordering. That — not a hash function — is the
-primitive that makes O(n) distinct and unboxed join keys possible. `arrow-cr` has
-neither. See [§14](#native-row-encoding-for-keys-deferred).
+primitive that makes O(n) distinct and unboxed join keys possible.
+
+**Resolved 2026-11-01:** `arrow-row` landed in `arrow-cr` (Phase 13 there), so
+`Prism::RowKeys` uses `Arrow::RowConverter` for joins, `distinct`, `unique` and
+`n_unique`. The earlier sort-based distinct path and the boxed `Array(Value)`
+join keys are gone; see [§14](#native-row-encoding-for-keys).
 
 #### C19. `Arrow.take_record_batch` reuses the source schema
 
@@ -530,6 +527,7 @@ src/prism.cr                # entrypoint: requires everything, Prism::VERSION
 src/prism/error.cr
 src/prism/dtype.cr          # dtype predicates/helpers over Arrow::DataType
 src/prism/values.cr         # C4: dtype-dispatched value extraction
+src/prism/row_keys.cr       # arrow-row keys for joins, distinct, n_unique
 src/prism/series.cr
 src/prism/dataframe.cr
 src/prism/construction.cr   # Prism.from_arrow / from_batches / from_hash
@@ -904,8 +902,9 @@ that pushdown happened, and the optimizer specs assert on it.
 
 A plan node yields an `Array(RecordBatch)` (the scan streams via `Iterator`;
 `DataFrame` materializes per node). Grouped aggregation sorts once then
-processes ranges; joins build a hash table on the smaller side keyed by the join
-column's Crystal values (via `Prism::Values`, C4).
+processes ranges; joins build a hash table on the right side keyed by each row's
+`arrow-row` encoding (`Prism::RowKeys`), and the same encoding answers `distinct`
+and `n_unique`.
 
 ## 10. Typed schemas
 
@@ -1048,7 +1047,8 @@ chunk-count assertions: element-wise verbs keep their chunks, `sort_by` and
   trusting sort stability, then restores the original order (C18).
 - `Series#unique` and `Series#n_unique` reuse the same machinery for a single
   column, and `n_unique` in `group_by` uses `Aggregates.count_distinct` instead
-  of the slow `ArrayBase#uniq` (C18).
+  of the slow `ArrayBase#uniq` (C18). Phase 9d replaced that machinery with
+  `arrow-row` keys, so both are O(n) now.
 
 ### Phase 4 — group_by + aggregation (done)
 
@@ -1117,10 +1117,9 @@ including duplicate keys (many-to-many) and empty inputs. Specs:
   `[id, name, score, id_right, label]`.
 - **Semi/anti are membership filters**: they emit left rows and left columns
   only, so repeated right keys cannot duplicate rows.
-- Only key columns are materialized into Crystal values, because `arrow-cr`
-  exposes no Arrow-native hashing. Payload columns stay in Arrow and are
-  gathered with `Arrow.take`. A sort-merge join would avoid the materialization
-  at O(n log n); noted for Phase 9.
+- Only the key columns are encoded (as `arrow-row` bytes, Phase 9d), so joins
+  hash canonical byte rows instead of boxed values. Payload columns stay in
+  Arrow and are gathered with `Arrow.take`.
 
 ### Phase 6 — IO (done)
 
@@ -1327,9 +1326,10 @@ a struct array: decimals materialize instead of raising.
       the window's indices, so `sort_by + head(10)` no longer copies every row
       (229 ms → ≈160 ms per the benchmarks). A bounded-heap top-k stays an
       `arrow-cr` kernel, not a Prism change.
-- [ ] Switch join/distinct keys to `arrow-row` once the port lands (**blocked on
-      `arrow-cr`**); removes per-row key boxing, makes `distinct` O(n), and fixes
-      NaN/±0 key equality (C18, §14)
+- [x] Switch join/distinct keys to `arrow-row` (`Prism::RowKeys`): joins hash
+      canonical byte rows from `Arrow::RowConverter` instead of boxed values,
+      `distinct`/`unique`/`n_unique` became O(n), NaN keys match, and ±0 stay
+      distinct (C18, §14)
 
 #### 9e. Release
 
@@ -1463,70 +1463,59 @@ optimize, and the shared pieces (TypeCache, CSE, the expression AST) are the sam
 ones the Phase 7 executor will use. Revisit when `LazyFrame` exists — routing
 eager verbs through it would give uniform predicate pushdown.
 
-### Native row encoding for keys (deferred)
+### Native row encoding for keys
 
-The current divergences, and what would close them:
+Implemented in Phase 9d. `Prism::RowKeys` is the only place Prism touches
+`Arrow::RowConverter`, and it closes the divergences this section used to list:
 
-| Divergence | Today | With row encoding |
+| Divergence | Before | Now |
 | --- | --- | --- |
-| Join keys | one `Array(Value)` per row, boxed | one canonical `Bytes` per row |
+| Join keys | one `Array(Value)` per row, boxed | one canonical row view per row, hashed as bytes |
 | `distinct` / `unique` | O(n log n) sort + partition | O(n) seen-set |
 | `n_unique` | O(n log n) | O(n) |
-| NaN / signed-zero keys | Crystal `==`, so NaN never matches NaN | canonical encoding, NaNs match |
+| NaN / signed-zero keys | Crystal `==`, so NaN never matched NaN | canonical encoding: NaNs match, `-0.0`/`0.0` stay distinct |
 
-Three ways to do it, in increasing fidelity:
+Why this shape:
+
+- **Encoding, not hashing.** The Arrow specification covers memory layout and
+  IPC, not hashing, so no Arrow implementation ships a hash function. What
+  `arrow-row` provides is a canonical byte encoding built for `memcmp`; hashing
+  those bytes is then Crystal's job, and `Bytes`/`Row` hash by content.
+- **Polars parity on both float edge cases.** Polars hashes the physical bits,
+  so `-0.0` and `0.0` are different keys there and NaNs group together. Prism
+  matches both, and `spec/prism/{join,distinct}_spec.cr` pins them.
+- **Nulls are a value in the encoding.** `distinct` wants exactly that (one null
+  key); a join that must not match nulls (`nulls_equal: false`) checks the key
+  columns' null bitmaps before indexing or probing, which costs nothing when the
+  keys have no nulls.
+- **Grouping stays sort-based on purpose.** `group_by` yields contiguous
+  `[start, len]` ranges as `RecordBatch#slice` views and a deterministic output
+  order; a hash table would give both up. So `group_by` still pays O(n log n)
+  while `distinct` is O(n), and a hash grouping path is only worth revisiting if
+  benchmarks say grouping dominates.
+
+The decision trail is kept because it explains why this waited for a dependency:
 
 **A. Prism-local key encoding (~150–250 lines).** Encode each key value to
 canonical bytes — sign-flipped big-endian integers, `totalOrder` bits for floats,
 length-prefixed strings, a null sentinel — concatenate per row, and use
-`Hash(Bytes, …)`. Verified: Crystal hashes `Bytes` by **content**, and distinct
-objects with equal bytes hit the same bucket, so no boxing is needed. Fully
-inside `Prism`, no dependency change.
+`Hash(Bytes, …)`. Fully inside `Prism`, no dependency change, but a second
+encoding to keep faithful.
 
-**B. Port `arrow-row` into `arrow-cr` (~400–700 lines).** The upstream-faithful
-option: it is an `arrow-rs` component, so porting it is squarely inside
-`arrow-cr`'s charter ("behaviour-faithful port"). Everyone downstream benefits,
-and the encoding matches upstream byte for byte, including the block format for
-variable-length data.
+**B. Port `arrow-row` into `arrow-cr` (~4.1k lines of code plus tests).** The
+upstream-faithful option: `arrow-rs` has the crate, `arrow-cr`'s charter is a
+behaviour-faithful port, and the encoding then matches upstream byte for byte
+including the block format for variable-length data. Landed 2026-11-01
+(`fixed`, `variable`, `list`, `struct`, `run`, `union` codecs plus the
+`RowConverter`/`Rows`/`Row`/`RowParser`/`SortField` core).
 
-**C. Re-open `module Arrow` from `Prism`.** Rejected. It is exactly what §4
-forbids: `Prism` would be only half-requireable, and the code would live in
-neither shard's ownership.
+**C. Re-open `module Arrow` from `Prism`.** Rejected: exactly what §4 forbids,
+and the code would live in neither shard's ownership.
 
-None of these diverge from the Arrow **specification**: the spec covers the
-memory and wire format, not compute kernels. Option B diverges from nothing at
-all, because it is a port of an existing `arrow-rs` crate.
-
-**Decision: defer, prefer B.** Doing it now would be guessing that joins and
-distinct are the bottleneck; there are no benchmarks yet. Phase 9 measures, and
-this becomes worthwhile if join/distinct/`n_unique` dominate a realistic
-workload. Until then the sort-based paths are correct, deterministic, and stay
-in Arrow buffers.
-
-**Prerequisite: `arrow-row` is being ported into `arrow-cr` (in progress).**
-Audit of the pinned workspace (`vendor/arrow-rs`, 60.0.0) against `arrow-cr`:
-
-| Workspace crate | Status in `arrow-cr` | Prism needs it |
-| --- | --- | --- |
-| `arrow`, `-array`, `-buffer`, `-data`, `-schema` | ported | yes |
-| `arrow-cmp`, `-ord`, `-select`, `-arith`, `-string`, `-cast` | ported (`cmp`, `sort`/`rank`/`partition`, `filter`/`take`/`zip`, `aggregate`/`temporal`, `like`/`regexp`, `cast`/`display`) | yes |
-| `arrow-csv`, `-json`, `-ipc` | ported | yes (Phase 6) |
-| `parquet`, `-geospatial`, `-variant*`, `parquet_derive` | ported in `parquet-cr` | yes (Phase 6) |
-| **`arrow-row`** | **missing — port in progress** | yes (this section) |
-| `arrow-integration-test`, `-testing` | missing | optional: conformance only |
-| `arrow-avro` (~37k) | missing | no: Avro is not on the roadmap |
-| `arrow-flight` (~14k) | missing, declared out of scope | no: gRPC transport |
-| `arrow-pyarrow` | missing | no: PyO3 bindings |
-
-Port scope for `arrow-row`: ~9.0k lines total, of which **~4.1k is code**
-(`lib.rs` is 2.4k code plus 4.3k tests; `run.rs` is 155 code plus 492 tests).
-Suggested order: `fixed.rs` (475: primitives and booleans — null sentinel,
-big-endian, sign-bit flip, `totalOrder` floats), `variable.rs` (437: block
-encoding for strings/binary), then the `lib.rs` core (`RowConverter`, `Row`,
-`Rows`, `RowParser`, `SortField`); defer `list.rs` (636) and `run.rs`.
-No new prerequisites: its only dependencies are array/buffer/data/schema plus
-`half`, all present, and `SortField` is defined inside `arrow-row` over
-`SortOptions`, which `arrow-cr` already has.
+**Decision: prefer B, and B landed.** The earlier choice to defer was right at
+the time — there were no benchmarks to justify a ~4k-line dependency port — and
+the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
+implementation request rather than a guess.
 
 ### Where we deliberately differ from Arquero
 
@@ -1548,30 +1537,32 @@ scenarios, numbers and the reading of them live in
 
 | Path | Time |
 | --- | ---: |
-| `filter` on half the rows | 53 ms |
+| `filter` on half the rows | 48 ms |
 | `select` / `to_arrow` (one chunk) | 0 ms (same buffers) |
-| `sort_by` one key / two keys | 240 ms / 1.0 s |
-| `sort_by` + `limit 10`, eager / window gathered | 229 ms / ≈160 ms |
-| `group_by` 4 keys / 1e5 keys | 249 ms / 439 ms |
-| `distinct` / `n_unique` on 1e5 keys | 163 ms / 144 ms |
-| join 1e6 → 1e5 on boxed keys | 284 ms |
-| Parquet read all / 2 of 4 columns / `limit 100` | 149 ms / 90 ms / 4 ms |
-| Parquet predicate, unclustered / clustered | 174 ms / 118 ms |
-| Lazy scan+filter+select vs eager | 133 ms vs 153 ms |
+| `sort_by` one key / two keys | 202 ms / 935 ms |
+| `sort_by` + `limit 10`, eager / window gathered | 211 ms / 130 ms |
+| `group_by` 4 keys / 1e5 keys | 220 ms / 381 ms |
+| `distinct` / `n_unique` on 1e5 keys, before / after row keys | 163 / 144 ms → 54 / 48 ms |
+| join 1e6 → 1e5, before / after row keys | 284 ms → 219 ms |
+| Parquet read all / 2 of 4 columns / `limit 100` | 117 ms / 74 ms / 3 ms |
+| Parquet predicate, unclustered / clustered | 155 ms / 111 ms |
+| Lazy scan+filter+select vs eager | 119 ms vs 142 ms |
 
 What they decide:
 
 - **A pinned slice gathers only its window** (`DataFrame#sort_by_slice`, wired
-  into `Plan::Sort#execute`): `sort + head(10)` went from 229 ms to roughly
-  160 ms, 30% of it the 1e6-row copy it no longer makes. The sort is still
-  `O(n log n)` — a bounded-heap top-k is an `arrow-cr` kernel this port does not
-  have, not a Prism change.
-- **`arrow-row` is not the first bottleneck.** The row-keyed paths are
-  sort-bound at 144–284 ms; a single sort costs 240 ms, so an O(n) hash path
-  would help these specific shapes but not the pipeline. Stays blocked on the
-  `arrow-cr` port, and is no longer the top item once it lands.
+  into `Plan::Sort#execute`): `sort + head(10)` costs 130 ms through the plan
+  against 211 ms for eager sort-then-trim, and the gap is the 1e6-row copy the
+  eager path still makes. The sort itself is still `O(n log n)` — a bounded-heap
+  top-k is an `arrow-cr` kernel this port does not have, not a Prism change.
+- **`arrow-row` was worth it, and mostly for `distinct`/`n_unique`.** Those were
+  sort-bound at 163/144 ms and are now 3.0x faster (54/48 ms); the join improves
+  1.3x, because a 1e6-row encode, probe and gather is not dominated by key
+  hashing. The "before" numbers also showed it was not the pipeline's
+  bottleneck, which is why it waited for the `arrow-cr` port rather than being
+  hand-rolled locally.
 - **Predicate pushdown depends on the data, not the optimizer.** On unclustered
-  columns the row filter costs more than it saves (174 ms vs 149 ms) because no
+  columns the row filter costs more than it saves (155 ms vs 117 ms) because no
   row group can be skipped; on a clustered column it saves 30–45%. Worth
   documenting for users rather than optimizing here.
 - The copy-count check stays a spec ("a projected `select` is the same
@@ -1590,8 +1581,9 @@ What they decide:
 | Typed-schema macro complexity | Isolated in Phase 8 with its own spec file; API is additive |
 | Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
-| NaN join keys never match | Crystal `==` on `Float64::NAN` is false, so a NaN key does not join to a NaN key (Polars matches them via `totalOrder`). Fixed by the row encoding in §14; documented as a limitation until then |
-| Proving joins/distinct need hashing | Phase 9 benchmarks decide; §14 records the option (A local, B upstream) and the preferred choice |
+| NaN join keys never match | **Fixed** by the `arrow-row` encoding (§14): NaNs encode canonically and match. Pinned by a join spec |
+| `-0.0` and `0.0` are distinct keys | Consequence of the same encoding (Arrow total order, and Polars hashes the same bits). Pinned by a join spec, so nobody "fixes" it by accident |
+| Proving joins/distinct need hashing | Settled: Phase 9 benchmarks showed `distinct`/`n_unique` were sort-bound, and `arrow-row` (option B) landed in `arrow-cr`; §14 records the measurements |
 | Compile times grow with `require` graph | Entry point requires everything; measure and split with `require`-level shards if it regresses |
 
 **Open questions** (decide in-phase, record here):
@@ -1600,8 +1592,9 @@ What they decide:
   of `[]` entirely? (Phase 3)
 - Null-key policy default for `group_by` on `Utf8` vs numeric columns: one
   policy or per-dtype defaults? (Phase 4)
-- `n_unique` on floats: use Arrow total order (NaN payloads distinct) or
-  IEEE-equality grouping? (Phase 4)
+- ~~`n_unique` on floats: use Arrow total order (NaN payloads distinct) or
+  IEEE-equality grouping?~~ Decided in 9d: the row encoding is total order, so
+  NaNs form one key and `-0.0`/`0.0` stay apart.
 - Join suffix scheme: `_right` vs `_y` vs error. (Phase 5)
 
 ## 16. Definition of done

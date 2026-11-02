@@ -99,6 +99,65 @@ describe Prism::DataFrame do
       with_nulls.row_count.should eq(2)
     end
 
+    it "treats a null in any key of a composite join as unmatched" do
+      left = Prism.from_columns({
+        a: Arrow::Int64Array.from_values([1_i64, 1_i64]),
+        b: Arrow::StringArray.from_nullable(["x", nil]),
+      })
+      right = Prism.from_columns({
+        a: Arrow::Int64Array.from_values([1_i64, 1_i64]),
+        b: Arrow::StringArray.from_nullable(["x", nil]),
+      })
+
+      left.join(right, on: ["a", "b"]).row_count.should eq(1)
+      left.join(right, on: ["a", "b"], nulls_equal: true).row_count.should eq(2)
+    end
+
+    it "matches NaN keys, which the value-keyed path could not" do
+      left = Prism.from_columns({
+        f: Arrow::Float64Array.from_values([Float64::NAN, 1.0]),
+      })
+      right = Prism.from_columns({
+        f: Arrow::Float64Array.from_values([Float64::NAN]),
+      })
+
+      joined = left.join(right, on: "f")
+
+      joined.row_count.should eq(1)
+      joined["f"].to_a.first.as(Float64).nan?.should be_true
+    end
+
+    it "keeps signed zero distinct, like Arrow's total order" do
+      left = Prism.from_columns({f: Arrow::Float64Array.from_values([0.0])})
+      right = Prism.from_columns({f: Arrow::Float64Array.from_values([-0.0])})
+
+      left.join(right, on: "f").row_count.should eq(0)
+    end
+
+    it "joins dictionary-encoded keys by value, not by key index" do
+      # The two dictionaries intern their values in opposite orders.
+      left_keys = Arrow::DictionaryArray(Int32)
+        .from_values(["east", "west"])
+        .as(Arrow::ArrayBase)
+      right_keys = Arrow::DictionaryArray(Int32)
+        .from_values(["west", "east", "west"])
+        .as(Arrow::ArrayBase)
+
+      left = Prism.from_columns({
+        region: left_keys,
+        l:      Arrow::Int64Array.from_values([1_i64, 2_i64]),
+      })
+      right = Prism.from_columns({
+        region: right_keys,
+        r:      Arrow::Int64Array.from_values([10_i64, 20_i64, 30_i64]),
+      })
+
+      joined = left.join(right, on: "region")
+
+      joined["l"].to_a.should eq([1_i64, 2_i64, 2_i64])
+      joined["r"].to_a.should eq([20_i64, 10_i64, 30_i64])
+    end
+
     it "joins on differently named keys and keeps both key columns" do
       users = Prism.from_columns({
         user_id: Arrow::Int64Array.from_values([10_i64, 20_i64]),

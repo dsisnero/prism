@@ -114,17 +114,18 @@ module Bench
     end
   end
 
-  # The row-keyed paths: what an `arrow-row` switch would replace.
+  # The row-keyed paths: joins, distinct and n_unique, all keyed by the
+  # `arrow-row` encoding (Prism::RowKeys).
   private def keys(frame : Prism::DataFrame, dimension : Prism::DataFrame) : Nil
-    timed("distinct on 1e5 keys", "sort + partition") do
+    timed("distinct on 1e5 keys", "row-keyed seen-set") do
       frame.distinct("user_id")
     end
 
-    timed("series n_unique", "sort + partition") do
+    timed("series n_unique", "row-keyed seen-set") do
       frame["user_id"].n_unique
     end
 
-    timed("join 1e6 -> 1e5 on user_id", "hash on boxed keys") do
+    timed("join 1e6 -> 1e5 on user_id", "row-encoded keys") do
       frame.join(dimension, on: "user_id", how: :left)
     end
   end
