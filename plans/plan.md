@@ -72,9 +72,8 @@ checklists below are the working history.
 | 9e | Examples, memory notes, property oracles, v0.1.0 tag | **done** |
 | 10 | Repo/GitHub rename `dataframe` → `prism` | **done** (local folder optional) |
 
-**Last feature commit:** `5a8d2e3` — Phase 9e lazy-entry cleanup
-(`Prism.scan(frame)` removed; `df.lazy` only). The `v0.1.0` tag is the only 9e
-item left, and it is owner-gated.
+**Last feature commit:** `993fa5f` — v0.1.0 release documentation and the
+GitHub-backed dependency graph. Tagged `v0.1.0`.
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (325) and costs ~13 s; run it before a release.
 
