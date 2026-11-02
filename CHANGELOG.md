@@ -21,11 +21,24 @@ All notable changes to this project are documented here. This project adheres to
   all-null result of the right dtype, for arithmetic and comparisons alike,
   instead of raising `DtypeError`.
 
+- Nested materialization: `List`/`LargeList`/`ListView`/`LargeListView`/
+  `FixedSizeList` become `Array(Prism::Value)`, `Struct` becomes a field-ordered
+  `Hash(String, Prism::Value)`, and `Map` becomes `Hash(Prism::Value,
+  Prism::Value)`, matching how Polars converts them (`to_list` semantics: a null
+  list is `nil`, distinct from `[]` and from a list holding a null). `Value` is
+  now a recursive alias through those containers, so nested columns also work as
+  `distinct`/`n_unique`/`group_by` keys via the existing `arrow-row` encoding,
+  and the table renders containers with nested strings quoted.
+
 ### Tests
 
 - `spec/prism/decimal_arithmetic_spec.cr` pins every rule above against the
   kernel's own result dtype (the `dtype`/`eval` agreement check), and the coverage
   spec no longer asserts that decimal arithmetic is unimplemented.
+- `spec/prism/nested_spec.cr` covers list/fixed-size-list/struct/map extraction,
+  nulls at both levels, display, nested keys through `distinct`/`n_unique`, and
+  arithmetic rejection; `values_spec` moved its "unsupported dtype" case from
+  structs to intervals, which are still unsupported.
 
 ## [0.1.0] - 2026-11-01
 

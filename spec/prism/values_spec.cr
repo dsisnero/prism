@@ -50,15 +50,16 @@ describe Prism::Values do
     end
 
     it "raises for unsupported dtypes" do
-      # Decimals are supported now; nested structs are not (a recursive `Value`
-      # union would be needed, plan §17).
-      nested = Arrow::StructArray.from_pairs([
-        {Arrow::Field.new("x", Arrow::DataType.int64, true),
-         Arrow::Int64Array.from_values([1_i64]).as(Arrow::ArrayBase)},
-      ]).as(Arrow::ArrayBase)
+      # Nested values materialize now (see spec/prism/nested_spec.cr); intervals
+      # are the remaining gap, because `Value` has no month/day/nano member.
+      interval = Arrow::PrimitiveArray(Int128)
+        .from_values([1_i128])
+        .with_data_type(
+          Arrow::DataType.interval(Arrow::IntervalUnit::MonthDayNano)
+        )
 
-      expect_raises(Prism::UnsupportedOperation, /Struct/) do
-        Prism::Values.extract(nested)
+      expect_raises(Prism::UnsupportedOperation, /Interval/) do
+        Prism::Values.extract(interval)
       end
     end
 

@@ -4,13 +4,22 @@ module Prism
   # The Crystal-level representation of an Arrow value.
   #
   # Nulls are `nil`. Temporal columns become `Time` (`Time::Span` for
-  # durations). Nested, dictionary, decimal and view types are not materialized
-  # yet; see `Prism::Values`.
+  # durations), decimals become `BigDecimal`, and nested columns become
+  # containers, matching how Polars converts them: a list is an `Array`, a
+  # struct is a `Hash` keyed by field name (in schema order), and a map is a
+  # `Hash` keyed by its entries. Nulls stay `nil` at every level, so a null list
+  # is distinguishable from an empty one and from a list containing a null.
+  #
+  # The recursion is through `Array`/`Hash`, which Crystal allows in an alias
+  # (`JSON::Any` is built the same way), and every member is hashable, so a
+  # `Value` can still be a `Hash`/`Set` key.
   alias Value = Int8 | Int16 | Int32 | Int64 |
                 UInt8 | UInt16 | UInt32 | UInt64 |
                 Arrow::Float16 | Float32 | Float64 |
                 Bool | String | Bytes | Time | Time::Span |
-                BigDecimal | Nil
+                BigDecimal |
+                Array(Value) | Hash(String, Value) | Hash(Value, Value) |
+                Nil
 
   # Materializes Arrow arrays into Crystal values and reads single values.
   #
@@ -59,11 +68,77 @@ module Prism
       when .time32?                      then collect_time(source.as(Arrow::PrimitiveArray(Int32)))
       when .time64?                      then collect_time(source.as(Arrow::PrimitiveArray(Int64)))
       when .duration?                    then collect_duration(source.as(Arrow::PrimitiveArray(Int64)))
+      when .list?, .large_list?          then collect_list(source.as(Arrow::ListArray))
+      when .list_view?                   then collect_list(source.as(Arrow::ListViewArray))
+      when .large_list_view?             then collect_list(source.as(Arrow::LargeListViewArray))
+      when .fixed_size_list?             then collect_list(source.as(Arrow::FixedSizeListArray))
+      when .struct?                      then collect_struct(source.as(Arrow::StructArray))
+      when .map?                         then collect_map(source.as(Arrow::MapArray))
       else
         raise UnsupportedOperation.new(
           "cannot materialize #{source.data_type} values; " \
           "see Prism::Values for the supported types"
         )
+      end
+    end
+
+    # List, large list, list view and fixed-size list share one shape: a row is
+    # a child-array view, or null.
+    # The list-like classes differ only in offset width (and fixed vs
+    # offset-pair), so each forwards its own `#value` into one shared shape.
+    private def self.collect_list(array : Arrow::GenericListArray(O)) : Array(Value) forall O
+      collect_rows(array) { |index| array.value(index) }
+    end
+
+    private def self.collect_list(array : Arrow::GenericListViewArray(O)) : Array(Value) forall O
+      collect_rows(array) { |index| array.value(index) }
+    end
+
+    private def self.collect_list(array : Arrow::FixedSizeListArray) : Array(Value)
+      collect_rows(array) { |index| array.value(index) }
+    end
+
+    private def self.collect_rows(
+      array : Arrow::ArrayBase,
+      &block : Int32 -> Arrow::ArrayBase
+    ) : Array(Value)
+      Array(Value).new(array.len) do |index|
+        array.null?(index) ? nil : extract(block.call(index))
+      end
+    end
+
+    # A struct is a field-ordered hash, like a Python dict built from `to_list`.
+    private def self.collect_struct(array : Arrow::StructArray) : Array(Value)
+      names = array.column_names
+      columns = array.columns
+
+      Array(Value).new(array.len) do |index|
+        if array.null?(index)
+          nil
+        else
+          row = {} of String => Value
+          names.each_with_index { |name, position| row[name] = extract_at(columns[position], index) }
+          row
+        end
+      end
+    end
+
+    # A map is a hash of its entries. Duplicate keys collapse, last one wins,
+    # which is what a Python dict does with the same entries.
+    private def self.collect_map(array : Arrow::MapArray) : Array(Value)
+      Array(Value).new(array.len) do |index|
+        if array.null?(index)
+          nil
+        else
+          entries = array.value(index)
+          keys = entries.column(0)
+          values = entries.column(1)
+          pairs = {} of Value => Value
+          entries.len.times do |position|
+            pairs[extract_at(keys, position)] = extract_at(values, position)
+          end
+          pairs
+        end
       end
     end
 
@@ -94,6 +169,11 @@ module Prism
       when .dictionary?
         decoded = decoded_dictionary(source.slice(index, 1))
         extract_at(decoded, 0)
+      when .list?, .large_list?, .list_view?, .large_list_view?,
+           .fixed_size_list?, .struct?, .map?
+        return nil if source.null?(index)
+
+        extract(source.slice(index, 1)).first
       when .decimal32?  then decimal_at(source.as(Arrow::PrimitiveArray(Int32)), index)
       when .decimal64?  then decimal_at(source.as(Arrow::PrimitiveArray(Int64)), index)
       when .decimal128? then decimal_at(source.as(Arrow::PrimitiveArray(Int128)), index)

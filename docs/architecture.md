@@ -36,6 +36,7 @@ lazy optimizer never touches buffers.
 | `GroupBy` | `DataFrame` + key names + options | executes on `aggregate` |
 | `LazyFrame` | plan node tree | nothing read until `collect` |
 | `Schema` (typed) | macro-generated struct | `define_schema` |
+| `Value` | recursive alias: scalars, `Array(Value)`, `Hash(String, Value)`, `Hash(Value, Value)` | nested columns materialize as containers |
 
 There is no `Prism::DataType`. Data types are `Arrow::DataType` values, schemas
 are `Arrow::Schema` values, and columns are `Arrow::ArrayBase` values. This is

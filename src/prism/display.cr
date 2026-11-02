@@ -166,12 +166,24 @@ module Prism
       format_value(series[index], max_string)
     end
 
-    private def format_value(value : Value, max_string : Int32) : String
+    # Nested values render inside their container, where a bare string would be
+    # ambiguous, so strings are quoted one level down.
+    private def format_value(value : Value, max_string : Int32, nested : Bool = false) : String
       case value
       when Nil    then "null"
-      when String then truncate(value, max_string)
+      when String then nested ? %("#{truncate(value, max_string)}") : truncate(value, max_string)
       when Bytes  then truncate(value.hexstring, max_string)
-      else             value.to_s
+      when Array
+        "[" + value.map { |item| format_value(item, max_string, true) }.join(", ") + "]"
+      when Hash(String, Value)
+        pairs = value.map { |key, item| "#{key}: #{format_value(item, max_string, true)}" }
+        "{" + pairs.join(", ") + "}"
+      when Hash(Value, Value)
+        pairs = value.map do |key, item|
+          "#{format_value(key, max_string, true)}: #{format_value(item, max_string, true)}"
+        end
+        "{" + pairs.join(", ") + "}"
+      else value.to_s
       end
     end
 

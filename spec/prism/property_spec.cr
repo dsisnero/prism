@@ -92,7 +92,7 @@ private def reference_group_by(frame : Prism::DataFrame) : Array(Array(Prism::Va
   order.map do |region|
     count = amount_counts[region]
     mean = count.zero? ? nil : amount_sums[region] / count.to_f64
-    [region, totals[region], mins[region], maxs[region], mean]
+    [region, totals[region], mins[region], maxs[region], mean] of Prism::Value
   end
 end
 
@@ -115,9 +115,9 @@ private def reference_join(
     end
 
     if matches.empty?
-      out << [ids[row], nil] unless how == :inner
+      out << [ids[row], nil] of Prism::Value unless how == :inner
     else
-      matches.each { |position| out << [ids[row], labels[position]] }
+      matches.each { |position| out << [ids[row], labels[position]] of Prism::Value }
     end
   end
 
@@ -175,7 +175,9 @@ describe "property checks" do
       order = [] of Tuple(Prism::Value, Prism::Value)
       totals = Hash(Tuple(Prism::Value, Prism::Value), Int64).new
       regions.each_with_index do |region, row|
-        key = {region, buckets[row].as(Int64)}
+        # Recursive aliases need the annotation: an inferred tuple of the
+        # expanded union is a different type from `Tuple(Prism::Value, ...)`.
+        key = {region.as(Prism::Value), buckets[row].as(Int64).as(Prism::Value)}.as(Tuple(Prism::Value, Prism::Value))
         unless totals.has_key?(key)
           order << key
           totals[key] = 0_i64

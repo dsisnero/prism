@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (352 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (360 examples, roughly 30 s warm),
 then pick the first item from the **post-v0.1 backlog** below. This block is the
 only place that tracks status; do not re-derive it from `git log`.
 
@@ -30,18 +30,18 @@ apart from the cosmetic local folder rename.
 
 **Next up — post-v0.1 backlog** (in order, each roughly one commit):
 
-1. **Nested (`list`/`struct`) materialization** — needs a tagged `Prism::Value`
-   struct, since Crystal cannot express a recursive union alias.
-2. **Hash-based grouping** — only if a real workload shows grouping dominating;
+1. **Hash-based grouping** — only if a real workload shows grouping dominating;
    it would trade contiguous group views and deterministic order for O(n).
-3. **RedAmber ergonomics** — one-call group aggregates, `sort_by("-col")`,
+2. **RedAmber ergonomics** — one-call group aggregates, `sort_by("-col")`,
    range indexing, `remove`, boolean-mask filtering (§17 has the full list with
    the reason each is not free).
 
-**Just landed (post-0.1.0):** decimal arithmetic — `+`, `-`, `*`, `/`, `%` and
-unary `-` drive `arrow-cr`'s kernels with Arrow's Hive rules, so `dtype` and
-`eval` agree; integers promote to scale 0, literals adopt the column's scale,
-floats fall back to `Float64`, and a scale overflow fails at planning time.
+**Just landed (post-0.1.0):** decimal arithmetic (Hive rules, so `dtype` and
+`eval` agree) and nested materialization — list/large-list/list-view/fixed-size
+list become `Array(Value)`, struct becomes a field-ordered `Hash(String, Value)`,
+map becomes `Hash(Value, Value)`, nulls stay `nil` at every level, nested columns
+key `distinct`/`n_unique`/grouping through the existing `arrow-row` path, and the
+table renders containers (`[1, 2]`, `{x: 1, y: "a"}`) with nested strings quoted.
 
 **What 0.1.0 contains:** Arrow-backed tables and series, the expression engine,
 eager verbs, `group_by`, joins, Parquet/CSV/IPC, the lazy planner with
@@ -874,6 +874,15 @@ raised `Prism::Error` names the offending column.
 - **`Series#==` is element-wise** and returns a boolean series, so comparing two
   series with `==` is always truthy. Use `Series#same_as?` for structural
   comparison, exactly as with `Expr`.
+- **`Value` is a recursive alias**, so an *inferred* container of values is not
+  always the same type as the alias: build tuples/arrays of values with an
+  annotation (`[a, b] of Prism::Value`, `.as(Prism::Value)`), or Crystal will
+  infer the one-level-expanded union and refuse the assignment. `to_a` and
+  `Values.extract` return the alias itself, so ordinary iteration is unaffected.
+- **Nested values are containers, not cells.** A `List` row is an `Array(Value)`
+  and a `Struct`/`Map` row is a `Hash`, so `Value` can no longer be assumed
+  scalar: arithmetic, `to_f64`, and aggregation kernels reject containers with a
+  `Prism::DtypeError`, and display renders them as `[1, 2]` / `{x: 1, y: "a"}`.
 
 ## 9. Lazy execution and optimization
 
@@ -1339,9 +1348,12 @@ C16).
       integers promote to scale 0, floats fall back to `Float64`, and a scale
       overflow raises at planning time. Done post-v0.1; see
       `spec/prism/decimal_arithmetic_spec.cr`.
-- [ ] Nested (`list`/`struct`) materialization — deferred: it needs a recursive
-      `Value` union, which Crystal cannot express as an alias; a tagged
-      `Prism::Value` struct is the way in (§17).
+- [x] Nested (`list`/`struct`/`map`) materialization: `Value` gained
+      `Array(Value) | Hash(String, Value) | Hash(Value, Value)`, which is a
+      recursive alias **through containers** and is legal in Crystal (`JSON::Any`
+      is built the same way — the earlier claim in §17 that aliases cannot
+      recurse was wrong, and this needed no new value type). Done post-v0.1; see
+      `spec/prism/nested_spec.cr`.
 
 **Notes:** the fold is Polars' rewrite
 `when(col.is_not_null()).then(constant).otherwise(null)`. It matters because
@@ -1726,7 +1738,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (blocked) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 (done) |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |
-| Nested list/struct in `Values` | needs a recursive `Value` union; Crystal aliases cannot recurse | post-v0.1 |
+| Nested list/struct/map in `Values` | needed a recursive `Value` alias — legal through `Array`/`Hash`, corrected the earlier assumption | post-v0.1 (done) |
 | `LazyFrame` missing verbs | Phase 7 covered the planner's needs | 9b (done) |
 | `Series#is_null`/`fill_null`/`cast`/`==` | verbs cover the same ground today | 9b (done) |
 | Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |

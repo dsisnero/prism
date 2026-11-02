@@ -53,6 +53,10 @@ sales
   [the docs say exactly when](docs/architecture.md#memory-what-to_arrow-costs).
 - **Typed columns when you want them.** `define_schema` generates compile-time
   accessors, so `typed.select(&.salary)` with a misspelt field is a build error.
+- **Nested data, not a flat-only API.** List, fixed-size-list, struct and map
+  columns materialize as arrays and hashes the way Polars' `to_list` does, and
+  they work as `distinct` / `n_unique` / `group_by` keys through the same
+  `arrow-row` encoding as scalar keys.
 
 ## Installation
 
@@ -182,11 +186,12 @@ snippet that stops working fails a spec.
 
 ## Status
 
-`v0.1.0` is the first release: the API in this README is implemented, tested
-(335 specs plus opt-in compile and example suites) and measured. Deliberately out
-of scope for v0.1: no index/row labels, no pivot/melt, no window functions, no
-SQL or string-expression parser, no multi-threaded engine, and no async/object
-store IO. The [plan's deferred table](plans/plan.md#17-deferred-work) lists every
+`v0.1.0` is the first release, with decimal arithmetic and nested materialization
+landed since: the API in this README is implemented, tested (360 specs plus
+opt-in compile and example suites) and measured. Deliberately out of scope: no
+index/row labels, no pivot/melt, no window functions, no SQL or string-expression
+parser, no multi-threaded engine, and no async/object store IO. Interval columns
+are the one dtype that still cannot materialize. The [plan's deferred table](plans/plan.md#17-deferred-work) lists every
 known gap with the phase that would close it.
 
 ## Contributing
