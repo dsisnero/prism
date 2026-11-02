@@ -236,7 +236,7 @@ module Prism
 
     # Accepts a materialized frame by scanning it.
     def join(other : DataFrame, **options) : LazyFrame
-      join(Prism.scan(other), **options)
+      join(other.lazy, **options)
     end
 
     private def fill_replacements(targets : Hash(String, Expr)) : LazyFrame
@@ -298,11 +298,6 @@ module Prism
     end
   end
 
-  # Wraps a materialized frame as a lazy source.
-  def self.scan(frame : DataFrame) : LazyFrame
-    LazyFrame.new(Plan::ScanBatches.new(frame.schema, frame.batches))
-  end
-
   # Plans a Parquet file. Only the footer is read, to learn the schema.
   def self.scan_parquet(
     path : String,
@@ -313,9 +308,11 @@ module Prism
   end
 
   class DataFrame
-    # Defers further work into a plan.
+    # Defers further work into a plan — the in-memory twin of
+    # `Prism.scan_parquet`, and the only way to make a frame lazy (Polars'
+    # `df.lazy()`).
     def lazy : LazyFrame
-      Prism.scan(self)
+      LazyFrame.new(Plan::ScanBatches.new(@schema, @batches))
     end
   end
 end

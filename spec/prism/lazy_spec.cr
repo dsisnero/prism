@@ -27,7 +27,7 @@ end
 describe Prism::LazyFrame do
   describe "#collect" do
     it "matches the eager filter + select pipeline" do
-      lazy = Prism.scan(SpecFrames.sales)
+      lazy = SpecFrames.sales.lazy
         .filter(col("qty") > lit(2_i64))
         .select("region", "price")
       eager = SpecFrames.sales
@@ -39,7 +39,7 @@ describe Prism::LazyFrame do
     end
 
     it "matches the eager group_by pipeline" do
-      lazy = Prism.scan(SpecFrames.sales)
+      lazy = SpecFrames.sales.lazy
         .group_by("region")
         .aggregate(total: col("qty").sum)
       eager = SpecFrames.sales
@@ -50,14 +50,14 @@ describe Prism::LazyFrame do
     end
 
     it "matches the eager sort + limit pipeline" do
-      lazy = Prism.scan(SpecFrames.sales).sort_by("qty", order: :desc).head(2)
+      lazy = SpecFrames.sales.lazy.sort_by("qty", order: :desc).head(2)
       eager = SpecFrames.sales.sort_by("qty", order: :desc).head(2)
 
       lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
     end
 
     it "matches the eager distinct pipeline" do
-      lazy = Prism.scan(SpecFrames.sales).distinct("region")
+      lazy = SpecFrames.sales.lazy.distinct("region")
       eager = SpecFrames.sales.distinct("region")
 
       lazy.collect["region"].to_a.should eq(eager["region"].to_a)
@@ -69,7 +69,7 @@ describe Prism::LazyFrame do
         weight: Arrow::Float64Array.from_values([1.0, 2.0]),
       })
 
-      lazy = Prism.scan(SpecFrames.sales).join(Prism.scan(other), on: "region", how: :left)
+      lazy = SpecFrames.sales.lazy.join(other.lazy, on: "region", how: :left)
       eager = SpecFrames.sales.join(other, on: "region", how: :left)
 
       lazy.collect.column_names.should eq(eager.column_names)
@@ -87,7 +87,7 @@ describe Prism::LazyFrame do
 
   describe "#explain" do
     it "shows the unoptimized plan" do
-      plan = Prism.scan(SpecFrames.sales)
+      plan = SpecFrames.sales.lazy
         .filter(col("qty") > lit(2_i64))
         .explain(optimized: false)
 

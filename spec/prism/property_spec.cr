@@ -272,7 +272,7 @@ describe "property checks" do
     REPEATS.times do |seed|
       frame = random_frame(Random.new(seed))
 
-      lazy = Prism.scan(frame)
+      lazy = frame.lazy
         .filter((col("qty") > lit(3)) & (col("region") == lit("east")))
         .select("id", "amount")
         .sort_by("id")
@@ -294,13 +294,13 @@ describe "property checks" do
       left = random_frame(rng)
       right = lookup_frame(rng)
 
-      rows_of(Prism.scan(left).distinct("region").collect, ["id"])
+      rows_of(left.lazy.distinct("region").collect, ["id"])
         .should eq(rows_of(left.distinct("region"), ["id"]))
 
-      rows_of(Prism.scan(left).group_by("region").aggregate(n: col("qty").sum).collect, ["region", "n"])
+      rows_of(left.lazy.group_by("region").aggregate(n: col("qty").sum).collect, ["region", "n"])
         .should eq(rows_of(left.group_by("region").aggregate(n: col("qty").sum), ["region", "n"]))
 
-      rows_of(Prism.scan(left).join(Prism.scan(right), on: "bucket").collect, ["id", "label"])
+      rows_of(left.lazy.join(right.lazy, on: "bucket").collect, ["id", "label"])
         .should eq(rows_of(left.join(right, on: "bucket"), ["id", "label"]))
     end
   end

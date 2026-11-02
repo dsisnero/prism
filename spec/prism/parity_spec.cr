@@ -8,7 +8,7 @@ end
 
 describe "lazy verb parity" do
   it "drops columns" do
-    lazy = Prism.scan(parity_frame).drop("price")
+    lazy = parity_frame.lazy.drop("price")
     eager = parity_frame.drop("price")
 
     lazy.schema.should eq(eager.schema)
@@ -16,7 +16,7 @@ describe "lazy verb parity" do
   end
 
   it "renames columns" do
-    lazy = Prism.scan(parity_frame).rename({"price" => "cost", :qty => "quantity"})
+    lazy = parity_frame.lazy.rename({"price" => "cost", :qty => "quantity"})
     eager = parity_frame.rename({"price" => "cost", :qty => "quantity"})
 
     lazy.schema.should eq(eager.schema)
@@ -24,7 +24,7 @@ describe "lazy verb parity" do
   end
 
   it "casts a named column" do
-    lazy = Prism.scan(parity_frame).cast({"qty" => Arrow::DataType.float64})
+    lazy = parity_frame.lazy.cast({"qty" => Arrow::DataType.float64})
 
     lazy.schema.fields.find_field("qty").not_nil!.data_type
       .should eq(Arrow::DataType.float64)
@@ -32,14 +32,14 @@ describe "lazy verb parity" do
   end
 
   it "fills nulls" do
-    lazy = Prism.scan(parity_frame).fill_null(0)
+    lazy = parity_frame.lazy.fill_null(0)
     eager = parity_frame.fill_null(0)
 
     lazy.collect["price"].to_a.should eq(eager["price"].to_a)
   end
 
   it "drops null rows" do
-    lazy = Prism.scan(parity_frame).drop_nulls("price")
+    lazy = parity_frame.lazy.drop_nulls("price")
     eager = parity_frame.drop_nulls("price")
 
     lazy.collect.row_count.should eq(eager.row_count)
@@ -47,7 +47,7 @@ describe "lazy verb parity" do
   end
 
   it "adds several columns" do
-    lazy = Prism.scan(parity_frame).with_columns(
+    lazy = parity_frame.lazy.with_columns(
       doubled: col("qty") * lit(2),
       flagged: col("qty") > lit(2),
     )
@@ -57,14 +57,14 @@ describe "lazy verb parity" do
   end
 
   it "takes the last rows" do
-    lazy = Prism.scan(parity_frame).tail(2)
+    lazy = parity_frame.lazy.tail(2)
     eager = parity_frame.tail(2)
 
     lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
   end
 
   it "slices by offset and count" do
-    lazy = Prism.scan(parity_frame).slice(1, 2)
+    lazy = parity_frame.lazy.slice(1, 2)
     eager = parity_frame.slice(1, 2)
 
     lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
@@ -72,7 +72,7 @@ describe "lazy verb parity" do
 
   it "rejects an unknown column" do
     expect_raises(Prism::ColumnNotFound, /nope/) do
-      Prism.scan(parity_frame).drop("nope")
+      parity_frame.lazy.drop("nope")
     end
   end
 end

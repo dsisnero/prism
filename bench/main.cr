@@ -90,7 +90,7 @@ module Bench
     end
 
     timed("scan -> sort_by -> head(10)", "gathers only the window") do
-      Prism.scan(frame)
+      frame.lazy
         .sort_by("price", order: :desc)
         .head(10)
         .collect
@@ -206,7 +206,7 @@ module Bench
 
   private def lazy(frame : Prism::DataFrame) : Nil
     timed("lazy group_by -> sort -> head", "slice pinned to the sort") do
-      Prism.scan(frame)
+      frame.lazy
         .group_by("user_id")
         .aggregate(total: col("qty").sum)
         .sort_by("total", order: :desc)

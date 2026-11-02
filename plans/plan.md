@@ -38,8 +38,9 @@ place that tracks status; do not re-derive it from `git log`.
 
 **Just landed (9e):** `examples/quickstart.cr`, `examples/parquet.cr` and
 `examples/viewer.cr` (bubbletea + bubbles + ultraviolet, dev deps only), gated
-example specs, a `make examples` target, the `#to_arrow` memory notes, and
-`spec/prism/property_spec.cr` — seeded oracles for every verb, mutation-checked.
+example specs, a `make examples` target, the `#to_arrow` memory notes,
+`spec/prism/property_spec.cr` — seeded oracles for every verb, mutation-checked —
+and the lazy-entry cleanup (`Prism.scan(frame)` gone; `df.lazy` only).
 
 **Just landed (9d, now complete):** projection pruning through joins
 (`Plan::Join#input_requirements` attributes each output name to its side; keys are
@@ -450,6 +451,7 @@ meta = writer.close
 | Column type | `Prism::Series` | Distinguishes a 1-D column from `Arrow::ArrayBase` |
 | Expression type | `Prism::Expr` | |
 | Entry-point functions | `Prism.read_parquet`, `Prism.read_csv`, `Prism.from_arrow`, `Prism.concat`, `Prism.scan_parquet` | Constructors do not hang off the table type |
+| Lazy entry points | `df.lazy` for an in-memory frame, `Prism.scan_parquet` for a file | One per source, matching Polars: `df.lazy()` and `pl.scan_*`. A `Prism.scan(df)` alias existed and was removed (Phase 9e) — "scan" means "read a source lazily", so it was both redundant and misleading; there is no `pl.scan(df)` either, only `pl.LazyFrame(df)`. |
 | Bare expression builders | `Prism::DSL` (`include Prism::DSL`) | Keeps `col`/`lit` out of the global namespace |
 | Errors | `Prism::Error` and subclasses | See §8.4 |
 | Column projection verb | `select` | Relational π. SQL `SELECT` also lists columns, and dplyr, Polars and Arquero all call it `select` |
@@ -659,6 +661,7 @@ df = Prism.from_columns({"id" => Arrow::Int64Array.from_values([1, 2, 3])})
 df = Prism.read_parquet("data/sales.parquet")
 df = Prism.read_csv("data/sales.csv")
 df = Prism.scan_parquet("data/sales.parquet")   # LazyFrame, pushdown-ready
+lazy = df.lazy                                 # the in-memory lazy entry (no Prism.scan)
 
 # --- inspection ---------------------------------------------------------
 df.shape            # => {rows: 3, columns: 4}
@@ -912,6 +915,12 @@ whole plan is typed before execution.
 `explain` prints the unoptimized and optimized plans side by side, including
 which predicates and projections reached the scan — this is the observable proof
 that pushdown happened, and the optimizer specs assert on it.
+
+A frame becomes a plan through exactly one call per source: `df.lazy` for what is
+already in memory, `Prism.scan_parquet` for a file, then verbs, then `collect`.
+No verb is implicitly lazy, and no block form is involved — blocks in this
+library are expression sugar (`filter { … }`), typed-schema accessors
+(`typed.filter(&.active)`) and iteration, never a laziness switch.
 
 ### 9.3 Executor
 
@@ -1365,6 +1374,9 @@ a struct array: decimals materialize instead of raising.
       `group_by` (one and two keys), `join` (inner/left/semi/anti), `sort_by` on
       nullable floats, float keys, lazy-vs-eager and chunked-vs-single-batch
       against hand-written references over seeded random frames
+- [x] API cleanup: removed `Prism.scan(frame)`; `df.lazy` is the only in-memory
+      lazy entry (one per source, matching Polars' `df.lazy()` / `pl.scan_*`),
+      with all 22 call sites migrated and the rule recorded in §4 and §9
 - [ ] v0.1.0 tag — needs the owner's go-ahead and both opt-in spec suites green
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
