@@ -56,6 +56,84 @@ describe Prism::DataFrame do
       chunked.filter(col("qty") > 1).row_count.should eq(3)
       chunk_count(chunked.filter(col("qty") > 1)).should eq(2)
     end
+
+    it "accepts a boolean series as the mask" do
+      filtered = verbs_frame.filter(verbs_frame["qty"] > 2)
+
+      filtered.column_names.should eq(["region", "price", "qty", "status"])
+      filtered["qty"].to_a.should eq([3_i64, 4_i64])
+    end
+
+    it "drops rows where the mask is null" do
+      filtered = verbs_frame.filter(verbs_frame["price"] > 15.0)
+
+      filtered["price"].to_a.should eq([20.0, 30.0])
+    end
+
+    it "preserves chunks for a mask built from the frame's own columns" do
+      chunked = chunked_frame
+
+      kept = chunked.filter(chunked["qty"] > 1)
+      kept.row_count.should eq(3)
+      chunk_count(kept).should eq(2)
+    end
+
+    it "aligns a mask whose chunking differs from the frame's" do
+      chunked = chunked_frame
+      mask = Prism::Series.new(
+        "mask",
+        [Arrow::BooleanArray.from_values([true, false, true, true])],
+        Arrow::DataType.boolean
+      )
+
+      kept = chunked.filter(mask)
+      kept["qty"].to_a.should eq([1_i64, 3_i64, 4_i64])
+      chunk_count(kept).should eq(1)
+    end
+
+    it "rejects a non-boolean mask and a mismatched length" do
+      expect_raises(Prism::DtypeError, /qty/) do
+        verbs_frame.filter(verbs_frame["qty"])
+      end
+      expect_raises(ArgumentError) do
+        short = Prism::Series.new(
+          "mask", [Arrow::BooleanArray.from_values([true])], Arrow::DataType.boolean
+        )
+        verbs_frame.filter(short)
+      end
+    end
+  end
+
+  describe "#remove" do
+    it "keeps the rows the predicate rejects" do
+      verbs_frame.remove(col("region") == "east")["region"].to_a.should eq(["west", "west"])
+    end
+
+    it "keeps rows where the predicate is null, unlike filter(pred.not)" do
+      # price has one null: `not(null)` is null, and a null predicate drops.
+      verbs_frame.remove(col("price") > 15.0)["price"].to_a.should eq([10.0, nil])
+      verbs_frame.filter((col("price") > 15.0).not)["price"].to_a.should eq([10.0])
+    end
+
+    it "accepts a boolean series and keeps its null bits" do
+      verbs_frame.remove(verbs_frame["price"] > 15.0)["qty"].to_a.should eq([1_i64, 4_i64])
+    end
+
+    it "accepts a block when Prism::DSL is included" do
+      verbs_frame.remove { col("qty") > 3 }["qty"].to_a.should eq([1_i64, 2_i64, 3_i64])
+    end
+
+    it "preserves chunks" do
+      chunked = chunked_frame
+
+      chunk_count(chunked.remove(col("qty") > 3)).should eq(2)
+    end
+
+    it "rejects a non-boolean series mask" do
+      expect_raises(Prism::DtypeError, /qty/) do
+        verbs_frame.remove(verbs_frame["qty"])
+      end
+    end
   end
 
   describe "#select" do
@@ -210,6 +288,30 @@ describe Prism::DataFrame do
       sorted = verbs_frame.sort_by("price", order: :desc)
 
       sorted["price"].to_a.should eq([30.0, 20.0, 10.0, nil])
+    end
+
+    it "reads a leading - on a column name as descending" do
+      verbs_frame.sort_by("-price")["price"].to_a.should eq([30.0, 20.0, 10.0, nil])
+    end
+
+    it "mixes prefixed and plain keys" do
+      sorted = verbs_frame.sort_by("region", "-qty")
+
+      sorted["region"].to_a.should eq(["east", "east", "west", "west"])
+      sorted["qty"].to_a.should eq([3_i64, 1_i64, 4_i64, 2_i64])
+    end
+
+    it "keeps null placement from the keyword, not the prefix" do
+      verbs_frame.sort_by("-price", nulls: :first)["price"].to_a
+        .should eq([nil, 30.0, 20.0, 10.0])
+    end
+
+    it "leaves a column really named with a dash reachable as an expression" do
+      odd = Prism.from_columns({"-odd" => Arrow::Int64Array.from_values([2_i64, 1_i64])})
+
+      # The shorthand strips the dash, so it looks for a column named "odd".
+      expect_raises(Prism::ColumnNotFound, /column "odd"/) { odd.sort_by("-odd") }
+      odd.sort_by(Prism.col("-odd").asc)["-odd"].to_a.should eq([1_i64, 2_i64])
     end
 
     it "sorts by several keys with per-key direction" do

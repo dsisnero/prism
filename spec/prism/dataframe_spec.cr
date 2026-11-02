@@ -169,6 +169,59 @@ describe Prism::DataFrame do
     end
   end
 
+  describe "#slice(range) and bracket indexing" do
+    it "slices an inclusive range" do
+      sliced = frame[1..2]
+
+      sliced["qty"].to_a.should eq([2_i64, 3_i64])
+      sliced.schema.should eq(frame.schema)
+    end
+
+    it "slices an exclusive range" do
+      frame[1...3]["qty"].to_a.should eq([2_i64, 3_i64])
+    end
+
+    it "counts a negative endpoint from the end" do
+      frame[-2..]["qty"].to_a.should eq([3_i64, 4_i64])
+      frame[0..-2]["qty"].to_a.should eq([1_i64, 2_i64, 3_i64])
+    end
+
+    it "accepts open-ended ranges" do
+      frame[..1]["qty"].to_a.should eq([1_i64, 2_i64])
+      frame[3..]["qty"].to_a.should eq([4_i64])
+    end
+
+    it "clamps to the frame instead of returning nil" do
+      frame[10..20].row_count.should eq(0)
+      frame[-99..1]["qty"].to_a.should eq([1_i64, 2_i64])
+      frame[0..99].row_count.should eq(4)
+    end
+
+    it "returns an empty frame for an inverted range" do
+      frame[3..1].row_count.should eq(0)
+      frame[2...2].row_count.should eq(0)
+    end
+
+    it "keeps chunks when the range stays inside one" do
+      df = Prism.from_batches(split_batch(sample_batch))
+
+      df[0..1].batches.size.should eq(1)
+      df[1..2].batches.size.should eq(2)
+    end
+
+    it "projects a list of columns" do
+      selected = frame[["region", "qty"]]
+
+      selected.column_names.should eq(["region", "qty"])
+      selected["qty"].to_a.should eq([1_i64, 2_i64, 3_i64, 4_i64])
+      frame[[:qty]].column_names.should eq(["qty"])
+    end
+
+    it "rejects an unknown column in a list" do
+      expect_raises(Prism::ColumnNotFound) { frame[["nope"]] }
+    end
+  end
+
   describe "empty and zero-column frames" do
     it "reports a zero-column frame's row count" do
       batch = Arrow::RecordBatch.from_columns(

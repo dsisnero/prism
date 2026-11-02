@@ -118,27 +118,72 @@ module Prism
       Series.new(@name, chunks, target)
     end
 
-    # Element-wise equality with another series of the same dtype and length.
+    # Element-wise comparisons, producing a boolean series.
     #
-    # Returns a boolean series, so never use `==` to compare two series for
-    # structural equality — use `#same_as?`. Nulls propagate.
+    # `==`, `!=`, `<`, `<=`, `>`, `>=` accept another series or a scalar. A
+    # series comparison requires the same dtype and length; a scalar comparison
+    # coerces through `Prism::Coerce.with_literal`, so `series > 10` casts `10`
+    # to the column's dtype when that is lossless and widens both sides
+    # otherwise — the same rule expressions follow (§8.2). Comparing a numeric
+    # series with a string raises `Prism::DtypeError`.
+    #
+    # The result is built for `DataFrame#filter`, which takes a boolean mask:
+    #
+    # ```
+    # df.filter(df["price"] > 10)
+    # ```
+    #
+    # Nulls propagate, so a null comparison yields a null mask bit and that row
+    # is dropped, exactly as an expression predicate behaves.
+    #
+    # Never use `==` to compare two series for structural equality: it returns a
+    # series, which is always truthy. Use `#same_as?`.
     def ==(other : Series) : Series
-      unless other.dtype == @dtype
-        raise DtypeError.new(
-          "#{@name.inspect}: cannot compare dtype #{@dtype} with #{other.dtype}"
-        )
-      end
-      unless other.size == size
-        raise ArgumentError.new(
-          "#{@name.inspect}: cannot compare #{size} rows with #{other.size}"
-        )
-      end
+      compare(BinaryOp::Eq, other)
+    end
 
-      chunks = comparable_chunks(other).map do |(left, right)|
-        Arrow.eq(left, right).as(Arrow::ArrayBase)
-      end
+    def ==(other : LiteralInput) : Series
+      compare(BinaryOp::Eq, other)
+    end
 
-      Series.new(@name, chunks, Arrow::DataType.boolean)
+    def !=(other : Series) : Series
+      compare(BinaryOp::Neq, other)
+    end
+
+    def !=(other : LiteralInput) : Series
+      compare(BinaryOp::Neq, other)
+    end
+
+    def <(other : Series) : Series
+      compare(BinaryOp::Lt, other)
+    end
+
+    def <(other : LiteralInput) : Series
+      compare(BinaryOp::Lt, other)
+    end
+
+    def <=(other : Series) : Series
+      compare(BinaryOp::LtEq, other)
+    end
+
+    def <=(other : LiteralInput) : Series
+      compare(BinaryOp::LtEq, other)
+    end
+
+    def >(other : Series) : Series
+      compare(BinaryOp::Gt, other)
+    end
+
+    def >(other : LiteralInput) : Series
+      compare(BinaryOp::Gt, other)
+    end
+
+    def >=(other : Series) : Series
+      compare(BinaryOp::GtEq, other)
+    end
+
+    def >=(other : LiteralInput) : Series
+      compare(BinaryOp::GtEq, other)
     end
 
     # Structural equality: name, dtype and chunk contents.
@@ -345,6 +390,53 @@ module Prism
       else
         [{to_arrow, other.to_arrow}]
       end
+    end
+
+    # Series-versus-series comparison: both sides must already agree.
+    private def compare(op : BinaryOp, other : Series) : Series
+      unless other.dtype == @dtype
+        raise DtypeError.new(
+          "#{@name.inspect}: cannot compare dtype #{@dtype} with #{other.dtype}"
+        )
+      end
+      unless other.size == size
+        raise ArgumentError.new(
+          "#{@name.inspect}: cannot compare #{size} rows with #{other.size}"
+        )
+      end
+
+      chunks = comparable_chunks(other).map do |(left, right)|
+        Kernels.apply_op(op, left, right)
+      end
+
+      Series.new(@name, chunks, Arrow::DataType.boolean)
+    end
+
+    # Series-versus-scalar comparison, coerced by the same rule expressions use.
+    private def compare(op : BinaryOp, other : LiteralInput) : Series
+      array = literal_array(other)
+      target = Coerce.with_literal(@dtype, array.data_type)
+      scalar = Coerce.cast(Arrow::Scalar(Arrow::ArrayBase).new(array), target)
+
+      chunks = @chunks.map do |chunk|
+        column = chunk.data_type == target ? chunk : Arrow.cast(chunk, target)
+        Kernels.apply_op(op, column, scalar)
+      end
+
+      Series.new(@name, chunks, Arrow::DataType.boolean)
+    end
+
+    # Normalizes a scalar the way `Prism.lit` does, so a comparison does not
+    # depend on the width Crystal inferred for the literal.
+    private def literal_array(value : LiteralInput) : Arrow::ArrayBase
+      normalized = case value
+                   when Int8, Int16, Int32, Int64, Int128      then value.to_i64
+                   when UInt8, UInt16, UInt32, UInt64, UInt128 then value.to_u64
+                   when Float32, Float64                       then value.to_f64
+                   else                                             value
+                   end
+
+      Literals.array(normalized)
     end
 
     private def locate(index : Int) : Tuple(Arrow::ArrayBase, Int32)

@@ -210,6 +210,91 @@ describe Prism::Series do
     end
   end
 
+  describe "comparisons" do
+    it "compares element-wise against a scalar of the same width" do
+      series = numeric_series
+      mask = series > 15
+
+      mask.dtype.should eq(Arrow::DataType.boolean)
+      mask.to_a.should eq([false, true, nil, true])
+    end
+
+    it "keeps every comparison operator" do
+      series = numeric_series
+
+      (series >= 20).to_a.should eq([false, true, nil, true])
+      (series < 20).to_a.should eq([true, false, nil, false])
+      (series <= 20).to_a.should eq([true, true, nil, false])
+      (series == 20.0).to_a.should eq([false, true, nil, false])
+      (series != 20.0).to_a.should eq([true, false, nil, true])
+    end
+
+    it "casts the literal to the column dtype when that is lossless" do
+      # Int32 column, Int64 literal: the literal adopts Int32, no column copy.
+      series = Prism::Series.new(
+        "qty",
+        [Arrow::Int32Array.from_values([1, 2, 3])],
+        Arrow::DataType.int32
+      )
+
+      mask = series > 1
+      mask.to_a.should eq([false, true, true])
+      mask.to_arrow.as(Arrow::BooleanArray).len.should eq(3)
+    end
+
+    it "widens an integer column for a fractional literal instead of truncating" do
+      series = Prism::Series.new(
+        "qty",
+        [Arrow::Int64Array.from_values([1_i64, 2_i64])],
+        Arrow::DataType.int64
+      )
+
+      # 1.5 must not be truncated to 1: `1 > 1.5` is false, `2 > 1.5` true.
+      (series > 1.5).to_a.should eq([false, true])
+    end
+
+    it "compares two series of the same dtype" do
+      left = Prism::Series.new(
+        "a", [Arrow::Int64Array.from_values([1_i64, 5_i64, 9_i64])], Arrow::DataType.int64
+      )
+      right = Prism::Series.new(
+        "b", [Arrow::Int64Array.from_values([2_i64, 5_i64, 4_i64])], Arrow::DataType.int64
+      )
+
+      (left < right).to_a.should eq([true, false, false])
+      (left == right).to_a.should eq([false, true, false])
+    end
+
+    it "compares chunk-by-chunk" do
+      series = chunked_series
+
+      mask = series > 2
+      mask.chunks.size.should eq(2)
+      mask.to_a.should eq([false, false, true, true])
+    end
+
+    it "rejects a series comparison with a different dtype or length" do
+      other = Prism::Series.new(
+        "x", [Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64])], Arrow::DataType.int64
+      )
+
+      expect_raises(Prism::DtypeError, /price/) { numeric_series > other }
+
+      shorter = Prism::Series.new(
+        "x", [Arrow::Int64Array.from_values([1_i64])], Arrow::DataType.int64
+      )
+      expect_raises(ArgumentError) { chunked_series > shorter }
+    end
+
+    it "rejects comparing a string column with a number" do
+      series = Prism::Series.new(
+        "region", [Arrow::StringArray.from_values(["east"])], Arrow::DataType.utf8
+      )
+
+      expect_raises(Prism::DtypeError) { series == 1 }
+    end
+  end
+
   describe "chunk invariants" do
     it "rejects chunks whose dtype does not match" do
       expect_raises(Prism::DtypeError) do

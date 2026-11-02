@@ -23,40 +23,33 @@ implicit.
 _Updated 2026-11-02._
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(360 examples, ~30 s warm). The table below is the only place that tracks status;
+(405 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `v0.1.1` is tagged and published at
-[`dsisnero/prism`](https://github.com/dsisnero/prism). It packages the two
-features that had been sitting under `Unreleased`: decimal arithmetic and nested
-materialization. Phases 0–10 are closed apart from the cosmetic local folder
-rename.
+[`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
+Phase 12 ergonomics work (unreleased). Phases 0–12 are closed apart from the
+cosmetic local folder rename.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **RedAmber ergonomics** — one-call group aggregates
-   (`group_by(k).sum/mean/count/...`), `sort_by("-col")`, range slicing and
-   `df[rows]`, `remove(expr)`, boolean-mask filtering. §17 lists each with the
-   reason it is not free; `remove` needs its own null rule (keep rows where the
-   predicate is false **or** null).
-2. **Hash-based grouping** — only if a benchmark shows grouping dominating; it
+1. **Hash-based grouping** — only if a benchmark shows grouping dominating; it
    would trade contiguous group views and deterministic order for O(n).
-3. **Typed row structs** — `define_schema` could generate a `Row` struct so
+2. **Typed row structs** — `define_schema` could generate a `Row` struct so
    `typed` frames yield nominal rows instead of `Hash(String, Value)`. See §10
    ("Why `Values` returns containers") for why the dynamic path cannot, and what
    this would and would not buy.
+3. **Interval column materialization** — `Value` has no month/day/nano member,
+   so interval columns still cannot materialize; a dictionary-encoded *float* key
+   is compared by value but not canonicalized.
 
-**Also open (small):** interval columns still cannot materialize (`Value` has no
-month/day/nano member), and a dictionary-encoded *float* key is compared by value
-but not canonicalized.
-
-**Gates:** `make lint` + `make test` green, **360 examples**. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (**361**, ~13 s) and `PRISM_EXAMPLE_SPECS=1` adds the
-four example specs (**364**, ~1 min); with both set the suite is **365**. Run both
-before a release.
+**Gates:** `make lint` + `make test` green, **405 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**406**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**409**, ~1 min); with both
+set the suite is **410**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`); the
-last feature commit is `598dbad` (nested materialization). `main == origin/main`.
+last feature commit before Phase 12 was `598dbad` (nested materialization).
 
 **Owner actions, not code:**
 
@@ -81,6 +74,7 @@ last feature commit is `598dbad` (nested materialization). `main == origin/main`
 | 9e | Examples, memory notes, property oracles, v0.1.0 tag | **done** |
 | 10 | Repo/GitHub rename `dataframe` → `prism` | **done** (local folder optional) |
 | 11 | Post-v0.1.0: decimal arithmetic, nested materialization, `v0.1.1` | **done** |
+| 12 | RedAmber ergonomics: masks, `remove`, ranges, `-` sorts, one-call aggregates | **done** |
 
 ---
 
@@ -401,6 +395,32 @@ only `include`s that module plus the per-field accessors. `define_schema` also
 lives inside `module Prism` (a top-level macro cannot be called as
 `Prism.define_schema`).
 
+#### C22. A bare `Range` restriction loses dispatch to `Enumerable(T)`
+
+Verified while adding row slicing: with both overloads present,
+
+```crystal
+def [](range : Range) : DataFrame            # loses
+def [](names : Enumerable(T)) forall T       # wins for Range(Int, Int)
+```
+
+`df[1..3]` dispatched to the column-list overload, because a `Range` *is* an
+`Enumerable` and the bare generic restriction is not ranked more specific. Naming
+the type parameters fixes the ordering: `def [](range : Range(B, E)) forall B, E`.
+(The reverse order of the definitions does not help.) **Decision:** the row
+overload carries explicit type parameters, with a comment in
+`src/prism/dataframe.cr` so nobody "simplifies" it back.
+
+#### C23. A type-restricted splat requires at least one argument
+
+`def sum(*columns : String | Symbol)` cannot be called as `sum` — the compiler
+reports "wrong number of arguments (given 0, expected 1+)". An *unrestricted*
+splat (`*columns`) accepts zero, but then the element type is unconstrained and
+a typo becomes a runtime `ColumnNotFound` instead of a compile error.
+**Decision:** one-call aggregates declare the no-argument form as a second
+overload, generated alongside the splat by a macro in
+`src/prism/group_by.cr`.
+
 ### 3.4 Verified end-to-end sketch
 
 This runs today against the sibling checkouts (it is the basis for Phase 1–4
@@ -697,6 +717,13 @@ df.drop_nulls("region")
 df.fill_null(0)
 df.cast("qty" => Arrow::DataType.float64)
 
+# --- ergonomics (RedAmber-derived, §17 / Phase 12) ----------------------
+df.filter(df["price"] > 15)        # a boolean Series is a mask
+df.remove(col("region") == "west") # keeps rows the predicate rejects or can't judge
+df.sort_by("-total_revenue")       # descending shorthand
+df[1..3]                           # rows by range; df[..2], df[-2..], df[1...3]
+df[["region", "price"]]            # columns by name
+
 # --- grouping -----------------------------------------------------------
 df.group_by("region", "category").aggregate(
   total_revenue: col("price").sum,
@@ -705,6 +732,10 @@ df.group_by("region", "category").aggregate(
 ).sort_by("total_revenue", order: :desc)
 
 df.group_by("region").agg(col("price").sum.alias("total"))
+
+df.group_by("region").sum("price", "qty")  # => region, price, qty
+df.group_by("region").mean                 # every numeric column
+df.group_by("region").count                # one `count` column of row counts
 
 # --- combining ----------------------------------------------------------
 df.join(other, on: "id", how: :inner)
@@ -749,10 +780,12 @@ UserSchema.schema                             # => Arrow::Schema
 
 `name`, `dtype`, `size`, `count`, `null_count`, `to_a`, `to_arrow`, `each`,
 `each_chunk`, `sum`, `mean`, `min`, `max`, `unique`, `n_unique`, `[]`/`[]?`,
-`value(i)`.
+`value(i)`, plus element-wise `== != < <= > >=` against another series or a
+scalar.
 
 All of the above is implemented (Phases 1–4 for the aggregates and access,
-Phase 9b for `is_null`, `fill_null`, `cast` and element-wise `==`).
+Phase 9b for `is_null`, `fill_null`, `cast` and element-wise `==`, phase 12 for
+the remaining comparison operators and scalar coercion).
 
 ## 7. Deviations from the proposed sample API
 
@@ -874,9 +907,11 @@ raised `Prism::Error` names the offending column.
   `.not`.
 - **`and`/`or` are Kleene**, not bitwise: null AND false is false. This matches
   SQL and Polars' logical operators, and differs from `Arrow.and`/`or`.
-- **`Series#==` is element-wise** and returns a boolean series, so comparing two
-  series with `==` is always truthy. Use `Series#same_as?` for structural
-  comparison, exactly as with `Expr`.
+- **`Series#==`/`!=`/`<`/`<=`/`>`/`>=` are element-wise** and return a boolean
+  series, so comparing two series with `==` is always truthy, and `series == nil`
+  builds an all-null mask rather than testing for `nil`. Use `Series#same_as?`
+  for structural comparison and `Series#is_null` for null tests, exactly as with
+  `Expr`.
 - **`Value` is a recursive alias**, so an *inferred* container of values is not
   always the same type as the alias: build tuples/arrays of values with an
   annotation (`[a, b] of Prism::Value`, `.as(Prism::Value)`), or Crystal will
@@ -1354,8 +1389,8 @@ Only `tail` needed a node, because a trailing window cannot be pushed into a
 scan: the row count is unknown until the source runs.
 
 `Series#==` is element-wise and returns a boolean series, so comparing two
-series with `==` is always truthy — `same_as?` exists for
-structural comparison (§8.5).
+series with `==` is always truthy — `same_as?` exists for structural comparison
+(§8.5).
 
 This phase also fixed a real bug: `select` marked every aliased column nullable,
 so `rename` through the planner produced a different schema from the eager
@@ -1466,6 +1501,54 @@ consumer installs none of it.
 - [ ] Local checkout folder `dataframe/` → `prism/` — cosmetic, and moving the
       working tree mid-session buys nothing. Do it whenever convenient; nothing
       in the repo references the folder name.
+
+### Phase 12 — RedAmber ergonomics (done)
+
+The RedAmber-derived surface from §17, landed after `v0.1.1`. Every item is sugar
+over existing verbs; none adds a new execution path.
+
+- [x] `Series` comparison operators (`== != < <= > >=`, series or scalar), with
+      the column-vs-literal dtype rule factored out of `Coerce#target` into
+      `Coerce.with_literal` so `series > 10` coerces exactly like
+      `col("x") > 10`
+- [x] `DataFrame#filter(mask : Series)` — boolean masks keep the same three fast
+      paths and the chunking when the mask comes from the frame's own columns
+- [x] `DataFrame#remove(expr)` / `#remove(mask)` and `LazyFrame#remove(expr)`:
+      keep rows where the predicate is false **or null**, which is not
+      `filter(pred.not)`
+- [x] `sort_by("-col")` descending shorthand through `Prism.sort_key`, shared by
+      eager and lazy verbs
+- [x] `slice(range)` plus `df[range]` and `df[[names]]`: negative and omitted
+      endpoints, `...` exclusive, bounds clamp instead of returning `nil`
+- [x] One-call `GroupBy` aggregates — `sum mean min max count n_unique median std
+      var` — named columns or every eligible column, input names kept, keys never
+      aggregated (`Prism::DuplicateColumn` if asked explicitly)
+
+**Acceptance:** each shorthand produces the rows the long form produces: mask
+filtering and `remove` are compared against `filter` on frames with nulls and
+across chunk boundaries, range slicing is compared against `slice(offset,
+length)`, `-col` against `order: :desc`, and one-call aggregates against the
+equivalent `aggregate(...)`. Specs: `spec/prism/{verbs,dataframe,group_by,
+series,lazy}_spec.cr` (405 examples total).
+
+**Notes carried forward:**
+
+- A **bare `Range` restriction is not more specific than `Enumerable(T)`** (C22),
+  so `def [](range : Range)` silently loses dispatch to the column-list overload
+  and `df[1..3]` is read as column names. The row overload must declare its type
+  parameters: `def [](range : Range(B, E)) : DataFrame forall B, E`.
+- A **type-restricted splat requires at least one argument** (C23), so
+  `def sum(*columns : String | Symbol)` cannot be called as `sum`. The empty form
+  is a separate overload, generated by a macro with the no-argument twin.
+- `Enumerable(T)` is invariant in `T`, so `Array(String)` does not satisfy
+  `Enumerable(String | Symbol)`. The column-list overload is
+  `Enumerable(T) forall T` and maps each name through `Prism.col`, which is where
+  a non-name type becomes a compile error.
+- `select` is a keyword (C17) and bites inside `[]` too: the projection overload
+  spells `self.select(...)`.
+- Preferring a `Series` overload of `filter` means the block form must stay
+  overload-free (`filter(&)`), because the block's return type decides between
+  the expression and mask paths.
 
 ## 13. Testing strategy
 
@@ -1717,9 +1800,11 @@ What they decide:
 
 **Open questions** (decide in-phase, record here):
 
-- Should `DataFrame#[]` accept a `Range`/`Slice` for row slicing, or keep rows out
-  of `[]` entirely? (Phase 3) — deferred to post-v0.1 as a RedAmber-derived
-  ergonomic (see §17); today rows come from `slice`/`head`/`tail` only.
+- ~~Should `DataFrame#[]` accept a `Range`/`Slice` for row slicing, or keep rows
+  out of `[]` entirely?~~ Decided in Phase 12: `df[range]` slices rows and
+  `df[[names]]` projects columns, so `[]` is "pick part of the frame" while
+  `df["name"]` stays a `Series`. Bounds clamp rather than returning `nil`,
+  because a frame is always a frame (C22 records the dispatch trap).
 - Null-key policy default for `group_by` on `Utf8` vs numeric columns: one
   policy or per-dtype defaults? (Phase 4)
 - ~~`n_unique` on floats: use Arrow total order (NaN payloads distinct) or
@@ -1776,11 +1861,11 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Plan-level CSE | per-chunk memoization already removes the recompute | 9b (only if measured) |
 | Display layer | not needed to validate semantics | 9a (done) |
 | Repository folder + GitHub rename | owner-gated | 10 |
-| `group_by(k).sum/mean/count/min/max/median/std/var/n_unique(*cols)` (RedAmber-derived one-call aggregates) | `aggregate(name: expr)` already covers the semantics; this is ergonomics, and it needs a naming rule (input name, Polars-style) | post-v0.1 |
-| `sort_by("-col")` descending shorthand (RedAmber) | `order: :desc` covers it; the `-` prefix is Ruby sugar and makes a leading-dash column name unreachable in shorthand | post-v0.1 |
-| `slice(1..3)`, `df[1..3]` rows, `df[["a","b"]]` columns (RedAmber indexing) | `slice(offset, count)` / `select(...)` cover it; accepting `Range`/arrays closes the §15 question below | post-v0.1 |
-| `remove(expr)`, the inverse of `filter` (RedAmber) | needs its own null rule — keep rows where the predicate is false **or** null, which is not `filter(pred.not)` | post-v0.1 |
-| Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` exists | post-v0.1 |
+| `group_by(k).sum/mean/count/min/max/median/std/var/n_unique(*cols)` (RedAmber-derived one-call aggregates) | `aggregate(name: expr)` already covers the semantics; this is ergonomics, and it needs a naming rule (input name, Polars-style) | 12 (done) |
+| `sort_by("-col")` descending shorthand (RedAmber) | `order: :desc` covers it; the `-` prefix is Ruby sugar and makes a leading-dash column name unreachable in shorthand | 12 (done) |
+| `slice(1..3)`, `df[1..3]` rows, `df[["a","b"]]` columns (RedAmber indexing) | `slice(offset, count)` / `select(...)` cover it; accepting `Range`/arrays closes the §15 question below | 12 (done) |
+| `remove(expr)`, the inverse of `filter` (RedAmber) | needs its own null rule — keep rows where the predicate is false **or** null, which is not `filter(pred.not)` | 12 (done) |
+| Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` existed | 12 (done) |
 | Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | post-v0.1 (candidate) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**

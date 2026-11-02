@@ -56,6 +56,22 @@ describe Prism::LazyFrame do
       lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
     end
 
+    it "resolves the descending shorthand the same way as the eager verb" do
+      lazy = SpecFrames.sales.lazy.sort_by("-qty")
+      eager = SpecFrames.sales.sort_by("-qty")
+
+      lazy.collect["qty"].to_a.should eq(eager["qty"].to_a)
+      lazy.collect["qty"].to_a.first.should eq(5_i64)
+    end
+
+    it "matches the eager remove pipeline, null rows included" do
+      lazy = SpecFrames.sales.lazy.remove(col("price") > 25.0)
+      eager = SpecFrames.sales.remove(col("price") > 25.0)
+
+      lazy.collect["price"].to_a.should eq(eager["price"].to_a)
+      eager["price"].to_a.should eq([10.0, 20.0, nil])
+    end
+
     it "matches the eager distinct pipeline" do
       lazy = SpecFrames.sales.lazy.distinct("region")
       eager = SpecFrames.sales.distinct("region")

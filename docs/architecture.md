@@ -199,6 +199,25 @@ Nulls are Arrow validity bitmaps (`NullBuffer` over `BooleanBuffer`), and
 applies is cheap. Arrow's filter already treats a null mask bit as false, which
 is why an all-null predicate drops every row without special handling.
 
+### Mask filtering, and `remove`
+
+`filter` also takes a `Prism::Series` of booleans, which is what the `Series`
+comparison operators build (`df.filter(df["price"] > 10)`). The same three fast
+paths apply: when the mask's chunks line up with the frame's — which they do for
+a mask derived from the frame's own columns — each chunk is filtered in place
+and the chunk count survives; otherwise the frame is consolidated once so the
+mask aligns. A mask is validated for dtype and length up front, so a wrong mask
+fails with a `Prism::DtypeError` naming the column or an `ArgumentError` naming
+both lengths.
+
+`remove` is the inverse of `filter`, and it needs its own null rule: a row is
+kept when the predicate is false **or null**. `filter(expr.not)` is not
+equivalent, because `not(null)` is null and a null predicate drops its row, so
+rows the predicate cannot judge would disappear. `remove` therefore evaluates
+`expr.not.or(expr.is_null)`; the two references to `expr` share a canonical key,
+so per-chunk memoization evaluates it once. The mask form inverts the mask and
+turns its null bits into `true`, for the same reason.
+
 ## Verbs
 
 Eager verbs split into two groups by cost:
@@ -218,6 +237,28 @@ requested range of the sort indices.
 Named-argument verbs (`with_columns`) use Crystal's `**named` parameter, not a
 macro: a macro expands at the call site without the receiver. `select` is a
 Crystal keyword, so internal calls spell `self.select`.
+
+### Ergonomics borrowed from RedAmber
+
+Four spellings from RedAmber's surface exist without breaking the expression API:
+
+| Spelling | Equivalent | Note |
+| --- | --- | --- |
+| `df[1..3]`, `df[..1]`, `df[-2..]` | `df.slice(...)` | Ruby `Array#[]` index rules: negative endpoints count from the end and `...` excludes its end. Bounds clamp instead of returning `nil` — a frame is always a frame. |
+| `df[["a", "b"]]` | `df.select("a", "b")` | A `Range` is `Enumerable`, so the row overload has to declare its type parameters (`Range(B, E) forall B, E`) to outrank the column-list one in dispatch. |
+| `df.sort_by("-price")` | `df.sort_by("price", order: :desc)` | The prefix is read in `Prism.sort_key`, so eager and lazy verbs resolve it identically. A column whose name really starts with `-` is reachable only as an expression, the documented cost of the sugar. |
+| `df.remove(pred)` | `df.filter(pred.not.or(pred.is_null))` | Not `filter(pred.not)`; see the null rule above. |
+
+`group_by` also gained the one-call aggregates (`sum`, `mean`, `min`, `max`,
+`count`, `n_unique`, `median`, `std`, `var`). Output columns keep their **input**
+names, which is Polars' rule, so no aliasing is needed; with no column names the
+aggregate covers every eligible column and never a grouping key. `count` with no
+columns is Polars' `count`: one `count` column holding row counts per group.
+
+Bare column names inside blocks — RedAmber's biggest ergonomic win — cannot be
+copied: it relies on Ruby's `instance_eval`, and Crystal dispatches statically.
+The typed frames (`typed.filter(&.active)`) are this library's answer, because
+there the schema is known at compile time.
 
 ## Execution
 
@@ -301,6 +342,14 @@ uses for rolling windows are out of scope.
 Null keys form one group. `null_keys: :first | :last` controls placement
 (:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows
 before grouping.
+
+One-call aggregates (`group_by(k).sum`, `.mean`, `.count`, …) are thin sugar over
+`#aggregate`: each name becomes `col(name).<agg>` and the output keeps the input
+name. The no-argument form picks columns by dtype — integers and floats for
+`sum`/`mean`/`median`/`std`/`var`, plus booleans and strings for `min`/`max`, and
+everything for `count`/`n_unique` — and skips grouping keys, which are already in
+the output. Asking for a key column explicitly raises `Prism::DuplicateColumn`
+rather than emitting two columns with one name.
 
 ## IO
 

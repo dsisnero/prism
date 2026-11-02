@@ -249,6 +249,90 @@ describe Prism::GroupBy do
     end
   end
 
+  describe "one-call aggregates" do
+    it "sums the named columns, keeping their names" do
+      grouped = group_frame.group_by("region").sum("price", "qty")
+
+      grouped.column_names.should eq(["region", "price", "qty"])
+      grouped["price"].to_a.should eq([90.0, 20.0])
+      grouped["qty"].to_a.should eq([9_i64, 6_i64])
+    end
+
+    it "defaults to every eligible column and never aggregates a key" do
+      grouped = group_frame.group_by("region").sum
+
+      # `category` is a string, so sum skips it; `region` is the key.
+      grouped.column_names.should eq(["region", "price", "qty"])
+      grouped["qty"].to_a.should eq([9_i64, 6_i64])
+    end
+
+    it "computes mean, median, std and var" do
+      frame = group_frame.group_by("region")
+
+      frame.mean("price")["price"].to_a.should eq([30.0, 20.0])
+      frame.median("qty")["qty"].to_a.should eq([3.0, 3.0])
+      frame.std("price")["price"].to_a.should eq([20.0, nil])
+      frame.var("price")["price"].to_a.should eq([400.0, nil])
+    end
+
+    it "takes min and max over comparable columns" do
+      grouped = group_frame.group_by("region").min
+
+      grouped.column_names.should eq(["region", "category", "price", "qty"])
+      grouped["category"].to_a.should eq(["a", "a"])
+      grouped["price"].to_a.should eq([10.0, 20.0])
+    end
+
+    it "counts rows per group when no column is named" do
+      grouped = group_frame.group_by("region").count
+
+      grouped.column_names.should eq(["region", "count"])
+      grouped["count"].to_a.should eq([3_u32, 2_u32])
+    end
+
+    it "counts non-null values when columns are named" do
+      group_frame.group_by("region").count("price")["price"].to_a
+        .should eq([3_u32, 1_u32])
+    end
+
+    it "counts distinct values with null as one, for every column by default" do
+      grouped = group_frame.group_by("region").n_unique
+
+      grouped.column_names.should eq(["region", "category", "price", "qty"])
+      # east holds price 20.0 and one null, which is a value of its own.
+      grouped["price"].to_a.should eq([3_u32, 2_u32])
+    end
+
+    it "matches the equivalent aggregate call" do
+      one_call = group_frame.group_by("region", "category").std("price")
+      explicit = group_frame.group_by("region", "category")
+        .aggregate(price: col("price").std)
+
+      one_call["price"].to_a.should eq(explicit["price"].to_a)
+    end
+
+    it "rejects a grouping key as an aggregate column" do
+      expect_raises(Prism::DuplicateColumn, /grouping key/) do
+        group_frame.group_by("region").sum("region")
+      end
+    end
+
+    it "rejects an unknown column" do
+      expect_raises(Prism::ColumnNotFound) do
+        group_frame.group_by("region").sum("nope")
+      end
+    end
+
+    it "raises when no column supports the aggregate" do
+      frame = Prism.from_columns({
+        k: Arrow::StringArray.from_values(["a"]),
+        v: Arrow::StringArray.from_values(["x"]),
+      })
+
+      expect_raises(Prism::DtypeError, /sum/) { frame.group_by("k").sum }
+    end
+  end
+
   describe "expression keys" do
     it "groups by an aliased expression" do
       grouped = group_frame.group_by(

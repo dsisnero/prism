@@ -45,16 +45,32 @@ module Prism
       if left.literal? != right.literal?
         column_dtype = left.literal? ? right_dtype : left_dtype
         literal_dtype = left.literal? ? left_dtype : right_dtype
-        if same_family?(column_dtype, literal_dtype) &&
-           literal_cast_safe?(literal_dtype, column_dtype) &&
-           Arrow.can_cast_types(literal_dtype, column_dtype)
-          return column_dtype
-        end
+        return with_literal(column_dtype, literal_dtype)
       end
 
-      # Decimials widen to a common scale for comparison; this must run before
-      # the equality shortcut, and after the literal rule above so a literal can
-      # adopt the column's decimal dtype without widening it.
+      unify_pair(left_dtype, right_dtype)
+    end
+
+    # The dtype a comparison between a column and a literal runs in.
+    #
+    # This is the literal half of `#target`, callable without expressions: the
+    # literal adopts the column's dtype when that cast is lossless, otherwise
+    # both sides widen. `Prism::Series` uses it so `series > 10` coerces exactly
+    # like `col("x") > 10` does.
+    def with_literal(column : Arrow::DataType, literal : Arrow::DataType) : Arrow::DataType
+      if same_family?(column, literal) &&
+         literal_cast_safe?(literal, column) &&
+         Arrow.can_cast_types(literal, column)
+        return column
+      end
+
+      unify_pair(column, literal)
+    end
+
+    # Widening both sides, with the decimal rule ahead of the equality shortcut:
+    # decimals compare at a common scale, and a literal must not drag the column
+    # into a wider precision first.
+    private def unify_pair(left_dtype : Arrow::DataType, right_dtype : Arrow::DataType) : Arrow::DataType
       return unify_decimal(left_dtype, right_dtype) if left_dtype.decimal? || right_dtype.decimal?
       return left_dtype if left_dtype == right_dtype
 

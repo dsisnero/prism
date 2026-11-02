@@ -6,6 +6,42 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `Prism::Series` comparison operators: `==`, `!=`, `<`, `<=`, `>`, `>=` against
+  another series or a scalar, producing a boolean column. Scalars follow the same
+  coercion rule expressions use — the literal adopts the column's dtype when the
+  cast is lossless, otherwise both sides widen — so `series > 10` on an `Int32`
+  column stays `Int32`, and `series > 1.5` on an integer column widens instead of
+  truncating the literal.
+- `DataFrame#filter(mask : Series)`: a boolean column can be the filter directly
+  (`df.filter(df["price"] > 10)`). Masks derived from the frame's own columns
+  keep the chunking; the three fast paths (all true, none true, otherwise) are
+  shared with the expression form.
+- `DataFrame#remove` (expression, mask, or block), the inverse of `filter`: rows
+  are kept where the predicate is false **or** null, which is deliberately not
+  `filter(pred.not)` — a null predicate would otherwise drop a row the predicate
+  could not judge. `LazyFrame#remove` matches.
+- `sort_by("-col")` descending shorthand (RedAmber), resolved by a shared
+  `Prism.sort_key` so eager and lazy verbs agree; `nulls:` still applies to the
+  prefixed key.
+- Range row slicing: `df[1..3]`, `df[1...3]`, `df[..1]`, `df[2..]`, `df[-2..]`,
+  plus `df.slice(range)`. Negative endpoints count from the end and bounds clamp,
+  so an out-of-range range yields an empty frame rather than `nil`.
+- Column indexing: `df[["region", "price"]]`, equivalent to `select`.
+- One-call `GroupBy` aggregates: `sum`, `mean`, `min`, `max`, `count`,
+  `n_unique`, `median`, `std`, `var`. Output columns keep their input names
+  (Polars' rule); with no column names the aggregate covers every eligible
+  column and never a grouping key; `count` with no columns is Polars' `count`
+  (one `count` column of row counts per group).
+
+### Changed
+
+- `Coerce` exposes `with_literal(column_dtype, literal_dtype)`, the column-vs-
+  literal half of `#target`, so `Series` comparisons and expressions cannot drift.
+- `Prism::DuplicateColumn` takes an optional reason, used when a one-call
+  aggregate names a grouping key.
+
 ## [0.1.1] - 2026-11-02
 
 A small follow-up to `0.1.0`: the two type families that were still bottoming

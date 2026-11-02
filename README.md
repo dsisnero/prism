@@ -98,6 +98,42 @@ puts orders.head(2)   # aligned table with dtypes and nulls
 is the precedence-safe spelling, and `!` cannot be overloaded — negation is
 `.not`.
 
+### Masks from columns
+
+`Series` comparison operators build a boolean column, and `filter` takes one
+directly — the RedAmber spelling, without leaving the expression API:
+
+```crystal
+orders.filter(orders["price"] > 15)   # same rows as filter(col("price") > 15)
+orders["price"] > 15                  # => boolean Series, nulls propagate
+```
+
+A scalar adopts the column's dtype when the cast is lossless (`Int32` column,
+`Int64` literal) and widens both sides when it is not (`1.5` against an integer
+column), which is the rule expressions follow too.
+
+### RedAmber-style ergonomics
+
+Filters and sorts accept the shapes RedAmber made familiar, without leaving the
+expression API:
+
+```crystal
+orders.filter(orders["price"] > 15)     # a boolean Series is a mask
+orders.remove(col("region").is_null)    # keep rows rejected *or* unjudgeable
+orders.sort_by("-price")                # descending shorthand
+orders[1..2]                            # rows by range; negatives and .. work
+orders[["region", "price"]]             # columns by name
+orders.group_by("region").sum("price")  # one-call aggregate, input name kept
+orders.group_by("region").mean          # every numeric column
+```
+
+`remove` is not `filter(predicate.not)`: a row is kept when the predicate is
+false **or null**, so rows the predicate cannot judge survive.
+
+One-call aggregates keep the input column's name, which means no aliasing;
+`group_by(k).count` with no columns is Polars' `count` — one `count` column of
+row counts per group.
+
 ### Lazy queries and pushdown
 
 ```crystal

@@ -25,6 +25,16 @@ module Prism
       filter(yield)
     end
 
+    # Drops rows where `expr` is true; a null predicate keeps its row, matching
+    # the eager verb.
+    def remove(expr : Expr) : LazyFrame
+      filter(expr.not.or(expr.is_null))
+    end
+
+    def remove(&) : LazyFrame
+      remove(yield)
+    end
+
     def select(*names : String | Symbol) : LazyFrame
       self.select(names.map { |name| Prism.col(name) })
     end
@@ -57,7 +67,7 @@ module Prism
         when SortKey
           key
         else
-          SortKey.new(Prism.col(key), order == :desc, nulls == :first)
+          Prism.sort_key(key, order, nulls)
         end
       end.to_a
 

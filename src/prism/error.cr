@@ -23,8 +23,8 @@ module Prism
 
   # Raised when a column name would appear twice in a frame.
   class DuplicateColumn < Error
-    def initialize(column : String)
-      super("column #{column.inspect} already exists")
+    def initialize(column : String, reason : String? = nil)
+      super(reason || "column #{column.inspect} already exists")
     end
   end
 

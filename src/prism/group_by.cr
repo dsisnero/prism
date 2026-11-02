@@ -95,12 +95,153 @@ module Prism
       execute(columns)
     end
 
+    # One-call aggregates, RedAmber style.
+    #
+    # The output keeps each input column's name — Polars' naming rule — so
+    # `group_by("region").sum("price")` produces `region, price`. With no column
+    # names the aggregate applies to every eligible column: numeric ones for
+    # `sum`/`mean`/`median`/`std`/`var`, numeric/boolean/string ones for
+    # `min`/`max`, and all columns for `n_unique`. Grouping keys are never
+    # aggregated, since they are already in the output.
+    #
+    # ```
+    # df.group_by("region").sum("price", "qty")
+    # df.group_by("region").mean # every numeric column
+    # df.group_by("region").median("price")
+    # ```
+    #
+    # The empty form is a separate overload rather than a default on the splat:
+    # Crystal requires at least one argument for a type-restricted splat.
+    {% for name, member in {sum: "Sum", mean: "Mean", min: "Min", max: "Max",
+                            median: "Median", std: "Std", var: "Variance",
+                            n_unique: "NUnique"} %}
+      def {{name.id}}(*columns : String | Symbol) : DataFrame
+        one_call(AggFn::{{member.id}}, columns)
+      end
+
+      def {{name.id}} : DataFrame
+        one_call(AggFn::{{member.id}}, [] of String)
+      end
+    {% end %}
+
+    # Non-null counts per column. With no column names this is Polars'
+    # `GroupBy#count`: one column named `count` holding the number of rows in
+    # each group.
+    def count(*columns : String | Symbol) : DataFrame
+      one_call(AggFn::Count, columns)
+    end
+
+    def count : DataFrame
+      verify_output_name!("count")
+      aggregate({"count" => row_count_expr})
+    end
+
     private def aggregation?(expr : Expr) : Bool
       case expr
       when Agg   then true
       when Alias then aggregation?(expr.operand)
       else            false
       end
+    end
+
+    # Shared body of the one-call aggregate verbs.
+    private def one_call(fn : AggFn, columns : Enumerable(String | Symbol)) : DataFrame
+      names = columns.map(&.to_s)
+      names = default_columns(fn) if names.empty?
+
+      if names.empty?
+        raise DtypeError.new(
+          "#{fn.key_name}: no column supports it " \
+          "(columns: #{@frame.column_names.join(", ")}); name the columns explicitly"
+        )
+      end
+
+      names.each do |name|
+        raise ColumnNotFound.new(name, @frame.column_names) unless @frame.column_names.includes?(name)
+
+        verify_output_name!(name)
+      end
+
+      aggregated = {} of String => Expr
+      names.each { |name| aggregated[name] = aggregate_expr(fn, name) }
+      aggregate(aggregated)
+    end
+
+    # Turns an `AggFn` into the expression the named form would hand-write.
+    private def aggregate_expr(fn : AggFn, column : String) : Expr
+      expr = Prism.col(column)
+      case fn
+      in .sum?       then expr.sum
+      in .mean?      then expr.mean
+      in .min?       then expr.min
+      in .max?       then expr.max
+      in .count?     then expr.count
+      in .count_all? then expr.count_all
+      in .n_unique?  then expr.n_unique
+      in .first?     then expr.first
+      in .last?      then expr.last
+      in .std?       then expr.std
+      in .variance?  then expr.variance
+      in .median?    then expr.median
+      end
+    end
+
+    # Every column the aggregate can run on when no names are given. Keys are
+    # excluded because they are already emitted.
+    private def default_columns(fn : AggFn) : Array(String)
+      keys = group_key_names
+      @frame.schema.fields.each_with_object([] of String) do |field, memo|
+        next if keys.includes?(field.name)
+        next unless default_candidate?(fn, field.data_type)
+
+        memo << field.name
+      end
+    end
+
+    # Which dtypes each aggregate can reduce. `Series#sum`/`#mean` and the
+    # variance helpers accept integers and floats only, so a boolean `sum` is
+    # excluded here rather than raising mid-execution.
+    private def default_candidate?(fn : AggFn, dtype : Arrow::DataType) : Bool
+      numeric = dtype.integer? || dtype.floating?
+
+      case fn
+      in .sum?, .mean?, .std?, .variance?, .median?
+        numeric
+      in .min?, .max?
+        numeric || dtype.kind.boolean? || dtype.string?
+      in .count?, .count_all?, .n_unique?, .first?, .last?
+        true
+      end
+    end
+
+    # The key columns' output names, where they are plain columns.
+    private def group_key_names : Array(String)
+      @keys.compact_map do |key|
+        case key
+        when Col   then key.name
+        when Alias then key.name
+        else            nil
+        end
+      end
+    end
+
+    # One row per group, so any column would do.
+    private def row_count_expr : Expr
+      name = group_key_names.first? || @frame.column_names.first?
+      raise UnsupportedOperation.new("count needs at least one column to count rows") unless name
+
+      Prism.col(name).count_all
+    end
+
+    # A one-call aggregate takes its output name from the input column, so it
+    # would collide with a grouping key of the same name.
+    private def verify_output_name!(name : String) : Nil
+      return unless group_key_names.includes?(name)
+
+      raise DuplicateColumn.new(
+        name,
+        "#{name.inspect} is a grouping key; aggregating it would duplicate the column"
+      )
     end
 
     private def execute(columns : Hash(String, Expr)) : DataFrame

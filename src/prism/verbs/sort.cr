@@ -26,16 +26,41 @@ module Prism
     end
   end
 
+  # Resolves a sort key written as a column name.
+  #
+  # A leading `-` means descending, which is RedAmber's shorthand:
+  # `sort_by("-price")`. That is the only place the prefix is read, so a column
+  # whose name really starts with `-` is reachable only as a `SortKey`
+  # (`sort_by(col("-weird").asc)`) — the documented cost of the sugar.
+  # `order:` and `nulls:` still apply to keys without a prefix, so `-` overrides
+  # direction alone and never null placement.
+  def self.sort_key(
+    name : String | Symbol,
+    order : Symbol = :asc,
+    nulls : Symbol = :last,
+  ) : SortKey
+    text = name.to_s
+    descending = order == :desc
+    if text.size > 1 && text.starts_with?('-')
+      descending = true
+      text = text[1..]
+    end
+
+    SortKey.new(col(text), descending, nulls == :first)
+  end
+
   class DataFrame
     # Sorts rows.
     #
     # ```
     # df.sort_by("price", order: :desc)
+    # df.sort_by("-price") # descending shorthand
     # df.sort_by(col("region").asc, col("qty").desc)
     # ```
     #
-    # Nulls go last unless `nulls: :first`. Sorting reorders rows, so the frame
-    # collapses to a single chunk.
+    # A leading `-` on a column name sorts that key descending; see
+    # `Prism.sort_key`. Nulls go last unless `nulls: :first`. Sorting reorders
+    # rows, so the frame collapses to a single chunk.
     def sort_by(
       *keys : String | Symbol | SortKey,
       order : Symbol = :asc,
@@ -46,7 +71,7 @@ module Prism
         when SortKey
           key
         else
-          SortKey.new(Prism.col(key), order == :desc, nulls == :first)
+          Prism.sort_key(key, order, nulls)
         end
       end
 

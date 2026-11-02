@@ -67,6 +67,30 @@ module Prism
       Series.new(field.name, @batches.map(&.column(index)), field.data_type)
     end
 
+    # Rows in `range`; the same rules as `#slice(range)`, including negative and
+    # omitted endpoints.
+    #
+    # ```
+    # df[1..3]
+    # df[-2..]
+    # ```
+    #
+    # The type parameters are explicit so this overload outranks the column-list
+    # one below: a `Range` is `Enumerable`, so a bare `Range` restriction loses
+    # to `Enumerable(T)` during dispatch and `df[1..3]` would be read as column
+    # names.
+    def [](range : Range(B, E)) : DataFrame forall B, E
+      slice(range)
+    end
+
+    # Columns by name: `df[["region", "price"]]` projects them.
+    #
+    # Kept separate from `#[](name)`, which returns a `Series`, so a bracket
+    # call is a column or a list of columns and rows always come from a `Range`.
+    def [](names : Enumerable(T)) : DataFrame forall T
+      self.select(names.map { |name| Prism.col(name).as(Expr) })
+    end
+
     def each_batch(& : Arrow::RecordBatch ->) : Nil
       @batches.each { |batch| yield batch }
     end
@@ -130,6 +154,42 @@ module Prism
       end
 
       DataFrame.new(@schema, selected)
+    end
+
+    # Rows in `range`, with Ruby's `Array#[]` index rules.
+    #
+    # A negative endpoint counts from the end, an omitted endpoint runs to the
+    # edge of the frame, `...` excludes its end, and bounds clamp to the
+    # available rows. Clamping is the one deliberate difference from Ruby,
+    # which returns `nil` for an out-of-range start: a frame is always a frame,
+    # so `df[5..9]` on three rows is empty rather than absent.
+    #
+    # ```
+    # df[1..3]  # rows 1, 2, 3
+    # df[1...3] # rows 1, 2
+    # df[2..]   # rows 2 onwards
+    # df[..1]   # rows 0 and 1
+    # df[-2..]  # the last two rows
+    # ```
+    def slice(range : Range) : DataFrame
+      total = row_count
+      first = row_bound(range.begin, total, 0_i64)
+      last = range.end
+      finish = last.nil? ? total : row_bound(last, total, total) + (range.excludes_end? ? 0 : 1)
+
+      return DataFrame.new(@schema, [] of Arrow::RecordBatch) if finish <= first
+
+      slice(first.to_i, (finish - first).to_i)
+    end
+
+    # Ruby-style row bound: a negative index counts from the end, `nil` means
+    # the edge of the frame, and the result clamps to the available rows.
+    private def row_bound(index : Int?, total : Int64, default : Int64) : Int64
+      return default if index.nil?
+
+      resolved = index.to_i64
+      resolved += total if resolved < 0
+      resolved.clamp(0_i64, total)
     end
 
     def ==(other : DataFrame) : Bool

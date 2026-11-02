@@ -81,6 +81,13 @@ Operator-precedence cases belong in a spec too: `a & b == c` must be written
 with parentheses, and a spec should pin that the parenthesised form produces the
 intended tree.
 
+`Series` comparisons are just as hazardous: `==`/`>`/… return a series, so
+`series_a == series_b` is truthy whatever the rows hold. Compare `#to_a` (or use
+`same_as?` for structure) and never `should eq` two series. Coercion specs should
+cover both directions of the literal rule — an `Int32` column compared with an
+`Int64` literal stays `Int32`, and an integer column compared with `1.5` widens
+rather than truncating the literal.
+
 ## IO specs
 
 Do not commit fixture binaries. Generate them:
