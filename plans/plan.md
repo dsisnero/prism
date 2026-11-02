@@ -74,8 +74,8 @@ checklists below are the working history.
 | 9e | Examples, memory notes, property oracles, v0.1.0 tag | **done** |
 | 10 | Repo/GitHub rename `dataframe` → `prism` | **done** (local folder optional) |
 
-**Last feature commit:** `94b1d95` — decimal arithmetic (post-v0.1.0, unreleased).
-`v0.1.0` is tagged at `511dd15`.
+**Last feature commit:** `598dbad` — nested materialization (post-v0.1.0,
+unreleased). `v0.1.0` is tagged at `511dd15`.
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (325) and costs ~13 s; run it before a release.
 
