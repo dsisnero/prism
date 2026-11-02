@@ -23,6 +23,10 @@ module Prism
   # - **Nulls.** A null encodes like a value, i.e. all nulls are one key. That is
   #   what `distinct` and `group_by` want; a join that must *not* match nulls
   #   (`nulls_equal: false`) checks the key columns' null bitmaps instead.
+  #
+  # Known limit: a *dictionary-encoded float* key is compared by its decoded
+  # values but not canonicalized, since only top-level float columns go through
+  # `#canonical`. That dtype is rare enough to leave alone until someone needs it.
   module RowKeys
     extend self
 

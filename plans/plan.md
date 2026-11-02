@@ -1487,14 +1487,24 @@ Why this shape:
   those bytes is then Crystal's job, and `Bytes`/`Row` hash by content.
 - **Floats are canonicalized, not hashed as bits.** `arrow-row` stores IEEE
   `totalOrder`, which is right for sorting and wrong for keys: it would make
-  `-0.0` a different key from `0.0` and NaNs differ by payload. Polars solves
-  this with `canonical_f64` (`x + 0.0`, then one quiet NaN); `RowKeys.canonical`
-  does the same, so keying follows `==` plus "all NaNs are one key".
+  `-0.0` a different key from `0.0` and NaNs differ by payload. This is a real
+  split between the two row formats — **Polars' own `polars-row` bakes
+  canonicalization into the encoding** (`-inf < neg < -0.0 = 0.0 < pos < inf <
+  nan`, all NaNs equal), while `arrow-row` cannot, because its bytes also have to
+  express a sort order. So Prism canonicalizes the key columns first
+  (`RowKeys.canonical`: `x + 0.0`, then one quiet NaN, per `canonical_f16/f32/f64`)
+  and gets `polars-row` *key* equality out of `arrow-row`. Verified against
+  upstream: Polars hashes `v.to_total_ord()`, and `TotalHash for f64` hashes
+  `canonical_f64(x).to_bits()`, so `group_by`, join and
+  `unique`/`n_unique` all agree on `-0.0`/`0.0` and NaN payloads.
   `spec/prism/{join,distinct,group_by}_spec.cr` pin it.
 - **Nulls are a value in the encoding.** `distinct` wants exactly that (one null
   key); a join that must not match nulls (`nulls_equal: false`) checks the key
   columns' null bitmaps before indexing or probing, which costs nothing when the
-  keys have no nulls.
+  keys have no nulls. `n_unique` subtracts the null key, because Prism's
+  aggregates skip nulls the way SQL's `COUNT(DISTINCT …)` does — Polars counts
+  null as a distinct value here (Phase 4 note), which remains a documented
+  divergence.
 - **Grouping stays sort-based on purpose.** `group_by` yields contiguous
   `[start, len]` ranges as `RecordBatch#slice` views and a deterministic output
   order; a hash table would give both up. So `group_by` still pays O(n log n)

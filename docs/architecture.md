@@ -366,14 +366,22 @@ and the *first* occurrence is simply the first time the encoding is seen, so
 input order comes for free (the previous sort-plus-partition path had to scan
 each run for its smallest original index).
 
-Floats need one normalizing pass before they are encoded. The row format stores
-IEEE `totalOrder` bits — correct for sorting, wrong for keys — so `-0.0` would
-encode differently from `0.0` and NaNs would differ by payload. `RowKeys.canonical`
-maps `-0.0` to `0.0` and every NaN to one quiet NaN, exactly like Polars'
-`canonical_f64`, so keying follows `==` (plus "all NaNs are one key", which is
-what SQL, Polars and pandas do). Nulls form one key of their own, which is what
-`distinct` wants, and what `n_unique` subtracts because the aggregate counts
-non-null values.
+Floats need one normalizing pass before they are encoded. `arrow-row` stores IEEE
+`totalOrder` bits — correct for sorting, wrong for keys — so `-0.0` would encode
+differently from `0.0` and NaNs would differ by payload. This is where the two
+row formats part company: **`polars-row` canonicalizes floats inside the
+encoding** (`-inf < neg < -0.0 = 0.0 < pos < inf < nan`, all NaNs equal), and
+`arrow-row` cannot, because its bytes must also express a sort order.
+`RowKeys.canonical` therefore maps `-0.0` to `0.0` and every NaN to one quiet
+NaN before encoding (Polars' `canonical_f16/f32/f64`: `x + 0.0`, then the
+canonical quiet NaN), which is how Prism gets `polars-row` key equality out of
+`arrow-row`. Keying then follows `==` plus "all NaNs are one key", as SQL, Polars
+and pandas do.
+
+Nulls form one key of their own, which is what `distinct` wants, and what
+`n_unique` subtracts because the aggregate counts non-null values — SQL's
+`COUNT(DISTINCT …)` and deliberately not Polars, which counts null as a value
+(see the Phase 4 note in the plan).
 
 Grouping is still sort-based on purpose: it yields contiguous `[start, len]`
 ranges as `RecordBatch#slice` views and a deterministic output order, which a
