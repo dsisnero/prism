@@ -110,28 +110,42 @@ describe Prism::Series do
   end
 
   describe "#n_unique" do
-    it "counts distinct non-null values" do
-      distinct_frame["tag"].n_unique.should eq(2)
+    it "counts distinct values, with null as one value like Polars" do
+      # tag is [b, a, b, nil, a, nil]: two names plus the null.
+      distinct_frame["tag"].n_unique.should eq(3)
       distinct_frame["value"].n_unique.should eq(6)
     end
 
-    it "returns zero for an all-null column" do
+    it "returns one for an all-null column" do
       series = Prism::Series.new(
         "x",
         [Arrow::Float64Array.from_nullable([nil, nil])] of Arrow::ArrayBase,
         Arrow::DataType.float64
       )
 
-      series.n_unique.should eq(0)
+      series.n_unique.should eq(1)
     end
 
     it "agrees with the aggregate used inside group_by" do
       frame = distinct_frame
       grouped = frame.group_by("value").aggregate(distinct_tags: col("tag").n_unique)
 
-      # One row per value, so each group holds a single tag. Groups whose only
-      # row has a null tag count zero, because n_unique skips nulls.
-      grouped["distinct_tags"].to_a.should eq([1_u32, 1_u32, 1_u32, 0_u32, 1_u32, 0_u32])
+      # One row per value, so each group holds a single tag — including a null
+      # tag, which counts as one value.
+      grouped["distinct_tags"].to_a.should eq([1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32])
+    end
+
+    it "equals the length of #unique, which is Polars' contract" do
+      frame = Prism.from_columns({
+        f: Arrow::Float64Array.from_nullable([0.0, -0.0, Float64::NAN, nil]),
+        s: Arrow::StringArray.from_nullable(["a", "a", nil, "b"]),
+        i: Arrow::Int64Array.from_nullable([1_i64, 1_i64, nil, 2_i64]),
+      })
+
+      frame.column_names.each do |name|
+        column = frame[name]
+        column.n_unique.should eq(column.unique.size)
+      end
     end
   end
 end
@@ -145,8 +159,8 @@ describe Prism::Aggregates do
         .should eq(distinct_frame["tag"].n_unique)
     end
 
-    it "counts nulls out and handles empty input" do
-      Prism::Aggregates.count_distinct(Arrow::NullArray.new(3)).should eq(0)
+    it "treats a Null column as one value and an empty column as none" do
+      Prism::Aggregates.count_distinct(Arrow::NullArray.new(3)).should eq(1)
       Prism::Aggregates.count_distinct(
         Arrow::StringArray.from_values([] of String)
       ).should eq(0)

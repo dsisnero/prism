@@ -378,10 +378,12 @@ canonical quiet NaN), which is how Prism gets `polars-row` key equality out of
 `arrow-row`. Keying then follows `==` plus "all NaNs are one key", as SQL, Polars
 and pandas do.
 
-Nulls form one key of their own, which is what `distinct` wants, and what
-`n_unique` subtracts because the aggregate counts non-null values — SQL's
-`COUNT(DISTINCT …)` and deliberately not Polars, which counts null as a value
-(see the Phase 4 note in the plan).
+Nulls form one key of their own, which is what both `distinct` and `n_unique`
+want: Polars counts null as a distinct value (`ChunkUnique` adds one when
+`null_count > 0`), so `n_unique == unique.size`. That makes `n_unique` the one
+aggregate that does not skip nulls — `sum`, `mean`, `min`, `max` and `count` all
+do, because "the average of a null and 5" has no answer. It also means `n_unique`
+diverges from SQL's `COUNT(DISTINCT …)`, which drops nulls.
 
 Grouping is still sort-based on purpose: it yields contiguous `[start, len]`
 ranges as `RecordBatch#slice` views and a deterministic output order, which a

@@ -144,6 +144,7 @@ module Prism
       Agg.new(AggFn::CountAll, self)
     end
 
+    # Distinct values within each group, null included as one value.
     def n_unique : Expr
       Agg.new(AggFn::NUnique, self)
     end

@@ -33,19 +33,25 @@ module Prism
       end
     end
 
-    # Number of distinct non-null values.
+    # Number of distinct values, counting null as a value of its own.
     #
-    # Encodes the column as `arrow-row` bytes (`Prism::RowKeys`) and counts the
-    # distinct encodings, so this is O(n) instead of the sort-plus-partition it
-    # used to be. Nulls encode as one key of their own; the other aggregates
-    # skip nulls, so the count does too.
+    # This is Polars' contract (`ChunkUnique`'s implementations add one when
+    # `null_count > 0`, and `NullChunked` reports 1 for any non-empty column), so
+    # `n_unique == len(unique())`. It differs from SQL's `COUNT(DISTINCT x)`,
+    # which skips nulls; that is the one place this library follows Polars over
+    # SQL.
+    #
+    # The column is encoded as `arrow-row` bytes (`Prism::RowKeys`) and the
+    # distinct encodings are counted, so this is O(n) rather than the
+    # sort-plus-partition it used to be.
     def count_distinct(array : Arrow::ArrayBase, name : String = "value") : Int64
-      # A null column has no non-null values, and it has no encoding either.
-      return 0_i64 if array.len == 0 || array.data_type.kind.null?
+      return 0_i64 if array.len == 0
+      # A Null column carries no values to encode, but it is one value.
+      return 1_i64 if array.data_type.kind.null?
 
       array = RowKeys.canonical(array)
       rows = RowKeys.converter([array], [name]).convert_columns([array])
-      (RowKeys.distinct_count(rows) - (array.null_count > 0 ? 1 : 0)).to_i64
+      RowKeys.distinct_count(rows).to_i64
     end
 
     # Sample variance (`ddof` = 1), or `nil` when there are too few values.

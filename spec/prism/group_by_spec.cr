@@ -84,7 +84,8 @@ describe Prism::GroupBy do
       )
 
       # west = 10,30,50 -> median 30, sample variance 400, sd 20
-      grouped["distinct"].to_a.should eq([3_u32, 1_u32])
+      # east = 20,null -> two distinct values, because null counts as one
+      grouped["distinct"].to_a.should eq([3_u32, 2_u32])
       grouped["median"].to_a.should eq([30.0, 20.0])
       grouped["var"].to_a.should eq([400.0, nil])
       grouped["sd"].to_a.should eq([20.0, nil])

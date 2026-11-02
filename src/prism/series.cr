@@ -162,7 +162,8 @@ module Prism
       Series.new(@name, [Arrow.take(array, selected)] of Arrow::ArrayBase, @dtype)
     end
 
-    # Number of distinct non-null values.
+    # Number of distinct values, with null counted as one value (Polars'
+    # contract, so `n_unique == unique.size`).
     def n_unique : Int64
       Aggregates.count_distinct(to_arrow, @name)
     end

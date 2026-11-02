@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (323 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (324 examples, roughly 30 s warm),
 then take the first unchecked item under Phase 9e in §12. This block is the only
 place that tracks status; do not re-derive it from `git log`.
 
@@ -71,7 +71,7 @@ and `n_unique` — O(n) instead of a sort, with float keys canonicalized so
 **Last feature commit:** `4f3e2f9` — Phase 9d float-key canonicalization (keys
 follow `==`, so `-0.0`/`0.0` are one key and every NaN is one key).
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
-adds the compile-failure spec (324) and costs ~13 s; run it before a release.
+adds the compile-failure spec (325) and costs ~13 s; run it before a release.
 
 ---
 
@@ -772,6 +772,9 @@ Phase 9b for `is_null`, `fill_null`, `cast` and element-wise `==`).
 - Aggregates skip nulls; a group whose values are all null yields a null
   aggregate value, never `0`.
 - `count` counts non-null rows; `count_all` counts rows.
+- `n_unique` is the exception: null counts as one distinct value (Polars'
+  contract, so `n_unique == unique.size`), and an all-null column reports `1`.
+  `first`/`last` and `median` still follow the skip-nulls rule.
 
 ### 8.2 Numeric coercion matrix
 
@@ -1083,9 +1086,10 @@ zero rows out, correct schema). Specs: `spec/prism/group_by_spec.cr`
 - `std`/`variance`/`median` use Arrow kernels on the group (`cast` to Float64,
   `sub`/`mul`/`sum` for variance, `sort` + middle row for median) rather than
   materializing Crystal values.
-- `n_unique` counts **non-null** distinct values, consistent with the other
-  aggregates skipping nulls. (Polars counts nulls as a value here — a documented
-  divergence if it matters later.)
+- `n_unique` counts **null as one value**, which is Polars' contract and makes
+  `n_unique == unique.size`. It is the one aggregate that does not skip nulls
+  (`sum`/`mean`/`min`/`max`/`count` do), and it therefore diverges from SQL's
+  `COUNT(DISTINCT …)`; that was fixed in Phase 9d after checking upstream.
 - Null keys form **one** group, not one per null row. Polars' wiki text is
   ambiguous on this; our behavior is pinned by a spec.
 - `maintain_order` defaults to `true` (discovery order), matching dplyr/pandas
@@ -1499,12 +1503,10 @@ Why this shape:
   `unique`/`n_unique` all agree on `-0.0`/`0.0` and NaN payloads.
   `spec/prism/{join,distinct,group_by}_spec.cr` pin it.
 - **Nulls are a value in the encoding.** `distinct` wants exactly that (one null
-  key); a join that must not match nulls (`nulls_equal: false`) checks the key
-  columns' null bitmaps before indexing or probing, which costs nothing when the
-  keys have no nulls. `n_unique` subtracts the null key, because Prism's
-  aggregates skip nulls the way SQL's `COUNT(DISTINCT …)` does — Polars counts
-  null as a distinct value here (Phase 4 note), which remains a documented
-  divergence.
+  key), and so does `n_unique`: Polars counts null as a distinct value, so
+  `n_unique == unique.size` (Phase 4 note, aligned in 9d). A join that must not
+  match nulls (`nulls_equal: false`) checks the key columns' null bitmaps before
+  indexing or probing, which costs nothing when the keys have no nulls.
 - **Grouping stays sort-based on purpose.** `group_by` yields contiguous
   `[start, len]` ranges as `RecordBatch#slice` views and a deterministic output
   order; a hash table would give both up. So `group_by` still pays O(n log n)
