@@ -5,16 +5,17 @@
 > `make test`. Details: [docs/resuming.md](docs/resuming.md). Do not re-derive
 > state from git history.
 
-`Prism` is a Crystal DataFrame library built on
+`Prism` (v0.1.0) is a Crystal DataFrame library built on
 [`dsisnero/arrow-cr`](https://github.com/dsisnero/arrow-cr) (Apache Arrow) and
-`dsisnero/parquet-cr` (Apache Parquet). Tables are chunked Arrow record
+[`dsisnero/parquet-cr`](https://github.com/dsisnero/parquet-cr) (Apache Parquet). Tables are chunked Arrow record
 batches; transformations are inspectable expressions; Parquet reads push
 projections and predicates down into the reader.
 
 The shard is `prism` (`shard.yml`), the entrypoint is `src/prism.cr`, and
-consumers `require "prism"`. The repository folder and the GitHub repository are
-still named `dataframe`; renaming those is the remaining Phase 10 item in the
-plan. Do not rename anything else piecemeal.
+consumers `require "prism"`. The GitHub repository is
+[`dsisnero/prism`](https://github.com/dsisnero/prism); dependencies come from
+GitHub, not sibling checkouts (see `docs/development.md`). A local checkout folder
+may still be named `dataframe/` — cosmetic, referenced by nothing.
 
 ## Commands
 

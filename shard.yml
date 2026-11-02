@@ -9,12 +9,13 @@ crystal: '>= 1.22.2'
 license: MIT
 
 dependencies:
-  # Local development uses sibling checkouts. Swap to the `github:` form once
-  # both shards are published; see docs/development.md#dependencies.
+  # Published from GitHub so `shards install` works for consumers. To hack on
+  # the dependencies themselves, point these at the sibling checkouts instead
+  # (`path: ../arrow-cr`, `path: ../parquet-cr`); see docs/development.md.
   arrow-cr:
-    path: ../arrow-cr
+    github: dsisnero/arrow-cr
   parquet-cr:
-    path: ../parquet-cr
+    github: dsisnero/parquet-cr
 
 development_dependencies:
   ameba:

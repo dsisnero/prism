@@ -38,8 +38,8 @@ Take the first unchecked item in **Next up** (or the next `[ ]` in the current
 phase). For each feature:
 
 1. Confirm what the dependency actually provides before designing around it —
-   read the relevant file under `lib/arrow-cr/src/` or `lib/parquet-cr/src/`
-   (both are symlinks to sibling checkouts). Do not guess signatures.
+   read the relevant file under `lib/arrow-cr/src/` or `lib/parquet-cr/src/`.
+   Do not guess signatures.
 2. Write the spec first (red → green).
 3. Satisfy the **Definition of done** in `CLAUDE.md` (API, specs, gates, plan
    status + **Where we are** refresh, divergence notes).
@@ -48,12 +48,13 @@ phase). For each feature:
 ## 5. Check dependency state
 
 ```bash
-ls -l lib/                 # arrow-cr and parquet-cr should be symlinks
-shards check               # or: shards install
+shards check               # or: make install
 ```
 
-If `lib/arrow-cr` is missing, run `make install`. Both dependencies are local
-path shards; see [development.md](development.md#dependencies).
+Both dependencies are installed from GitHub into `lib/`. To develop against
+sibling checkouts instead (`path: ../arrow-cr`), see
+[development.md](development.md#dependencies) — `lib/` and `shard.lock` are
+gitignored, so the swap never lands in a commit.
 
 ## If the plan is split
 

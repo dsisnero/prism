@@ -28,35 +28,29 @@ see [Coding Guidelines](coding-guidelines.md#never-patch-lib).
 
 ## Dependencies
 
-`shard.yml` uses path dependencies so three in-progress shards can move
-together:
-
-```yaml
-dependencies:
-  arrow-cr:
-    path: ../arrow-cr
-  parquet-cr:
-    path: ../parquet-cr
-```
-
-`development_dependencies` add three things that are not needed to *use* Prism:
-`ameba`, `lipgloss` (for `require "prism/lipgloss"` styled tables) and
-`bubbletea` + `bubbles` (for `examples/viewer.cr`). `lipgloss` is fetched from
-GitHub rather than the sibling checkout because `bubbletea` depends on it and
-shards refuses one shard name from two sources; the sibling is at the same
-commit.
-
-For a consumer (or after publishing), swap to the git form:
+The published `shard.yml` depends on GitHub, so `shards install` works for
+everyone:
 
 ```yaml
 dependencies:
   prism:
     github: dsisnero/prism
+# resolves transitively:
+#   arrow-cr:    github: dsisnero/arrow-cr
+#   parquet-cr:  github: dsisnero/parquet-cr
 ```
 
-A published shard will not resolve `path: ../arrow-cr` on a consumer's machine,
-so the published `shard.yml` must use `github:` entries. This is the last Phase
-10 item alongside the repository rename.
+To hack on `arrow-cr` or `parquet-cr` themselves, point the two dependencies at
+your sibling checkouts instead (`path: ../arrow-cr`, `path: ../parquet-cr`);
+`lib/` is gitignored either way, and `shard.lock` is too, so the swap never
+lands in a commit. Note that shards refuses one shard name from two sources, so
+`parquet-cr`'s own `arrow-cr` dependency must point at the same place.
+
+`development_dependencies` add three things that are not needed to *use* Prism:
+`ameba`, `lipgloss` (for `require "prism/lipgloss"` styled tables) and
+`bubbletea` + `bubbles` (for `examples/viewer.cr`). `lipgloss` comes from GitHub
+rather than a sibling checkout because `bubbletea` depends on it and shards
+refuses two sources for one name.
 
 ## Prerequisites
 
