@@ -56,7 +56,8 @@ evaluation.
 **Sorting is the expensive verb, and it is amortized.** One key is 202 ms, two
 keys 935 ms (the second key is `Utf8`, so it compares variable-length bytes).
 `group_by` at 4 keys costs 220 ms and at 1e5 keys 381 ms — one sort either way,
-which is why adding more aggregates to one `aggregate` call is nearly free.
+so extra aggregates in one `aggregate` call share it. They are not free, though:
+each one still pays per group (see the decomposition below).
 
 **A pinned slice gathers only its window.** `sort_by + head(10)` costs 130 ms
 through the plan (`DataFrame#sort_by_slice`) against 211 ms for the eager
@@ -80,6 +81,29 @@ dedupe), and keys follow `==` rather than `totalOrder`, so `-0.0` and `0.0` are
 one key. That needs one normalizing pass over float key columns, because the row
 format stores `totalOrder` bits — the same `canonical_f64` step Polars takes
 before hashing. Int and string keys pay nothing for it.
+
+**Where a group-by actually spends its time.** The sort is *not* the cost, which
+settles the hash-grouping question. Decomposing `group_by("user_id")` on the same
+1e6-row frame (1e5 distinct keys; this probe ran under load, so read the ratios,
+not the absolutes):
+
+| step | best (ms) |
+| --- | ---: |
+| `lexsort_to_indices` on the key alone | 35 |
+| `sort_by("user_id")` (lexsort + take 4 columns) | 183 |
+| `group_by` + `count` only | 403 |
+| `group_by` + one `sum` | 508 |
+| `group_by` + three aggregates | 1005 |
+| `distinct` on the same keys (row-keyed) | 91 |
+
+So the sort that a hash table would remove is ~35 ms of a 1005 ms group-by —
+under 4%. The rest is per group: ~4 µs each for `count`, and ~2.5 µs per extra
+aggregate (a `Series`, an `EvalContext`, a length-1 array, and one `Arrow.concat`
+piece per group). `distinct` is 11x cheaper on the identical keys because it does
+one hash pass and no per-group slicing at all. A hash-based `group_by` would
+therefore buy a few percent while giving up contiguous group views and
+deterministic order, which is why it was measured and then declined rather than
+built.
 
 **Pushdown pays, and row-group pruning needs clustered data.** Reading 2 of 4
 columns is 74 ms against 117 ms for all of them (37% saved). `limit 100` is 3 ms
@@ -106,9 +130,14 @@ small because the predicate's own column dominates the read.
   `GC.stats` deltas, which are too coarse to attribute.
 - **A bounded-heap top-k.** `sort_by_slice` gathers only the window, but the sort
   still orders every row. That is an `arrow-cr` kernel change, not a Prism one.
-- **Hash-based grouping.** `group_by` is deliberately still sort → partition
-  (contiguous group views, deterministic order), so it pays `O(n log n)` while
-  `distinct` is `O(n)`. Revisit only if grouping dominates a real workload.
+- **Hash-based grouping.** Still deliberately sort → partition (contiguous group
+  views, deterministic order), and the measurement below says to keep it that
+  way: the sort is a small fraction of a group-by, so a hash table cannot pay for
+  the views and the ordering it would give up. Measured, not assumed.
+- **Per-group aggregate overhead.** A group-by at 1e5 keys spends ~95% of its
+  time *per group*, not in the sort (see below). Vectorizing that — computing one
+  kernel across all groups instead of one slice per group — is the real
+  optimization, and it is a redesign of the aggregate layer, not a flag.
 - **Multi-chunk reads.** Every scenario reads with the default batch size, so
   the frame is one chunk. Chunked behaviour is covered by specs, not measured.
 - **Comparisons with other libraries.** The table compares Prism's own paths

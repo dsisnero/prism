@@ -33,23 +33,32 @@ cosmetic local folder rename.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Hash-based grouping** — only if a benchmark shows grouping dominating; it
-   would trade contiguous group views and deterministic order for O(n).
-2. **Typed row structs** — `define_schema` could generate a `Row` struct so
+1. **Typed row structs** — `define_schema` could generate a `Row` struct so
    `typed` frames yield nominal rows instead of `Hash(String, Value)`. See §10
    ("Why `Values` returns containers") for why the dynamic path cannot, and what
    this would and would not buy.
-3. **Interval column materialization** — `Value` has no month/day/nano member,
-   so interval columns still cannot materialize; a dictionary-encoded *float* key
-   is compared by value but not canonicalized.
+2. **Interval column materialization** — `Value` has no month/day/nano member, so
+   interval columns still cannot materialize; a dictionary-encoded *float* key is
+   compared by value but not canonicalized.
+3. **Vectorized per-group aggregation** — the largest in-memory cost by far:
+   ~95% of a 1e5-group `group_by` is per-group overhead, not the sort (§14). It
+   needs one kernel across all groups instead of a slice per group, which is a
+   redesign of the aggregate layer. Take it only with a benchmark in hand — the
+   numbers are in [`docs/benchmarks.md`](../docs/benchmarks.md).
+
+**Closed, do not re-open:** hash-based grouping. Measured in Phase 12's
+follow-up: the sort is 35 ms of a 1005 ms 1e5-key group-by, so a hash table would
+buy ~4% while giving up contiguous group views and deterministic order (§14).
 
 **Gates:** `make lint` + `make test` green, **405 examples**.
 `PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**406**, ~13 s) and
 `PRISM_EXAMPLE_SPECS=1` adds the four example specs (**409**, ~1 min); with both
 set the suite is **410**. Run both before a release.
 
-**Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`); the
-last feature commit before Phase 12 was `598dbad` (nested materialization).
+**Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
+`326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
+benchmark-closes-hash-grouping notes follow it. Everything is on `main`; nothing
+is released since `v0.1.1`.
 
 **Owner actions, not code:**
 
@@ -188,7 +197,9 @@ Polars has the same two representations and picks by data shape: hash-based
 (`GroupsType::Slice`, contiguous `[start, len]` pairs) when keys are sorted. We
 always take the slice path because it yields `RecordBatch#slice` views instead
 of index lists, and because it makes output order deterministic instead of
-unspecified.
+unspecified. The benchmark in §14 has since closed the hash alternative on
+evidence: the key's sort is under 4% of a 1e5-group `group_by`, so hashing would
+trade away the views and the ordering for almost nothing.
 
 #### C6. No `mean`, `count`, or `count_distinct` kernels
 
@@ -1700,11 +1711,17 @@ Why this shape:
   `n_unique == unique.size` (Phase 4 note, aligned in 9d). A join that must not
   match nulls (`nulls_equal: false`) checks the key columns' null bitmaps before
   indexing or probing, which costs nothing when the keys have no nulls.
-- **Grouping stays sort-based on purpose.** `group_by` yields contiguous
-  `[start, len]` ranges as `RecordBatch#slice` views and a deterministic output
-  order; a hash table would give both up. So `group_by` still pays O(n log n)
-  while `distinct` is O(n), and a hash grouping path is only worth revisiting if
-  benchmarks say grouping dominates.
+- **Grouping stays sort-based on purpose, and the benchmark closed the
+  question.** `group_by` yields contiguous `[start, len]` ranges as
+  `RecordBatch#slice` views and a deterministic output order; a hash table would
+  give both up. The gate was "only if a benchmark shows grouping dominating", and
+  the decomposition says otherwise: on 1e6 rows / 1e5 keys, the key's
+  `lexsort_to_indices` is **35 ms of a 1005 ms** group-by, while ~95% of the time
+  is per group (a `Series`, an `EvalContext`, a length-1 array and one
+  `Arrow.concat` piece each). Hash grouping would therefore buy ~4% and cost the
+  views, so it is declined rather than deferred. The real lever is vectorizing
+  the per-group work, which is a redesign of the aggregate layer (§14
+  *Benchmarks*, [`docs/benchmarks.md`](../docs/benchmarks.md)).
 
 The decision trail is kept because it explains why this waited for a dependency:
 
@@ -1781,6 +1798,27 @@ What they decide:
   buffers"), not a counter: Crystal has no per-operation allocation hook, and
   `GC.stats` deltas are too coarse to attribute.
 
+**Follow-up probe (post-Phase 12), deciding the hash-grouping question.** A
+separate probe decomposed one 1e5-key group-by on the same frame, best of five
+(that run was under load, so compare ratios rather than absolutes):
+
+| Step | Time |
+| --- | ---: |
+| `lexsort_to_indices` on the key alone | 35 ms |
+| `sort_by(key)` (lexsort + take of 4 columns) | 183 ms |
+| `group_by` + `count` only | 403 ms |
+| `group_by` + one `sum` | 508 ms |
+| `group_by` + three aggregates | 1005 ms |
+| `distinct` on the same keys (row-keyed) | 91 ms |
+
+The sort a hash table would remove is under 4% of the total, so **hash-based
+grouping is declined, not deferred**: it would give up contiguous group views and
+deterministic ordering for ~4%. What *is* worth attacking later is the per-group
+work — ~4 µs per group for `count`, ~2.5 µs per additional aggregate, against
+`distinct`'s single hash pass over the identical keys (11x cheaper). That is the
+"vectorized per-group aggregation" candidate in the resume block, and it needs
+one kernel across all groups rather than one slice per group.
+
 ## 15. Risks and open questions
 
 | Risk | Mitigation |
@@ -1789,7 +1827,7 @@ What they decide:
 | `&` precedence mis-parses user expressions | `.and`/`.or` provided; docs lead with the parenthesised form |
 | `arrow-cr`/`parquet-cr` are young; a kernel may be missing or wrong | Never patch `lib/`; reproduce, file upstream, document the workaround in this plan |
 | Multi-chunk frames complicate every verb | Element-wise verbs are chunk-agnostic by construction; ordering verbs materialize |
-| Group-by via sort is O(n log n) | Acceptable for v0.1; a hash-based path is a possible Phase 9 optimization |
+| Group-by via sort is O(n log n) | Measured: the sort is 35 ms of a 1005 ms 1e5-key group-by, so `O(n log n)` is not where the time goes. Per-group overhead is the real cost (vectorizing it is candidate work, §14); a hash path was measured and declined |
 | Typed-schema macro complexity | Isolated in Phase 8 with its own spec file; API is additive |
 | Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
@@ -1866,6 +1904,8 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | `slice(1..3)`, `df[1..3]` rows, `df[["a","b"]]` columns (RedAmber indexing) | `slice(offset, count)` / `select(...)` cover it; accepting `Range`/arrays closes the §15 question below | 12 (done) |
 | `remove(expr)`, the inverse of `filter` (RedAmber) | needs its own null rule — keep rows where the predicate is false **or** null, which is not `filter(pred.not)` | 12 (done) |
 | Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` existed | 12 (done) |
+| Hash-based grouping | the stated gate was "only if a benchmark shows grouping dominating"; a probe put the key sort at 35 ms of a 1005 ms 1e5-key group-by, so hashing would buy ~4% for the group views and deterministic order | 12 follow-up (measured, declined) |
+| Vectorized per-group aggregation | the real cost is per group (~4 µs for `count`, ~2.5 µs per extra aggregate at 1e5 groups); it needs one kernel across all groups instead of one slice per group, which is a redesign of the aggregate layer | candidate (needs a design, numbers in §14) |
 | Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | post-v0.1 (candidate) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**
@@ -1876,7 +1916,8 @@ type, which is exactly what the typed frames give (`typed.filter(&.active)`).
 Recorded here so nobody plans around copying it.
 
 Deliberately **not** planned: Arquero-style deferred `BitSet` filters (§14),
-hash-based grouping (§12 C5), and a `vstack` alias for `concat` (§12 Phase 5).
+hash-based grouping (§12 C5, measured and declined — §14), and a `vstack` alias
+for `concat` (§12 Phase 5).
 
 ## Appendix A — the original proposal
 
