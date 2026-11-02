@@ -68,8 +68,8 @@ and `n_unique` — O(n) instead of a sort, with float keys canonicalized so
 | 9e | Examples, release notes, v0.1.0 tag | not started |
 | 10 | Repo/GitHub rename `dataframe` → `prism` (shard + entrypoint done) | blocked on owner |
 
-**Last feature commit:** `4f3e2f9` — Phase 9d float-key canonicalization (keys
-follow `==`, so `-0.0`/`0.0` are one key and every NaN is one key).
+**Last feature commit:** `715dae3` — Phase 9d float-key canonicalization and
+`n_unique` counting null as a distinct value (both verified against Polars).
 **Gates:** `make lint` and `make test` green, 307 examples. `PRISM_COMPILE_SPECS=1`
 adds the compile-failure spec (325) and costs ~13 s; run it before a release.
 
