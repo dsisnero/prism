@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-**Start here:** run `make lint && make test` (335 examples, roughly 30 s warm),
+**Start here:** run `make lint && make test` (337 examples, roughly 30 s warm),
 then pick the first item from the **post-v0.1 backlog** below. This block is the
 only place that tracks status; do not re-derive it from `git log`.
 
@@ -1371,8 +1371,8 @@ a struct array: decimals materialize instead of raising.
 - [x] API cleanup: removed `Prism.scan(frame)`; `df.lazy` is the only in-memory
       lazy entry (one per source, matching Polars' `df.lazy()` / `pl.scan_*`),
       with all 22 call sites migrated and the rule recorded in §4 and §9
-- [x] v0.1.0 tag — published on `dsisnero/prism` after the opt-in suites
-      (336 compile, 339 examples, 340 together) went green
+- [x] v0.1.0 tag — published on `dsisnero/prism` after the opt-in suites went
+      green (340 examples at the time; a version-consistency spec followed)
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:

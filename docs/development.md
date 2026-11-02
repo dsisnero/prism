@@ -2,29 +2,27 @@
 
 ## Checkout layout
 
-`Prism` depends on two sibling checkouts. All three live next to each other:
+Clone it anywhere; `shards install` fetches both dependencies from GitHub into
+`lib/`:
 
 ```text
-repos/github.com/dsisnero/
-├── arrow-cr/      # Apache Arrow for Crystal
-├── parquet-cr/    # Apache Parquet for Crystal (depends on ../arrow-cr)
-└── dataframe/     # this repo (shard "prism"; folder rename pending)
+prism/
+├── src/prism.cr        # entrypoint: require "prism"
+├── src/prism/          # library code
+├── spec/               # mirrors src/prism/
+├── examples/           # runnable README workflows
+├── bench/              # the 1e6-row harness
+├── docs/               # operator docs
+└── plans/plan.md       # implementation plan — the resume source of truth
 ```
 
-The shard is `prism` and the entrypoint is `src/prism.cr`, so consumers write
-`require "prism"`. The repository folder and the GitHub repository are still
-named `dataframe`; renaming those is the remaining Phase 10 item.
+The shard is `prism`, the entrypoint is `src/prism.cr`, and the repository is
+[`dsisnero/prism`](https://github.com/dsisnero/prism).
 
-`shards install` symlinks the dependencies into `lib/`:
-
-```text
-lib/arrow-cr   -> ../../arrow-cr
-lib/parquet-cr -> ../../parquet-cr
-```
-
-Because they are symlinks, editing a dependency's source is immediately visible
-here. That is convenient for *reading*, and forbidden for *patching*:
-see [Coding Guidelines](coding-guidelines.md#never-patch-lib).
+If you happen to have `arrow-cr` and `parquet-cr` checked out as siblings, you
+can develop against them instead of the published copies (see *Dependencies*).
+`lib/` is a dependency copy, so reading it is encouraged and patching it is
+forbidden: see [Coding Guidelines](coding-guidelines.md#never-patch-lib).
 
 ## Dependencies
 
@@ -167,19 +165,24 @@ Two symptoms:
 
 ## Releasing
 
-Not yet. Phase 9 produces the v0.1.0 tag; the remaining Phase 10 work handles
-the repository rename and publishing. `CHANGELOG.md` is updated per release, not
-per commit.
+1. Run both opt-in suites: `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test`
+   (340 examples), plus `make lint` and `make format-check`.
+2. Move `CHANGELOG.md`'s `Unreleased` entries under the new version heading and
+   refresh the **Where we are** block in `plans/plan.md`.
+3. Bump the version in `shard.yml` and `Prism::VERSION` (`src/prism.cr`) — a
+   spec asserts they match.
+4. Commit, then `git tag -a vX.Y.Z -m ...` and `git push origin main vX.Y.Z`.
+5. `gh release create vX.Y.Z --title vX.Y.Z --notes-file …` with the changelog
+   section as the body.
 
-## The repository rename (Phase 10, owner-gated)
+Two things to keep in mind:
 
-Done: the shard is `prism` and the entrypoint is `src/prism.cr`.
-
-Remaining, all outside this repository or requiring owner action:
-
-- [ ] Rename the repo folder `dataframe/` → `prism/` and the GitHub repository
-- [ ] Update sibling checkouts that reference the old path
-- [ ] Switch `shard.yml` dependencies from `path:` to `github:` on publish
-- [ ] Update the README install block to the published `github:` form
-
-Do not start the folder/GitHub rename until the owner asks.
+- **Dependency sources must agree.** `shard.yml` depends on GitHub, and shards
+  refuses one shard name from two sources, so a transitive `path:` dependency
+  anywhere in the graph makes the whole install unresolvable. `parquet-cr` had
+  exactly that (`arrow-cr: path: ../arrow-cr`) and it had to be fixed upstream
+  before v0.1.0 could be installed by anyone.
+- **Verify as a consumer before tagging.** Clone into a temp directory, add
+  `prism: github: dsisnero/prism` to a fresh `shard.yml`, `shards install`, and
+  `require "prism"` from a program. That is the only check that exercises the
+  published graph rather than `lib/`.
