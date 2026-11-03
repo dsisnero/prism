@@ -32,6 +32,10 @@ Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage wo
 and the Phase 15 vectorized aggregation (all unreleased). Phases 0–15 are closed
 apart from the cosmetic local folder rename.
 
+**Dependencies verified against:** `arrow-cr` `62c5e91` and `parquet-cr`
+`25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
+gitignored, so this line is the record of what the suite below was run against.
+
 **Next up, in order** (each is one atomic commit):
 
 1. **Prune columns in eager `group_by`** — the aggregate layer is now nearly free
