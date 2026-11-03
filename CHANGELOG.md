@@ -8,7 +8,7 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Fixed
 
-- Float keys nested inside a struct, list, fixed-size list or map now
+- Float keys nested inside a struct, list, list-view, fixed-size list or map now
   canonicalize like top-level floats, so `{NaN}` matches `{NaN}` and `{0.0}`
   matches `{-0.0}` in `distinct`, `n_unique`, `group_by` and joins.
 

@@ -39,15 +39,13 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Physical top-k for a pinned slice** — `sort_by` + `head(n)` already gathers
-   only the window, but the sort is still `O(n log n)` because
-   `lexsort_to_indices` sorts everything. A bounded heap is an `arrow-cr` kernel
-   this port does not model, so this is an upstream item before it is a Prism one.
+1. **Physical top-k for a pinned slice** — blocked upstream and now written up
+   as [`shard_issues/arrow-cr.1.md`](../shard_issues/arrow-cr.1.md): sorting with
+   a `limit` still sorts every row, though the port already contains an unused
+   `partial_sort`. Prism's gather half is done (`DataFrame#sort_by_slice`), so
+   this unblocks with an `arrow-cr` change, not a Prism one.
 2. **Release `v0.2.0`** — Phases 12–17 are unreleased (`v0.1.1` is the last tag):
    changelog, a benchmark refresh against the current arrows, and the tag.
-3. **List-view key canonicalization** — `list_view`/`large_list_view` keys still
-   encode `totalOrder` floats; their constructors do not preserve every buffer in
-   this port, so it needs an `arrow-cr` addition before Prism can rebuild them.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -56,10 +54,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **447 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**448**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**451**, ~1 min); with both
-set the suite is **452**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **449 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**450**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**453**, ~1 min); with both
+set the suite is **454**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
@@ -96,7 +94,7 @@ nothing is released since `v0.1.1`.
 | 14 | Value coverage: interval materialization and dictionary float keys | **done** |
 | 15 | Vectorized grouped aggregation: one pass across all groups | **done** |
 | 16 | Eager `group_by` prunes unread columns before the sort and gather | **done** |
-| 17 | Nested float keys canonicalized (struct, list, fixed-size list, map) | **done** |
+| 17 | Nested float keys canonicalized (struct, list, list-view, fixed-size list, map) | **done** |
 
 ---
 
@@ -1984,8 +1982,11 @@ Two implementation notes that cost real debugging time:
   `return array unless values.same?(original)` returned even after the condition
   had evaluated false; the explicit `if` form behaves.
 
-`list_view`/`large_list_view` keys remain keyed by `totalOrder` floats, because
-this port's constructors do not preserve every buffer they carry (§17).
+List views (`list_view`, `large_list_view`) go through the same path: their
+construction does preserve offsets, sizes and dtype, so they are rebuilt around
+a canonicalized child rather than left on `totalOrder` floats. The one remaining
+top-k gap is upstream and written up as
+[`shard_issues/arrow-cr.1.md`](../shard_issues/arrow-cr.1.md).
 
 ### Eager grouping prunes what it does not read (Phase 16)
 
@@ -2209,7 +2210,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | --- | --- | --- |
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d (done) |
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
-| Physical top-k for a pinned slice | a bounded heap is an `arrow-cr` kernel, not a Prism one; the gather half landed in 9d | 9d (gather done) |
+| Physical top-k for a pinned slice | the gather half landed in 9d; the sort half is an `arrow-cr` limit bug, filed as `shard_issues/arrow-cr.1.md` | 9d (Prism done, upstream filed) |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (landed; see §14) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 (done) |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |

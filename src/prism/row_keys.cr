@@ -71,6 +71,8 @@ module Prism
       when .struct?          then canonical_struct_array(source.as(Arrow::StructArray))
       when .list?            then canonical_list(source.as(Arrow::GenericListArray(Int32)))
       when .large_list?      then canonical_list(source.as(Arrow::GenericListArray(Int64)))
+      when .list_view?       then canonical_list_view(source.as(Arrow::GenericListViewArray(Int32)))
+      when .large_list_view? then canonical_list_view(source.as(Arrow::GenericListViewArray(Int64)))
       when .fixed_size_list? then canonical_fixed_size_list(source.as(Arrow::FixedSizeListArray))
       when .map?             then canonical_map(source.as(Arrow::MapArray))
       else                        source
@@ -131,6 +133,23 @@ module Prism
       return array unless field
 
       Arrow::GenericListArray(O).new(field, array.offsets, values, array.nulls)
+    end
+
+    # List views carry per-row offsets *and* sizes, so both are reused as-is and
+    # only the child changes.
+    private def canonical_list_view(
+      array : Arrow::GenericListViewArray(O),
+    ) : Arrow::ArrayBase forall O
+      original = array.values
+      values = canonical(original)
+      return array if values.same?(original)
+
+      field = array.data_type.field
+      return array unless field
+
+      Arrow::GenericListViewArray(O).new(
+        field, array.offsets, array.sizes, values, array.nulls
+      )
     end
 
     private def canonical_fixed_size_list(

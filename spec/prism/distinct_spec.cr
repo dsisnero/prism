@@ -270,6 +270,35 @@ describe "nested key canonicalization" do
     series.n_unique.should eq(2)
   end
 
+  it "canonicalizes a float inside a list-view key" do
+    values = Arrow::Float64Array.from_values([0.0, -0.0, Float64::NAN, Float64::NAN])
+    field = Arrow::Field.new("item", Arrow::DataType.float64, true)
+    view = Arrow::ListViewArray.new(
+      field,
+      Arrow::ScalarBuffer(Int32).from([0, 1, 2, 3]),
+      Arrow::ScalarBuffer(Int32).from([1, 1, 1, 1]),
+      values.as(Arrow::ArrayBase),
+    )
+    series = Prism::Series.new("v", [view.as(Arrow::ArrayBase)], view.data_type)
+
+    series.n_unique.should eq(2)
+    series.unique.dtype.should eq(view.data_type)
+  end
+
+  it "canonicalizes a float inside a large list-view key" do
+    values = Arrow::Float64Array.from_values([0.0, -0.0])
+    field = Arrow::Field.new("item", Arrow::DataType.float64, true)
+    view = Arrow::LargeListViewArray.new(
+      field,
+      Arrow::ScalarBuffer(Int64).from([0_i64, 1_i64]),
+      Arrow::ScalarBuffer(Int64).from([1_i64, 1_i64]),
+      values.as(Arrow::ArrayBase),
+    )
+    series = Prism::Series.new("v", [view.as(Arrow::ArrayBase)], view.data_type)
+
+    series.n_unique.should eq(1)
+  end
+
   it "leaves a nested key with no float children untouched" do
     structs = Arrow::StructArray.from_pairs([
       {Arrow::Field.new("n", Arrow::DataType.int64, true),
