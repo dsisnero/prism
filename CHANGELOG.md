@@ -6,6 +6,15 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Performance
+
+- A multi-key sort now runs one stable single-key pass per key (least significant
+  first) instead of a per-comparison chain of procs, so the dtype-specialized
+  `sort_to_indices` does the work: 900 ms → 360 ms for two keys and 964 ms →
+  482 ms for three on 1e6 rows, with exactly the same rows out. Bounded windows
+  (`sort_by_slice`, `top_n`) keep the bounded lexsort, and keys only
+  `make_comparator` can order (struct, map, decimal, interval) keep the chain.
+
 ## [0.2.0] - 2026-11-03
 
 ### Performance

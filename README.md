@@ -213,9 +213,10 @@ table and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 | --- | ---: |
 | `filter` on half the rows | 48 ms |
 | `select` / `to_arrow` (one chunk) | 0 ms — same buffers |
-| `sort_by` one key | 196 ms |
-| `sort_by` + `head(10)` | 194 ms — two verbs, both full-width |
-| `top_n(10)` / `lazy.sort_by(...).head(10)` | 8 ms — bounded sort + window |
+| `sort_by` one key | 216 ms |
+| `sort_by` two keys | 377 ms — stable pass per key |
+| `sort_by` + `head(10)` | 218 ms — two verbs, both full-width |
+| `top_n(10)` / `lazy.sort_by(...).head(10)` | 9 ms — bounded sort + window |
 | `group_by` 4 keys / 1e5 keys | 220 ms / 381 ms |
 | `distinct` / `n_unique` on 1e5 keys | 54 ms / 48 ms — `arrow-row` keys |
 | join 1e6 → 1e5 | 219 ms |

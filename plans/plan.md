@@ -41,11 +41,12 @@ what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Two-key sorts are the slowest verb left.** 839 ms on 1e6 rows against
-   196 ms for one key (`docs/benchmarks.md`); the second key is `Utf8`, so the
-   candidate is to dictionary-encode a low-cardinality key (4 distinct values)
-   before the lexsort, not to touch the gather. Needs a profile first — the
-   comparison and the row copy are both in that number.
+1. **The `group_by` key sort is the same multi-key sort.** `GroupBy` calls
+   `Arrow.lexsort_to_indices` directly (key sort is most of a 1e5-key group-by's
+   199 ms), so it still pays the comparator chain for two or more keys. Moving it
+   onto the Phase 21 path is the same change `sort_by` got, applied to the one
+   other caller — but it must keep the contiguous group ranges identical, which
+   is what the vectorized aggregates rely on.
 2. **Nothing else is queued.** The deferred table (§17) is closed apart from the
    owner-gated folder rename; a new item should be proposed with a measurement
    or a failing case, not planned speculatively.
@@ -57,10 +58,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **460 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**461**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**464**, ~1 min); with both
-set the suite is **465**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **463 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**464**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**467**, ~1 min); with both
+set the suite is **468**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -104,6 +105,7 @@ with nothing pending.
 | 18 | Bounded sort: a pinned window passes its limit to `lexsort_to_indices` | **done** |
 | 19 | `v0.2.0` release prep: changelog for Phases 12–18, benchmark refresh | **done** (tag owner-gated) |
 | 20 | Eager `top_n`: the fast spelling of `sort_by(...).head(n)` | **done** |
+| 21 | Multi-key sort as stable single-key passes | **done** |
 
 ---
 
@@ -1979,6 +1981,36 @@ and the code would live in neither shard's ownership.
 the time — there were no benchmarks to justify a ~4k-line dependency port — and
 the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
 implementation request rather than a guess.
+
+### A multi-key sort is stable passes, not a comparator chain (Phase 21)
+
+The two-key sort cost 900 ms on 1e6 rows while each key alone cost 100–200 ms and
+the gather only 35 ms. The cost was `lexsort_to_indices`' chain: one proc call per
+key per comparison, ~37 ns across ~20M comparisons.
+
+`sort_indices` now composes stable single-key sorts for the unbounded multi-key
+case — least significant key first, then refine, gathering each key through the
+current order with `Arrow.take`. `Arrow.sort_to_indices` breaks ties by index, so
+each pass is stable and the composition equals one lexicographic comparison
+(asserted against explicit expected orders, ties and nulls included).
+
+| scenario | before | after | speedup |
+| --- | ---: | ---: | ---: |
+| two keys, full sort | 900.4 ms | 360.0 ms | 2.5× |
+| three keys, full sort | 964.2 ms | 482.4 ms | 2.0× |
+| `top_n(10, region, price)` | 84.1 ms | 87.0 ms | unchanged |
+| one key | 201.1 ms | 203.3 ms | unchanged |
+
+Two deliberate limits:
+
+- **Bounded windows keep the chain.** The pass sequence must order every row to
+  build its least-significant ordering, which costs a full pass (~110 ms) against
+  ~80 ms for the whole bounded lexsort.
+- **Dtypes the per-key sort cannot express keep the chain.** `make_comparator`
+  supports more dtypes than `sort_to_indices` (struct, map, decimal, interval,
+  run-end, union), and `per_key_sortable?` mirrors that dispatch. A struct key
+  sorted next to a scalar key regressed to `Sort not supported` during this phase
+  — caught by a spec written for exactly that — and now falls back.
 
 ### The eager API gets the bounded sort as a verb (Phase 20)
 

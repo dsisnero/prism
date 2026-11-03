@@ -21,34 +21,34 @@ that background load cannot fake.
 
 | scenario | best (ms) | median (ms) | out rows | note |
 | --- | ---: | ---: | ---: | --- |
-| filter col > lit | 47.3 | 48.0 | 499241 | ≈ half the rows |
-| filter on two conjuncts | 59.1 | 59.6 | 125221 | ≈ a quarter |
+| filter col > lit | 53.8 | 54.2 | 499241 | ≈ half the rows |
+| filter on two conjuncts | 68.4 | 68.9 | 125221 | ≈ a quarter |
 | select 2 of 4 columns | 0.0 | 0.0 | 1000000 | projection, no copy |
-| with_column (price * qty) | 4.4 | 4.7 | 1000000 | casts qty to Float64 |
+| with_column (price * qty) | 5.2 | 5.4 | 1000000 | casts qty to Float64 |
 | to_arrow (rechunk) | 0.0 | 0.0 | 1000000 | single chunk already |
-| sort_by one key | 195.7 | 202.4 | 1000000 | lexsort_to_indices + take |
-| sort_by two keys | 839.2 | 846.0 | 1000000 | second key is `Utf8` |
-| sort_by + limit 10 (eager) | 193.7 | 198.5 | 10 | sorts every row, then trims |
-| top_n(10) | 7.7 | 7.7 | 10 | bounded sort + window, eager |
-| scan → sort_by → head(10) | 7.6 | 7.6 | 10 | bounded selection + window |
-| group_by 4 keys | 203.1 | 208.1 | 4 | sort-based grouping |
-| group_by 1e5 keys | 175.5 | 179.8 | 99999 | one sort, three aggregates |
-| group_by 1e5 keys, 48 unused columns | 42.9 | 43.1 | 86463 | Phase 16 pruning |
-| distinct on 1e5 keys | 48.9 | 53.2 | 99999 | row-keyed seen-set |
-| series n_unique | 44.8 | 45.1 | 99999 | row-keyed seen-set |
-| join 1e6 → 1e5 on user_id | 190.7 | 198.8 | 1000000 | row-encoded keys |
-| write_parquet zstd(3) | 506.2 | 515.4 | 0 | row groups of 100k, 15.0 MiB |
-| read_parquet (all columns) | 111.4 | 112.5 | 1000000 | baseline |
-| read_parquet projection (2 of 4) | 69.7 | 71.2 | 1000000 | projection pushdown |
-| read_parquet predicate | 141.2 | 143.8 | 99557 | row filter, unclustered |
-| read_parquet projection + predicate | 111.9 | 113.6 | 99557 | pushdown, unclustered |
-| read_parquet limit 100 | 3.1 | 3.1 | 100 | slice pushdown |
-| scan → filter → select → collect | 111.2 | 111.6 | 99557 | lazy, pushed down |
-| eager read + filter + select | 130.5 | 131.0 | 99557 | no pushdown |
-| read clustered (all rows) | 138.6 | 140.4 | 1000000 | 20.8 MiB, `seq` column |
-| read clustered predicate (last 10%) | 97.0 | 97.0 | 99999 | row groups pruned |
-| read clustered predicate + projection | 72.9 | 74.4 | 99999 | row groups pruned |
-| lazy group_by → sort → head | 161.6 | 168.5 | 10 | slice pinned to the sort |
+| sort_by one key | 215.9 | 219.3 | 1000000 | lexsort_to_indices + take |
+| sort_by two keys | 376.9 | 382.8 | 1000000 | second key is `Utf8` |
+| sort_by + limit 10 (eager) | 218.0 | 219.1 | 10 | sorts every row, then trims |
+| top_n(10) | 8.8 | 8.9 | 10 | bounded sort + window, eager |
+| scan → sort_by → head(10) | 8.7 | 8.8 | 10 | bounded selection + window |
+| group_by 4 keys | 220.0 | 223.6 | 4 | sort-based grouping |
+| group_by 1e5 keys | 198.8 | 200.6 | 99999 | one sort, three aggregates |
+| group_by 1e5 keys, 48 unused columns | 48.4 | 48.6 | 86463 | Phase 16 pruning |
+| distinct on 1e5 keys | 57.7 | 60.1 | 99999 | row-keyed seen-set |
+| series n_unique | 49.1 | 49.2 | 99999 | row-keyed seen-set |
+| join 1e6 → 1e5 on user_id | 213.5 | 216.7 | 1000000 | row-encoded keys |
+| write_parquet zstd(3) | 578.7 | 587.9 | 0 | row groups of 100k, 15.0 MiB |
+| read_parquet (all columns) | 126.6 | 127.8 | 1000000 | baseline |
+| read_parquet projection (2 of 4) | 79.6 | 81.5 | 1000000 | projection pushdown |
+| read_parquet predicate | 167.4 | 168.2 | 99557 | row filter, unclustered |
+| read_parquet projection + predicate | 128.2 | 128.6 | 99557 | pushdown, unclustered |
+| read_parquet limit 100 | 3.8 | 4.0 | 100 | slice pushdown |
+| scan → filter → select → collect | 128.6 | 130.0 | 99557 | lazy, pushed down |
+| eager read + filter + select | 149.5 | 151.5 | 99557 | no pushdown |
+| read clustered (all rows) | 163.6 | 165.7 | 1000000 | 20.8 MiB, `seq` column |
+| read clustered predicate (last 10%) | 117.5 | 119.2 | 99999 | row groups pruned |
+| read clustered predicate + projection | 87.2 | 87.9 | 99999 | row groups pruned |
+| lazy group_by → sort → head | 182.2 | 182.6 | 10 | slice pinned to the sort |
 
 ## What the numbers say
 
@@ -58,14 +58,15 @@ already the concatenated form. `with_column` costs one new buffer (5 ms), and a
 half-frame `filter` costs 50 ms — about 20M rows/s including null-safe predicate
 evaluation.
 
-**Sorting is the expensive verb, and it is amortized.** One key is 185 ms, two
-keys 820 ms (the second key is `Utf8`, so it compares variable-length bytes).
-`group_by` at 4 keys costs 195 ms and at 1e5 keys 165 ms — one sort either way,
-and now the aggregates are nearly free in both cases (see the A/B below).
+**Sorting is the expensive verb, and it is amortized.** One key is 216 ms and two
+keys 377 ms (the second key is `Utf8`, so it compares variable-length bytes; the
+multi-key path got 2.4x faster in Phase 21 — see the A/B below). `group_by` at 4
+keys costs 220 ms and at 1e5 keys 199 ms — one sort either way, and the aggregates
+are nearly free in both cases.
 
 **A pinned window selects and gathers only its rows.** `sort_by + head(10)`
-costs 7.6 ms through the plan and 7.7 ms through the eager `top_n(10)` verb,
-against 194 ms for the two-call eager form, which copies all 1e6 rows before
+costs 8.7 ms through the plan and 8.8 ms through the eager `top_n(10)` verb,
+against 218 ms for the two-call eager form, which copies all 1e6 rows before
 discarding them. Eager code has to say so: `sort_by` cannot see the `head` that
 follows it, which is why `top_n` exists (`DataFrame#top_n`, Phase 20).
 
@@ -88,6 +89,30 @@ Paired before/after on this machine, same 1e6-row frame, back to back
 The mid-frame window is the case the bound cannot help: `offset + count` is
 500,010 of 1,000,000 rows, so most of the selection is still paid. A window near
 either end of the frame is where the bound pays off.
+
+**A multi-key sort now does one stable pass per key (Phase 21).** The profile
+that started this: a two-key sort cost 900 ms while each key alone cost
+100–200 ms and the row gather only 35 ms, so the cost was the comparator chain —
+one proc call per key per comparison, ~37 ns across ~20M comparisons.
+
+Composing stable single-key sorts instead (least significant key first, then
+refining with `Arrow.sort_to_indices` through `Arrow.take`) produces exactly the
+same indices and runs the dtype-specialized sort per pass. Paired before/after,
+same 1e6-row frame, minutes apart:
+
+| scenario | before (ms) | after (ms) | speedup |
+| --- | ---: | ---: | ---: |
+| `sort_by(region, price)` (2 keys, full) | 900.4 | 360.0 | 2.5× |
+| `sort_by(region, qty, price)` (3 keys, full) | 964.2 | 482.4 | 2.0× |
+| `top_n(10, region, price)` (bounded) | 84.1 | 87.0 | unchanged |
+| `sort_by(price)` (1 key) | 201.1 | 203.3 | unchanged |
+
+A bounded window deliberately keeps the comparator chain: the pass sequence has
+to order every row to build its least-significant ordering first, which costs a
+full pass (~110 ms) against ~80 ms for the whole bounded lexsort. Keys the per-key
+sort cannot express — struct, map, decimal, interval, run-end, union — also keep
+the chain, because `make_comparator` supports more dtypes than
+`sort_to_indices`.
 
 **Row keys made `distinct` and `n_unique` ~3x faster.** `Prism::RowKeys` encodes
 the key columns with `Arrow::RowConverter` and walks a byte seen-set, so the sort

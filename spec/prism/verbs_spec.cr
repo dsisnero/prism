@@ -321,6 +321,61 @@ describe Prism::DataFrame do
       sorted["qty"].to_a.should eq([3_i64, 1_i64, 4_i64, 2_i64])
     end
 
+    # Multi-key order is a lexicographic comparison, and the engine reaches it by
+    # stable single-key passes (Phase 21). This fixture is chosen so every tie
+    # breaker matters: duplicate prices, nulls, three keys, mixed directions.
+    it "orders three keys with ties, nulls and mixed directions" do
+      frame = Prism.from_columns({
+        "region" => Arrow::StringArray.from_values(["east", "east", "west", "west"]),
+        "price"  => Arrow::Float64Array.from_nullable([nil, 5.0, 5.0, nil]),
+        "qty"    => Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64]),
+      })
+
+      sorted = frame.sort_by(
+        col("price").asc(nulls: :last),
+        col("region").desc,
+        col("qty").desc,
+      )
+
+      # price 5.0 first (west qty 3, then east qty 2), then the null prices
+      # (west qty 4, then east qty 1).
+      sorted["qty"].to_a.should eq([3_i64, 2_i64, 4_i64, 1_i64])
+      sorted["region"].to_a.should eq(["west", "east", "west", "east"])
+      sorted["price"].to_a.should eq([5.0, 5.0, nil, nil])
+    end
+
+    # Sorting a struct key is supported by the comparator chain but not by the
+    # per-key `sort_to_indices`, so the multi-key path must fall back rather than
+    # raise "Sort not supported" (Phase 21).
+    it "still sorts a struct key alongside a scalar key" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64]).as(Arrow::ArrayBase)},
+      ])
+      frame = Prism.from_columns({
+        "s"   => structs.as(Arrow::ArrayBase),
+        "qty" => Arrow::Int64Array.from_values([3_i64, 4_i64, 1_i64, 2_i64]),
+      })
+
+      sorted = frame.sort_by(col("s").asc, col("qty").asc)
+
+      # Sorted by x, then by qty: (1,2), (1,4), (2,1), (2,3).
+      sorted["qty"].to_a.should eq([2_i64, 4_i64, 1_i64, 3_i64])
+    end
+
+    it "treats an all-equal multi-key sort as the identity" do
+      frame = Prism.from_columns({
+        "k" => Arrow::Int64Array.from_values([1_i64, 1_i64, 1_i64]),
+        "v" => Arrow::Int64Array.from_values([3_i64, 1_i64, 2_i64]),
+      })
+
+      frame.sort_by(col("k").asc, col("v").asc)["v"].to_a
+        .should eq([1_i64, 2_i64, 3_i64])
+      # Every key ties, so the original order survives, as with a stable sort.
+      frame.sort_by(col("k").asc, col("k").desc)["v"].to_a
+        .should eq([3_i64, 1_i64, 2_i64])
+    end
+
     it "places nulls first when asked" do
       verbs_frame.sort_by("price", nulls: :first)["price"].to_a
         .should eq([nil, 10.0, 20.0, 30.0])
