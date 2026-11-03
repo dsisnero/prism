@@ -211,17 +211,17 @@ table and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 | Path | Time |
 | --- | ---: |
-| `filter` on half the rows | 48 ms |
+| `filter` on half the rows | 53 ms |
 | `select` / `to_arrow` (one chunk) | 0 ms — same buffers |
-| `sort_by` one key | 216 ms |
-| `sort_by` two keys | 377 ms — stable pass per key |
-| `sort_by` + `head(10)` | 218 ms — two verbs, both full-width |
+| `sort_by` one key | 229 ms |
+| `sort_by` two keys | 402 ms — stable pass per key when one is `Utf8` |
+| `sort_by` + `head(10)` | 225 ms — two verbs, both full-width |
 | `top_n(10)` / `lazy.sort_by(...).head(10)` | 9 ms — bounded sort + window |
-| `group_by` 4 keys / 1e5 keys | 220 ms / 381 ms |
-| `distinct` / `n_unique` on 1e5 keys | 54 ms / 48 ms — `arrow-row` keys |
-| join 1e6 → 1e5 | 219 ms |
-| Parquet read all / 2 of 4 columns / `limit 100` | 117 ms / 74 ms / 3 ms |
-| Lazy scan+filter+select vs eager | 119 ms vs 142 ms |
+| `group_by` 4 groups / 1e5 keys / 2 keys | 238 ms / 205 ms / 558 ms |
+| `distinct` / `n_unique` on 1e5 keys | 61 ms / 52 ms — `arrow-row` keys |
+| join 1e6 → 1e5 | 224 ms |
+| Parquet read all / 2 of 4 columns / `limit 100` | 134 ms / 84 ms / 4 ms |
+| Lazy scan+filter+select vs eager | 135 ms vs 159 ms |
 
 ## Documentation
 
@@ -254,11 +254,12 @@ snippet that stops working fails a spec.
 
 ## Status
 
-`v0.2.0` is the current release: it adds row materialization (`DataFrame#rows`
-and a generated typed row per schema), interval columns, vectorized grouped
-aggregation, and a bounded sort behind a pinned window. The API in this README is
-implemented, tested (463 specs plus opt-in compile and example suites) and
-measured.
+`0.2.0` is prepared on `main` — tagging and publishing are the maintainer's call,
+so `v0.1.1` is still the last published release. It adds row materialization
+(`DataFrame#rows` and a generated typed row per schema), interval columns,
+vectorized grouped aggregation, and a bounded sort behind a pinned window. The API
+in this README is implemented, tested (472 specs plus opt-in compile and example
+suites) and measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
 async/object store IO. Every Arrow dtype the library accepts materializes into a

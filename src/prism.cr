@@ -30,6 +30,8 @@ require "./prism/aggregates"
 require "./prism/expression/aggregations"
 require "./prism/grouped_agg"
 
+require "./prism/sort_engine"
+
 require "./prism/verbs/filter"
 require "./prism/verbs/select"
 require "./prism/verbs/mutate"

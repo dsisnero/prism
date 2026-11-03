@@ -103,11 +103,18 @@ module Bench
   end
 
   private def grouping(frame : Prism::DataFrame) : Nil
-    timed("group_by 4 keys", "sort-based grouping") do
+    timed("group_by region (4 groups)", "sort-based grouping") do
       frame.group_by("region").aggregate(
         total: col("qty").sum,
         average: col("price").mean,
         count: col("qty").count,
+      )
+    end
+
+    timed("group_by region + user_id (2 keys)", "two-key sort") do
+      frame.group_by("region", "user_id").aggregate(
+        total: col("qty").sum,
+        average: col("price").mean,
       )
     end
 

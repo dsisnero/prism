@@ -299,7 +299,11 @@ module Prism
       sort_columns = canonical_keys.map do |array|
         Arrow::SortColumn.new(array, Arrow::SortOptions.new(false, nulls_first))
       end.to_a
-      order = Arrow.lexsort_to_indices(sort_columns)
+      # The same sort `DataFrame#sort_by` uses (`Prism::SortEngine`): for two or
+      # more keys that is one stable pass per key rather than a per-comparison
+      # chain, and it produces the identical order, so the contiguous ranges
+      # `Arrow.partition` derives below are unchanged.
+      order = SortEngine.indices(sort_columns)
 
       sorted_batch = Arrow.take_record_batch(batch, order)
       sorted_keys = key_arrays.map { |array| Arrow.take(array, order) }.to_a

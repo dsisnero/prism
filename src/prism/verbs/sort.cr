@@ -204,76 +204,9 @@ module Prism
         Arrow::SortColumn.new(values, options)
       end
 
-      # One key needs no composition, and a bounded window keeps arrow-cr's
-      # bounded lexsort: that selects the prefix in one pass, while the pass
-      # sequence below has to order every row to build its least-significant
-      # ordering first (a full pass is ~110 ms against ~80 ms for the whole
-      # bounded lexsort of two keys).
-      return Arrow.lexsort_to_indices(columns, limit) if columns.size == 1
-      return Arrow.lexsort_to_indices(columns, limit) if limit && limit < batch.num_rows
-      # Keys the per-key sort cannot handle keep the comparator chain, which
-      # supports more dtypes (nested, decimal, interval, run-end, union).
-      unless columns.all? { |column| per_key_sortable?(column.values) }
-        return Arrow.lexsort_to_indices(columns, limit)
-      end
-
-      stable_lexsort(columns)
-    end
-
-    # `Arrow.sort_to_indices` dispatches on the array class and covers fewer
-    # dtypes than `Arrow.make_comparator`, which the multi-key chain uses: a
-    # struct, map, decimal128/256, interval, run-end or union key is comparable
-    # but not sortable on its own. Mirroring that dispatch here keeps those keys
-    # on the comparator path instead of raising "Sort not supported".
-    private def per_key_sortable?(values : Arrow::ArrayBase) : Bool
-      case values
-      when Arrow::PrimitiveArray(Int8), Arrow::PrimitiveArray(Int16),
-           Arrow::PrimitiveArray(Int32), Arrow::PrimitiveArray(Int64),
-           Arrow::PrimitiveArray(UInt8), Arrow::PrimitiveArray(UInt16),
-           Arrow::PrimitiveArray(UInt32), Arrow::PrimitiveArray(UInt64),
-           Arrow::PrimitiveArray(Arrow::Float16), Arrow::PrimitiveArray(Float32),
-           Arrow::PrimitiveArray(Float64),
-           Arrow::BooleanArray,
-           Arrow::GenericStringArray(Int32), Arrow::GenericStringArray(Int64),
-           Arrow::GenericBinaryArray(Int32), Arrow::GenericBinaryArray(Int64),
-           Arrow::FixedSizeBinaryArray,
-           Arrow::StringViewArray, Arrow::BinaryViewArray,
-           Arrow::GenericListArray(Int32), Arrow::GenericListArray(Int64),
-           Arrow::GenericListViewArray(Int32), Arrow::GenericListViewArray(Int64),
-           Arrow::FixedSizeListArray,
-           Arrow::DictionaryArray(Int8), Arrow::DictionaryArray(Int16),
-           Arrow::DictionaryArray(Int32), Arrow::DictionaryArray(Int64),
-           Arrow::DictionaryArray(UInt8), Arrow::DictionaryArray(UInt16),
-           Arrow::DictionaryArray(UInt32), Arrow::DictionaryArray(UInt64)
-        true
-      else
-        false
-      end
-    end
-
-    # Multi-key sort as stable single-key passes, least significant key first.
-    #
-    # Sorting by the last key and then re-sorting stably by each earlier key
-    # yields exactly the order one lexicographic comparison produces, and each
-    # pass is a dtype-specialized `Arrow.sort_to_indices` (which breaks ties by
-    # index, so it is stable) instead of a per-comparison chain of procs. On 1e6
-    # rows that is 360 ms for two keys against 900 ms for the chain, with the same
-    # indices out.
-    #
-    # `Arrow.sort_to_indices` sorts an array's own positions, so a refinement pass
-    # first gathers the key through the current order (`Arrow.take`) and then
-    # applies the resulting permutation to it.
-    private def stable_lexsort(columns : Array(Arrow::SortColumn)) : Arrow::PrimitiveArray(UInt32)
-      last = columns.last
-      order = Arrow.sort_to_indices(last.values, last.options)
-      (columns.size - 2).downto(0) do |position|
-        column = columns[position]
-        values = Arrow.take(column.values, order.as(Arrow::ArrayBase))
-        refinement = Arrow.sort_to_indices(values, column.options)
-        order = Arrow.take(order.as(Arrow::ArrayBase), refinement.as(Arrow::ArrayBase))
-          .as(Arrow::PrimitiveArray(UInt32))
-      end
-      order
+      # Which strategy runs is `SortEngine`'s call, shared with `GroupBy`'s key
+      # sort so the two cannot disagree about the order.
+      SortEngine.indices(columns, limit)
     end
   end
 end

@@ -11,9 +11,17 @@ All notable changes to this project are documented here. This project adheres to
 - A multi-key sort now runs one stable single-key pass per key (least significant
   first) instead of a per-comparison chain of procs, so the dtype-specialized
   `sort_to_indices` does the work: 900 ms → 360 ms for two keys and 964 ms →
-  482 ms for three on 1e6 rows, with exactly the same rows out. Bounded windows
-  (`sort_by_slice`, `top_n`) keep the bounded lexsort, and keys only
-  `make_comparator` can order (struct, map, decimal, interval) keep the chain.
+  482 ms for three on 1e6 rows, with exactly the same rows out.
+- The strategy is chosen by dtype, because that is where the win is: a
+  variable-length (or nested) key makes the chain 2.5–3x slower than the passes,
+  while all-fixed-width keys stay within ~15% either way and keep the chain.
+  Bounded windows (`sort_by_slice`, `top_n`) also keep the bounded lexsort, and
+  keys only `make_comparator` can order (struct, map, decimal, interval) keep the
+  chain too.
+- `group_by`'s key sort goes through the same dispatch (`Prism::SortEngine`), so
+  a multi-key group-by is 2.2x faster with a `Utf8` first key (1.18 s → 0.53 s)
+  and 1.8x faster with three keys (1.49 s → 0.84 s) on 1e6 rows, with identical
+  groups and group order.
 
 ## [0.2.0] - 2026-11-03
 

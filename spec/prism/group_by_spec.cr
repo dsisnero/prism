@@ -140,6 +140,48 @@ describe Prism::GroupBy do
       grouped["total"].to_a.should eq([60.0, 20.0, 30.0, nil])
       grouped["rows"].to_a.should eq([2_u32, 1_u32, 1_u32, 1_u32])
     end
+
+    # Three keys, so the sort has to be lexicographic: `east` before `west`,
+    # then `a` before `b`, then the tier. Every group here is a single row plus
+    # one that is not, which is what makes a wrong key order visible.
+    it "orders group keys lexicographically across three keys" do
+      frame = Prism.from_columns({
+        "region"   => Arrow::StringArray.from_values(["west", "east", "west", "east", "west"]),
+        "category" => Arrow::StringArray.from_values(["a", "a", "b", "b", "a"]),
+        "tier"     => Arrow::Int64Array.from_values([2_i64, 1_i64, 1_i64, 2_i64, 1_i64]),
+        "price"    => Arrow::Float64Array.from_values([10.0, 20.0, 30.0, 40.0, 50.0]),
+        "qty"      => Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64, 5_i64]),
+      })
+
+      grouped = frame.group_by("region", "category", "tier", maintain_order: false)
+        .aggregate(total: col("price").sum, rows: col("qty").count_all)
+
+      grouped["region"].to_a.should eq(["east", "east", "west", "west", "west"])
+      grouped["category"].to_a.should eq(["a", "b", "a", "a", "b"])
+      grouped["tier"].to_a.should eq([1_i64, 2_i64, 1_i64, 2_i64, 1_i64])
+      grouped["total"].to_a.should eq([20.0, 40.0, 50.0, 10.0, 30.0])
+      grouped["rows"].to_a.should eq([1_u32, 1_u32, 1_u32, 1_u32, 1_u32])
+    end
+
+    # A struct key is comparable but not sortable on its own, so this keeps the
+    # comparator path in `Prism::SortEngine` honest: grouping by it next to a
+    # scalar key must not raise "Sort not supported".
+    it "groups by a struct key next to a scalar key" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64]).as(Arrow::ArrayBase)},
+      ])
+      frame = Prism.from_columns({
+        "s"   => structs.as(Arrow::ArrayBase),
+        "grp" => Arrow::StringArray.from_values(["a", "a", "b", "b"]),
+        "qty" => Arrow::Int64Array.from_values([3_i64, 4_i64, 1_i64, 2_i64]),
+      })
+
+      grouped = frame.group_by(col("s"), "grp").aggregate(total: col("qty").sum)
+
+      grouped["grp"].to_a.should eq(["a", "a", "b", "b"])
+      grouped["total"].to_a.should eq([3_i64, 4_i64, 1_i64, 2_i64])
+    end
   end
 
   describe "null keys" do

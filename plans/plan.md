@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(463 examples, ~30 s warm). The table below is the only place that tracks status;
+(472 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is prepared on `main` — version, changelog and README are
@@ -31,8 +31,10 @@ bumped for Phases 12–18 — but **not tagged**: tagging and publishing are
 owner-gated, so the last published release is still `v0.1.1`. `main` carries the
 Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage
 work, the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning,
-the Phase 17 nested-key canonicalization and the Phase 18 bounded sort. Phases
-0–18 are closed apart from the cosmetic local folder rename.
+the Phase 17 nested-key canonicalization, the Phase 18 bounded sort, the Phase 20
+`top_n`, the Phase 21 multi-key passes and the Phase 22 dtype-aware
+`Prism::SortEngine` that `group_by` shares. Phases 0–18 are closed apart from the
+cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `728ce51` (includes the bounded
 sort, `5b4b958`) and `parquet-cr` `25a889e` (both `branch: main`, resolved from
@@ -41,12 +43,15 @@ what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **The `group_by` key sort is the same multi-key sort.** `GroupBy` calls
-   `Arrow.lexsort_to_indices` directly (key sort is most of a 1e5-key group-by's
-   199 ms), so it still pays the comparator chain for two or more keys. Moving it
-   onto the Phase 21 path is the same change `sort_by` got, applied to the one
-   other caller — but it must keep the contiguous group ranges identical, which
-   is what the vectorized aggregates rely on.
+1. **A single nested key cannot be grouped at all.** `group_by(col("s"))` on a
+   struct column raises `Sort not supported for data type Struct(...)`, because
+   the one-key path hands the key straight to `Arrow.sort_to_indices`, which has
+   no struct case; the multi-key path works only because it falls back to
+   `make_comparator`. `distinct` already groups struct keys through the
+   `arrow-row` encoding, so the gap is the sort, not the key. Fix: a
+   comparator-driven index sort inside `Prism::SortEngine` for dtypes neither
+   `sort_to_indices` nor the row encoding can express, and a spec that
+   `group_by(struct_key)` returns the same groups `distinct` implies.
 2. **Nothing else is queued.** The deferred table (§17) is closed apart from the
    owner-gated folder rename; a new item should be proposed with a measurement
    or a failing case, not planned speculatively.
@@ -58,10 +63,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **463 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**464**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**467**, ~1 min); with both
-set the suite is **468**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **472 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**473**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**476**, ~1 min); with both
+set the suite is **477**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -106,6 +111,7 @@ with nothing pending.
 | 19 | `v0.2.0` release prep: changelog for Phases 12–18, benchmark refresh | **done** (tag owner-gated) |
 | 20 | Eager `top_n`: the fast spelling of `sort_by(...).head(n)` | **done** |
 | 21 | Multi-key sort as stable single-key passes | **done** |
+| 22 | Sort strategy by dtype, shared by `group_by` (`Prism::SortEngine`) | **done** |
 
 ---
 
@@ -2011,6 +2017,52 @@ Two deliberate limits:
   run-end, union), and `per_key_sortable?` mirrors that dispatch. A struct key
   sorted next to a scalar key regressed to `Sort not supported` during this phase
   — caught by a spec written for exactly that — and now falls back.
+
+Phase 22 kept both limits and added a third (all-fixed-width keys), after
+measuring that the passes only win where a comparison itself is expensive.
+
+### The sort strategy is chosen by dtype, and `group_by` shares it (Phase 22)
+
+Phase 21 sent every unbounded multi-key sort down the pass path, which was right
+for the frame it was measured on (`Utf8` + `Float64`) and wrong for others. The
+chain's cost is per comparison, so it wins whenever a single comparison settles
+the order — the usual case for fixed-width keys. The passes' cost is one full
+sort per key, which only pays when a comparison has to walk bytes. Measured per
+dtype (best of five, 1e6 rows):
+
+| keys | chain (ms) | passes (ms) |
+| --- | ---: | ---: |
+| `Utf8` (4 values) + `Int64` | 877 | 293 |
+| `Utf8` (1e3 values) + `Utf8` | 1146 | 367 |
+| `Utf8` (4 values) + `Float64` | 911 | 329 |
+| `Int64` (1e5 values) + `Float64` | 224 | 301 |
+| `Int64` (1e3 values) + `Int64` | 277 | 248 |
+| `Float64` (4 values) + `Float64` | 325 | 257 |
+
+Fixed-width keys land within ~15% either way, so they keep the chain;
+`expensive_to_compare?` selects the pass path for `Utf8`/`LargeUtf8`/`Utf8View`,
+`Binary`/`LargeBinary`/`BinaryView` and list types — but not `FixedSizeBinary`,
+which compares fixed bytes.
+
+The dispatch moved out of `DataFrame#sort_indices` into `Prism::SortEngine`, which
+turns a list of `Arrow::SortColumn`s into indices, so `GroupBy`'s key sort is now
+the same sort rather than a parallel one. That mattered: `GroupBy` called
+`Arrow.lexsort_to_indices` directly, so a two-key group-by paid the chain for its
+entire key sort. Paired before/after, same 1e6-row frame, minutes apart:
+
+| scenario | before (ms) | after (ms) | speedup |
+| --- | ---: | ---: | ---: |
+| `group_by(region, user_id)` | 1178.8 | 528.7 | 2.2× |
+| `group_by(region, qty, user_id)` | 1493.3 | 843.8 | 1.8× |
+| `group_by(user_id, price)` (fixed width) | 520.4 | 514.6 | unchanged |
+| `group_by(user_id)` (one key) | 179.2 | 182.1 | unchanged |
+
+Groups and group order are unchanged by construction: the passes return the
+identical indices, and those indices are what `Arrow.partition` turns into the
+contiguous ranges the vectorized aggregates reduce. `spec/prism/sort_engine_spec.cr`
+pins each strategy to `Arrow.lexsort_to_indices` on the same input — per dtype
+family, ties, nulls, a bounded window and the struct fallback — so a later
+strategy change cannot quietly split a group.
 
 ### The eager API gets the bounded sort as a verb (Phase 20)
 
