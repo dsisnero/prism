@@ -26,10 +26,12 @@ module Prism
   #   what `distinct` and `group_by` want; a join that must *not* match nulls
   #   (`nulls_equal: false`) checks the key columns' null bitmaps instead.
   #
-  # Known limit: floats nested inside a list/struct/map key are not
-  # canonicalized; only a top-level float column and a dictionary's float values
-  # are. Nested key columns are rare, and rebuilding list/struct arrays to reach
-  # a float child is a larger change than the divergence is worth today.
+  # Nested keys are handled by rebuilding the containers: a struct, list,
+  # fixed-size list or map whose child changed is re-created around the
+  # canonicalized child, keeping offsets, nulls and dtype. Children that need no
+  # change come back as the same object, so a key with no float children copies
+  # nothing. List-view keys are still not covered (their constructor is not
+  # ported in a form that preserves every buffer).
   module RowKeys
     extend self
 
@@ -62,11 +64,16 @@ module Prism
       # narrower one (a `NullArray`, say) has no float array to cast to.
       source = array.as(Arrow::ArrayBase)
       case source.data_type.kind
-      when .float64?    then canonical_f64(source.as(Arrow::PrimitiveArray(Float64)))
-      when .float32?    then canonical_f32(source.as(Arrow::PrimitiveArray(Float32)))
-      when .float16?    then canonical_f16(source.as(Arrow::PrimitiveArray(Arrow::Float16)))
-      when .dictionary? then canonical_dictionary(source)
-      else                   source
+      when .float64?         then canonical_f64(source.as(Arrow::PrimitiveArray(Float64)))
+      when .float32?         then canonical_f32(source.as(Arrow::PrimitiveArray(Float32)))
+      when .float16?         then canonical_f16(source.as(Arrow::PrimitiveArray(Arrow::Float16)))
+      when .dictionary?      then canonical_dictionary(source)
+      when .struct?          then canonical_struct_array(source.as(Arrow::StructArray))
+      when .list?            then canonical_list(source.as(Arrow::GenericListArray(Int32)))
+      when .large_list?      then canonical_list(source.as(Arrow::GenericListArray(Int64)))
+      when .fixed_size_list? then canonical_fixed_size_list(source.as(Arrow::FixedSizeListArray))
+      when .map?             then canonical_map(source.as(Arrow::MapArray))
+      else                        source
       end
     end
 
@@ -93,6 +100,68 @@ module Prism
       return array if values.same?(array.values)
 
       Arrow::DictionaryArray(K).new(array.data_type, array.keys, values, array.ordered?)
+    end
+
+    # Rebuilds a struct only when a child changed, so a struct key without float
+    # children costs one identity check per child.
+    private def canonical_struct_array(array : Arrow::StructArray) : Arrow::StructArray
+      columns = array.columns
+      children = columns.map { |child| canonical(child) }
+      changed = children.each_with_index.any? do |child, index|
+        !child.same?(columns[index])
+      end
+      return array if changed == false
+
+      Arrow::StructArray.new(array.fields, children, array.nulls)
+    end
+
+    # Contract for these helpers: bind the child once, because `#values` is not
+    # guaranteed to hand back the same object on a second call (comparing against
+    # a fresh call reports "changed" for an untouched child), and write the guard
+    # as an `if` block — the `return x unless cond` modifier form returned in this
+    # generic method after `cond` had already evaluated false.
+    private def canonical_list(
+      array : Arrow::GenericListArray(O),
+    ) : Arrow::ArrayBase forall O
+      original = array.values
+      values = canonical(original)
+      return array if values.same?(original)
+
+      field = array.data_type.field
+      return array unless field
+
+      Arrow::GenericListArray(O).new(field, array.offsets, values, array.nulls)
+    end
+
+    private def canonical_fixed_size_list(
+      array : Arrow::FixedSizeListArray,
+    ) : Arrow::ArrayBase
+      original = array.values
+      values = canonical(original)
+      return array if values.same?(original)
+
+      field = array.data_type.field
+      size = array.data_type.size
+      return array unless field && size
+
+      Arrow::FixedSizeListArray.new(field, size, values, array.nulls)
+    end
+
+    private def canonical_map(array : Arrow::MapArray) : Arrow::ArrayBase
+      original = array.entries
+      entries = canonical_struct_array(original)
+      return array if entries.same?(original)
+
+      field = array.data_type.field
+      return array unless field
+
+      Arrow::MapArray.new(
+        field,
+        array.offsets,
+        entries,
+        array.nulls,
+        array.data_type.is_sorted || false,
+      )
     end
 
     # A converter for `arrays`, one key column each.

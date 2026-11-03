@@ -210,3 +210,75 @@ describe "DataFrame#distinct" do
     frame.distinct.should be(frame)
   end
 end
+
+# Floats nested inside a composite key must key by `==`, like top-level floats,
+# or two logically equal keys stay apart (plan Phase 17).
+describe "nested key canonicalization" do
+  it "canonicalizes a float inside a struct key" do
+    structs = Arrow::StructArray.from_pairs([
+      {Arrow::Field.new("x", Arrow::DataType.float64, true),
+       Arrow::Float64Array.from_values(
+         [Float64::NAN, Float64::NAN, 0.0, -0.0, 1.0]
+       ).as(Arrow::ArrayBase)},
+    ])
+    series = Prism::Series.new("s", [structs.as(Arrow::ArrayBase)], structs.data_type)
+
+    # {NaN}, {NaN} -> one; {0.0}, {-0.0} -> one; {1.0} -> one.
+    series.n_unique.should eq(3)
+    series.unique.size.should eq(3)
+    # Canonicalizing children must not change the struct's own dtype.
+    series.unique.dtype.should eq(structs.data_type)
+  end
+
+  it "canonicalizes a float inside a list key" do
+    lists = Arrow::ListArray.from_iter_primitive(Float64, [
+      [Float64::NAN],
+      [Float64::NAN],
+      [0.0],
+      [-0.0],
+      [1.0],
+    ])
+    series = Prism::Series.new("l", [lists.as(Arrow::ArrayBase)], lists.data_type)
+
+    series.n_unique.should eq(3)
+    series.unique.size.should eq(3)
+  end
+
+  it "canonicalizes a float inside a fixed-size list key" do
+    values = Arrow::Float64Array.from_values([Float64::NAN, Float64::NAN, 0.0, -0.0])
+    fixed = Arrow::FixedSizeListArray.new(
+      Arrow::Field.new("item", Arrow::DataType.float64, true),
+      1,
+      values,
+    )
+    series = Prism::Series.new("f", [fixed.as(Arrow::ArrayBase)], fixed.data_type)
+
+    series.n_unique.should eq(2)
+  end
+
+  it "canonicalizes a float inside a map key" do
+    map = Arrow::MapArray.new_from_strings(
+      ["a", "a", "a", "a"],
+      Arrow::Float64Array.from_values(
+        [Float64::NAN, Float64::NAN, 0.0, -0.0]
+      ).as(Arrow::ArrayBase),
+      [0_u32, 1_u32, 2_u32, 3_u32, 4_u32],
+    )
+    series = Prism::Series.new("m", [map.as(Arrow::ArrayBase)], map.data_type)
+
+    # {a: NaN} twice and {a: 0.0} / {a: -0.0} give two keys.
+    series.n_unique.should eq(2)
+  end
+
+  it "leaves a nested key with no float children untouched" do
+    structs = Arrow::StructArray.from_pairs([
+      {Arrow::Field.new("n", Arrow::DataType.int64, true),
+       Arrow::Int64Array.from_values([1_i64, 1_i64, 2_i64]).as(Arrow::ArrayBase)},
+    ])
+    series = Prism::Series.new("s", [structs.as(Arrow::ArrayBase)], structs.data_type)
+
+    series.n_unique.should eq(2)
+    # Nothing changed, so the canonical array is the same object.
+    Prism::RowKeys.canonical(structs.as(Arrow::ArrayBase)).same?(structs).should be_true
+  end
+end

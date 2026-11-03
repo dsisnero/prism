@@ -29,8 +29,9 @@ do not re-derive it from `git log`.
 **State:** `v0.1.1` is tagged and published at
 [`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
 Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage work
-the Phase 15 vectorized aggregation and the Phase 16 eager-grouping pruning (all
-unreleased). Phases 0–16 are closed apart from the cosmetic local folder rename.
+the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning and the
+Phase 17 nested-key canonicalization (all unreleased). Phases 0–17 are closed
+apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `62c5e91` and `parquet-cr`
 `25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
@@ -38,15 +39,15 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Floats nested inside list/struct/map key columns** are still keyed by
-   `totalOrder` bits rather than canonicalized; reaching a float child means
-   rebuilding the parent layout, so it needs a real case before it is worth it.
-2. **Physical top-k for a pinned slice** — `sort_by` + `head(n)` already gathers
+1. **Physical top-k for a pinned slice** — `sort_by` + `head(n)` already gathers
    only the window, but the sort is still `O(n log n)` because
    `lexsort_to_indices` sorts everything. A bounded heap is an `arrow-cr` kernel
    this port does not model, so this is an upstream item before it is a Prism one.
-3. **Release `v0.2.0`** — Phases 12–16 are unreleased (`v0.1.1` is the last tag):
+2. **Release `v0.2.0`** — Phases 12–17 are unreleased (`v0.1.1` is the last tag):
    changelog, a benchmark refresh against the current arrows, and the tag.
+3. **List-view key canonicalization** — `list_view`/`large_list_view` keys still
+   encode `totalOrder` floats; their constructors do not preserve every buffer in
+   this port, so it needs an `arrow-cr` addition before Prism can rebuild them.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -55,10 +56,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **442 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**443**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**446**, ~1 min); with both
-set the suite is **447**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **447 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**448**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**451**, ~1 min); with both
+set the suite is **452**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
@@ -95,6 +96,7 @@ nothing is released since `v0.1.1`.
 | 14 | Value coverage: interval materialization and dictionary float keys | **done** |
 | 15 | Vectorized grouped aggregation: one pass across all groups | **done** |
 | 16 | Eager `group_by` prunes unread columns before the sort and gather | **done** |
+| 17 | Nested float keys canonicalized (struct, list, fixed-size list, map) | **done** |
 
 ---
 
@@ -1960,6 +1962,30 @@ and the code would live in neither shard's ownership.
 the time — there were no benchmarks to justify a ~4k-line dependency port — and
 the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
 implementation request rather than a guess.
+
+### Nested keys canonicalize their float children (Phase 17)
+
+`RowKeys.canonical` reached floats only at the top level and inside dictionary
+values; a struct, list, fixed-size list or map key kept `totalOrder` bits, so
+`{NaN}` never matched `{NaN}` and `{0.0}` never matched `{-0.0}`.
+
+The containers are now rebuilt around a canonicalized child, keeping offsets,
+nulls and dtype: a struct from its columns, a list from `(field, offsets, values,
+nulls)`, a map from its entries. A child that needs no change comes back as the
+same object, so a key with no float children still copies nothing — the identity
+case is asserted in the specs.
+
+Two implementation notes that cost real debugging time:
+
+- **Bind the child once.** `#values`/`#columns` are not guaranteed to hand back
+  the same object on a second call, so comparing a canonical child against a
+  fresh call reports "changed" for an untouched child.
+- **Write the guard as an `if` block.** Inside the `forall O` helper,
+  `return array unless values.same?(original)` returned even after the condition
+  had evaluated false; the explicit `if` form behaves.
+
+`list_view`/`large_list_view` keys remain keyed by `totalOrder` floats, because
+this port's constructors do not preserve every buffer they carry (§17).
 
 ### Eager grouping prunes what it does not read (Phase 16)
 
