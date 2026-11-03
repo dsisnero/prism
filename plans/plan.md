@@ -20,7 +20,7 @@ implicit.
 
 ## Where we are
 
-_Updated 2026-11-02._
+*Updated 2026-11-02.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
 (436 examples, ~30 s warm). The table below is the only place that tracks status;
@@ -1061,9 +1061,11 @@ generated `struct`/`class`, and that is a boundary constraint, not an omission:
   specs) would have to handle arbitrary user types, and `Values`, the single
   dtype-dispatch point (C4), would need a macro per schema. A closed alias is what
   keeps one representation for every frame.
-- **`NamedTuple` is not an option either.** Its keys are compile-time literals, so
+- **`NamedTuple` is not an option either.** Its keys are compile-time
+  literals, so
   a runtime field list cannot build one.
-- **Containers match Polars.** `to_list`/`to_dicts` convert a struct to a dict, a
+- **Containers match Polars.** `to_list`/`to_dicts` convert a struct to a
+  dict, a
   map to a dict and a list to a list, so "struct row → `Hash`" is the same shape
   other tools hand back, and it keeps field *order* and per-level nulls.
 - **What a struct would buy** — nominal typing (`row.x`), no string keys, fewer
@@ -1925,7 +1927,8 @@ Why this shape:
   strengthened rather than weakened: with one pass across all groups, `count`,
   `first`, `last` and the numeric folds are nearly free, so the sort plus the
   full-width row gather *is* the remaining cost — and the contiguous ranges are
-  what make the single pass possible. A hash table would now trade one sort for a
+  what make the single pass possible. A hash table would now trade one sort
+  for a
   gather per group, which is precisely the cost vectorization removed (§14
   *Vectorized grouped aggregation*).
 
@@ -1980,7 +1983,8 @@ fast in a way Crystal cannot be (a Rust `par_iter` over slices, no per-group
 allocations), which is why the fold-per-group kernels are one Crystal loop rather
 than a call per group.
 
-Reduction semantics stay Arrow's, so a grouped result equals the kernel applied to
+Reduction semantics stay Arrow's, so a grouped result equals the kernel
+applied to
 the same rows: nulls are skipped and an all-null group is null, integer sums wrap
 (`&+`), and float extremes compare in IEEE total order — `-0.0` below `0.0`,
 every NaN above `+inf` — matching `Arrow.min`/`max`'s `total_cmp`. Two shapes keep

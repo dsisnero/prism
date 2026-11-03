@@ -8,7 +8,8 @@
 
 Prism is a column-oriented table over `Arrow::RecordBatch`, with an inspectable
 expression language, grouped aggregation, Parquet/CSV/IPC interchange, and a lazy
-query plan that pushes projections and predicates **into the Parquet reader** — so
+query plan that pushes projections and predicates **into the Parquet reader**,
+so
 a large file can be filtered without being loaded.
 
 It is not a wrapper around another dataframe. Every boundary type is an
