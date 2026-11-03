@@ -66,16 +66,38 @@ module Prism
       order : Symbol = :asc,
       nulls : Symbol = :last,
     ) : DataFrame
-      resolved = keys.map do |key|
-        case key
-        when SortKey
-          key
-        else
-          Prism.sort_key(key, order, nulls)
-        end
-      end
+      sort_by_keys(resolve_sort_keys(keys, order, nulls))
+    end
 
-      sort_by_keys(resolved.to_a)
+    # Keeps the first `count` rows after sorting — `sort_by(...).head(count)`,
+    # but the sort selects only that prefix instead of ordering every row
+    # (§14: 190 ms → 8 ms on 1e6 rows).
+    #
+    # `order: :desc` is the default because "top" means largest here, matching
+    # `top_k` in Polars and `top_n` in dplyr; `sort_by` keeps its ascending
+    # default, so the two verbs differ only in where they start. Pass
+    # `order: :asc` for the smallest rows.
+    #
+    # ```
+    # df.top_n(10, "revenue")              # 10 largest
+    # df.top_n(10, "latency", order: :asc) # 10 smallest
+    # df.top_n(5, col("region").asc, col("qty").desc)
+    # ```
+    #
+    # This exists because eager code otherwise pays the full sort and gathers
+    # every row before trimming: `sort_by(...).head(n)` is two verbs, and the
+    # second one cannot undo the first. The lazy spelling
+    # (`lazy.sort_by(...).head(n)`) fuses the two in the plan; `top_n` is the
+    # eager equivalent, and both land in `#sort_by_slice`.
+    def top_n(
+      count : Int,
+      *keys : String | Symbol | SortKey,
+      order : Symbol = :desc,
+      nulls : Symbol = :last,
+    ) : DataFrame
+      raise ArgumentError.new("count must be >= 0 (got #{count})") if count < 0
+
+      sort_by_slice(resolve_sort_keys(keys, order, nulls), 0, count)
     end
 
     # Key-list form, used by the planner.
@@ -144,6 +166,24 @@ module Prism
       else
         slice(start.to_i32, length.to_i32)
       end
+    end
+
+    # Sort keys written as names, expressions or `SortKey`s, resolved once for
+    # both `sort_by` and `top_n` so the two verbs cannot drift on the `-` prefix
+    # or the null-placement rule.
+    private def resolve_sort_keys(
+      keys : Enumerable(String | Symbol | SortKey),
+      order : Symbol,
+      nulls : Symbol,
+    ) : Array(SortKey)
+      keys.map do |key|
+        case key
+        when SortKey
+          key
+        else
+          Prism.sort_key(key, order, nulls)
+        end
+      end.to_a
     end
 
     # Sort indices for one batch, resolved through the expression evaluator.

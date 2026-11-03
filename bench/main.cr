@@ -90,6 +90,10 @@ module Bench
       frame.sort_by("price", order: :desc).head(10)
     end
 
+    timed("top_n(10)", "bounded sort + window, eager") do
+      frame.top_n(10, "price")
+    end
+
     timed("scan -> sort_by -> head(10)", "bounded selection + window") do
       frame.lazy
         .sort_by("price", order: :desc)

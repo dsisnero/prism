@@ -135,6 +135,17 @@ module Prism
       self.class.new(frame.sort_by(*keys, order: order, nulls: nulls))
     end
 
+    # `frame.top_n(...)` re-wrapped, so a typed frame stays typed through the
+    # bounded sort; the rows are the same ones `sort_by(...).head(n)` keeps.
+    def top_n(
+      count : Int,
+      *keys : String | Symbol | ::Prism::SortKey,
+      order : Symbol = :desc,
+      nulls : Symbol = :last,
+    ) : self
+      self.class.new(frame.top_n(count, *keys, order: order, nulls: nulls))
+    end
+
     def head(count : Int) : self
       self.class.new(frame.head(count))
     end

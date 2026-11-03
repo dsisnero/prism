@@ -393,6 +393,56 @@ describe Prism::DataFrame do
     end
   end
 
+  describe "#top_n" do
+    it "keeps the same rows as sorting and taking the head" do
+      frame = chunked_frame
+
+      top = frame.top_n(2, "qty")
+      top.should eq(frame.sort_by("qty", order: :desc).head(2))
+      top["qty"].to_a.should eq([4_i64, 3_i64])
+    end
+
+    it "sorts ascending when asked, and keeps the smallest" do
+      verbs_frame.top_n(2, "qty", order: :asc)["qty"].to_a.should eq([1_i64, 2_i64])
+    end
+
+    it "follows the null placement keyword" do
+      verbs_frame.top_n(2, "price", nulls: :first)["price"].to_a.should eq([nil, 30.0])
+      verbs_frame.top_n(2, "price", nulls: :last)["price"].to_a.should eq([30.0, 20.0])
+    end
+
+    it "accepts several keys and explicit SortKeys" do
+      by_region = verbs_frame.top_n(2, col("region").asc, col("qty").desc)
+      by_region.should eq(verbs_frame.sort_by(col("region").asc, col("qty").desc).head(2))
+      by_region["region"].to_a.should eq(["east", "east"])
+
+      ascending = verbs_frame.top_n(2, Prism::SortKey.new(col("qty")))
+      ascending["qty"].to_a.should eq([1_i64, 2_i64])
+    end
+
+    it "clamps to the row count and keeps the schema" do
+      frame = verbs_frame
+
+      frame.top_n(100, "qty").row_count.should eq(4)
+      empty = frame.top_n(0, "qty")
+      empty.row_count.should eq(0)
+      empty.column_names.should eq(frame.column_names)
+      empty["qty"].dtype.should eq(frame["qty"].dtype)
+    end
+
+    it "collapses chunks because it reorders rows" do
+      chunk_count(chunked_frame.top_n(2, "qty")).should eq(1)
+    end
+
+    it "rejects a negative count" do
+      expect_raises(ArgumentError, /count/) { verbs_frame.top_n(-1, "qty") }
+    end
+
+    it "rejects an unknown column" do
+      expect_raises(Prism::ColumnNotFound, /nope/) { verbs_frame.top_n(2, "nope") }
+    end
+  end
+
   describe "#distinct" do
     it "keeps the first row of each key, preserving order" do
       unique = verbs_frame.distinct("region")

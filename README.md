@@ -140,6 +140,7 @@ expression API:
 orders.filter(orders["price"] > 15)     # a boolean Series is a mask
 orders.remove(col("region").is_null)    # keep rows rejected *or* unjudgeable
 orders.sort_by("-price")                # descending shorthand
+orders.top_n(10, "price")               # 10 largest, bounded sort (fast path)
 orders[1..2]                            # rows by range; negatives and .. work
 orders[["region", "price"]]             # columns by name
 orders.group_by("region").sum("price")  # one-call aggregate, input name kept
@@ -148,6 +149,12 @@ orders.group_by("region").mean          # every numeric column
 
 `remove` is not `filter(predicate.not)`: a row is kept when the predicate is
 false **or null**, so rows the predicate cannot judge survive.
+
+`top_n` is the eager spelling of `sort_by(...).head(n)`: it defaults to
+`order: :desc` (top means largest, as in Polars' `top_k`), keeps nulls last
+unless told otherwise, and sorts only as far as the window — 8 ms against 194 ms
+for the two-call form on 1e6 rows, because `sort_by` cannot see the `head` that
+follows it. Through a plan, `lazy.sort_by(...).head(n)` already fuses.
 
 One-call aggregates keep the input column's name, which means no aliasing;
 `group_by(k).count` with no columns is Polars' `count` — one `count` column of
@@ -206,8 +213,9 @@ table and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 | --- | ---: |
 | `filter` on half the rows | 48 ms |
 | `select` / `to_arrow` (one chunk) | 0 ms — same buffers |
-| `sort_by` one key | 202 ms |
-| `sort_by` + `head(10)` | 130 ms — gathers only the window |
+| `sort_by` one key | 196 ms |
+| `sort_by` + `head(10)` | 194 ms — two verbs, both full-width |
+| `top_n(10)` / `lazy.sort_by(...).head(10)` | 8 ms — bounded sort + window |
 | `group_by` 4 keys / 1e5 keys | 220 ms / 381 ms |
 | `distinct` / `n_unique` on 1e5 keys | 54 ms / 48 ms — `arrow-row` keys |
 | join 1e6 → 1e5 | 219 ms |

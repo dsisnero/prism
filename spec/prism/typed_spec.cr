@@ -117,6 +117,11 @@ describe Prism::Typed do
       typed.head(2).id.to_a.should eq([1_i64, 2_i64])
       typed.sort_by("salary", order: :desc).id.to_a.first.should eq(2_i64)
       typeof(typed.head(2)).to_s.should eq("UserSchema::Frame")
+
+      # The bounded sort keeps the frame typed and the same rows.
+      top = typed.top_n(2, "salary")
+      typeof(top).to_s.should eq("UserSchema::Frame")
+      top.id.to_a.should eq(typed.sort_by("salary", order: :desc).head(2).id.to_a)
     end
 
     it "returns a plain DataFrame when the schema changes" do

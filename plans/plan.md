@@ -41,18 +41,12 @@ what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Eager `sort_by(...).head(n)` is still two calls.** The bounded sort only
-   pays off when a slice is pinned to the sort, which today means the lazy path
-   (`Plan::Sort` + `Slice` → `DataFrame#sort_by_slice`), so eager code pays the
-   full sort and then copies every row before trimming: 190 ms against 7.5 ms
-   through the plan on 1e6 rows. Needs a fusion point in the eager API (`head`
-   immediately after `sort_by`) without making the eager surface lazy.
-2. **Two-key sorts are the slowest verb left.** 820 ms on 1e6 rows against
-   185 ms for one key (`docs/benchmarks.md`); the second key is `Utf8`, so the
+1. **Two-key sorts are the slowest verb left.** 839 ms on 1e6 rows against
+   196 ms for one key (`docs/benchmarks.md`); the second key is `Utf8`, so the
    candidate is to dictionary-encode a low-cardinality key (4 distinct values)
    before the lexsort, not to touch the gather. Needs a profile first — the
    comparison and the row copy are both in that number.
-3. **Nothing else is queued.** The deferred table (§17) is closed apart from the
+2. **Nothing else is queued.** The deferred table (§17) is closed apart from the
    owner-gated folder rename; a new item should be proposed with a measurement
    or a failing case, not planned speculatively.
 
@@ -63,10 +57,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **452 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**453**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**456**, ~1 min); with both
-set the suite is **457**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **460 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**461**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**464**, ~1 min); with both
+set the suite is **465**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -108,7 +102,8 @@ with nothing pending.
 | 16 | Eager `group_by` prunes unread columns before the sort and gather | **done** |
 | 17 | Nested float keys canonicalized (struct, list, list-view, fixed-size list, map) | **done** |
 | 18 | Bounded sort: a pinned window passes its limit to `lexsort_to_indices` | **done** |
-| 19 | `v0.2.0` release: changelog for Phases 12–18, benchmark refresh, tag | **done** |
+| 19 | `v0.2.0` release prep: changelog for Phases 12–18, benchmark refresh | **done** (tag owner-gated) |
+| 20 | Eager `top_n`: the fast spelling of `sort_by(...).head(n)` | **done** |
 
 ---
 
@@ -1984,6 +1979,30 @@ and the code would live in neither shard's ownership.
 the time — there were no benchmarks to justify a ~4k-line dependency port — and
 the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
 implementation request rather than a guess.
+
+### The eager API gets the bounded sort as a verb (Phase 20)
+
+`sort_by(...).head(n)` is two eager verbs, and the first cannot see the second:
+it sorts every row and gathers all of them, so `head` trims a frame that was
+already copied in full. The plan path had this solved since 9d, but only because
+`Plan::Sort` + `Slice` reach `DataFrame#sort_by_slice` together.
+
+Deferring the sort to first access would fix the cost and turn the eager surface
+into a lazy one, which §14 closes: eager verbs execute when called. So the fix is
+an explicit verb — `DataFrame#top_n(count, *keys, order: :desc, nulls: :last)` —
+that resolves keys through the same `resolve_sort_keys` as `sort_by` and lands in
+`sort_by_slice(keys, 0, count)`.
+
+`order: :desc` is the default because the name means "largest", matching Polars'
+`top_k` and dplyr's `top_n`; `sort_by` keeps its ascending default, and the two
+verbs differ only in where they start. Specs pin `top_n` to
+`sort_by(...).head(count)` across null placement, direction, several keys and
+`SortKey`s, clamping, zero rows and the typed-frame round trip, so the fast path
+cannot drift from the obvious one.
+
+Measured (`bench/main.cr`, 1e6 rows, best of 5): `top_n(10)` 7.7 ms against
+193.7 ms for `sort_by + head(10)`, which is what the lazy spelling already cost
+(7.6 ms).
 
 ### A pinned window bounds the sort, not just the gather (Phase 18)
 
