@@ -82,7 +82,7 @@ module Bench
       frame.sort_by("price", order: :desc)
     end
 
-    timed("sort_by two keys", "") do
+    timed("sort_by two keys", "second key is `Utf8`") do
       frame.sort_by(col("region").asc, col("price").desc)
     end
 
@@ -90,7 +90,7 @@ module Bench
       frame.sort_by("price", order: :desc).head(10)
     end
 
-    timed("scan -> sort_by -> head(10)", "gathers only the window") do
+    timed("scan -> sort_by -> head(10)", "bounded selection + window") do
       frame.lazy
         .sort_by("price", order: :desc)
         .head(10)

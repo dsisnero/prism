@@ -353,6 +353,44 @@ describe Prism::DataFrame do
       expect_raises(ArgumentError, /offset/) { verbs_frame.sort_by_slice(keys, -1, 2) }
       expect_raises(ArgumentError, /count/) { verbs_frame.sort_by_slice(keys, 0, -2) }
     end
+
+    # A bounded sort returns the prefix a full sort would, so every window is the
+    # same rows as slicing the fully sorted frame — including null placement,
+    # per-key direction and the equal-key tie-break (spec Phase 18).
+    it "matches a full sort for every window, nulls included" do
+      frame = chunked_frame
+      key_sets = [
+        [Prism::SortKey.new(col("price"))],
+        [Prism::SortKey.new(col("price"), false, true)],
+        [Prism::SortKey.new(col("price"), true)],
+        [Prism::SortKey.new(col("region")), Prism::SortKey.new(col("qty"), true)],
+      ]
+
+      key_sets.each do |keys|
+        (0..frame.row_count).each do |offset|
+          (0..3).each do |count|
+            frame.sort_by_slice(keys, offset, count)
+              .should eq(frame.sort_by(keys).slice(offset, count))
+          end
+        end
+      end
+    end
+
+    it "treats an offset past the frame as an empty window, whatever its size" do
+      keys = [Prism::SortKey.new(col("qty"))]
+
+      # `4 + 10**10` does not fit an Int32, and the bound is capped at the row
+      # count, so a huge offset is still an empty window rather than an overflow.
+      verbs_frame.sort_by_slice(keys, 10_000_000_000, 2).row_count.should eq(0)
+    end
+
+    it "still rejects an unknown column on an empty window" do
+      keys = [Prism::SortKey.new(col("nope"))]
+
+      expect_raises(Prism::ColumnNotFound) do
+        verbs_frame.sort_by_slice(keys, 10, 2)
+      end
+    end
   end
 
   describe "#distinct" do

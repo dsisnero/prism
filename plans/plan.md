@@ -29,23 +29,24 @@ do not re-derive it from `git log`.
 **State:** `v0.1.1` is tagged and published at
 [`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
 Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage work
-the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning and the
-Phase 17 nested-key canonicalization (all unreleased). Phases 0–17 are closed
-apart from the cosmetic local folder rename.
+the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning, the
+Phase 17 nested-key canonicalization and the Phase 18 bounded sort (all
+unreleased). Phases 0–18 are closed apart from the cosmetic local folder rename.
 
-**Dependencies verified against:** `arrow-cr` `62c5e91` and `parquet-cr`
-`25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
-gitignored, so this line is the record of what the suite below was run against.
+**Dependencies verified against:** `arrow-cr` `728ce51` (includes the bounded
+sort, `5b4b958`) and `parquet-cr` `25a889e` (both `branch: main`, resolved from
+GitHub). `shard.lock` and `lib/` are gitignored, so this line is the record of
+what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Physical top-k for a pinned slice** — blocked upstream and now written up
-   as [`shard_issues/arrow-cr.1.md`](../shard_issues/arrow-cr.1.md): sorting with
-   a `limit` still sorts every row, though the port already contains an unused
-   `partial_sort`. Prism's gather half is done (`DataFrame#sort_by_slice`), so
-   this unblocks with an `arrow-cr` change, not a Prism one.
-2. **Release `v0.2.0`** — Phases 12–17 are unreleased (`v0.1.1` is the last tag):
+1. **Release `v0.2.0`** — Phases 12–18 are unreleased (`v0.1.1` is the last tag):
    changelog, a benchmark refresh against the current arrows, and the tag.
+2. **Eager `sort_by(...).head(n)` is still two calls.** The bounded sort only
+   pays off when a slice is pinned to the sort, which today means the lazy path
+   (`Plan::Sort` + `Slice` → `DataFrame#sort_by_slice`). Eager code has to build
+   the plan by hand; consider fusing `head`/`slice` after `sort_by` in the eager
+   API if a real call site wants it.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -54,10 +55,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **449 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**450**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**453**, ~1 min); with both
-set the suite is **454**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **452 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**453**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**456**, ~1 min); with both
+set the suite is **457**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
@@ -95,6 +96,7 @@ nothing is released since `v0.1.1`.
 | 15 | Vectorized grouped aggregation: one pass across all groups | **done** |
 | 16 | Eager `group_by` prunes unread columns before the sort and gather | **done** |
 | 17 | Nested float keys canonicalized (struct, list, list-view, fixed-size list, map) | **done** |
+| 18 | Bounded sort: a pinned window passes its limit to `lexsort_to_indices` | **done** |
 
 ---
 
@@ -1961,6 +1963,37 @@ the time — there were no benchmarks to justify a ~4k-line dependency port — 
 the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
 implementation request rather than a guess.
 
+### A pinned window bounds the sort, not just the gather (Phase 18)
+
+`DataFrame#sort_by_slice` already gathered only the window, but it called
+`Arrow.lexsort_to_indices` with no `limit`, so the sort still ordered every row:
+`arrow-cr` accepted a `limit` and only truncated the result *after* a full sort.
+That half is fixed upstream (`arrow-cr` `5b4b958`: a bounded `limit` selects with
+`partial_sort`, with the full sort as the fallback for a limit that covers most
+of the input), and Prism now passes it.
+
+`sort_by_keys` computes the window first and hands the sort `offset + count`:
+
+- the bound is capped at the row count (`count` is clamped to the rows left
+  after `offset`), so the output is unchanged — the bounded prefix *is* the
+  prefix a full sort produces, tie-break included — and a window past the frame
+  stays an empty result instead of overflowing the `Int32` cast the sort takes
+  (`sort_by_slice` now carries the window in `Int64` for that reason);
+- the sort still runs for an empty window, because resolving the keys is what
+  rejects a bad column; returning early would swallow `ColumnNotFound`.
+
+Paired before/after on the same 1e6-row frame (§14 numbers, `docs/benchmarks.md`):
+
+| scenario | before | after | speedup |
+| --- | ---: | ---: | ---: |
+| `sort_by(qty)` → `head(10)` | 81.9 ms | 10.1 ms | 8.1× |
+| `sort_by(qty desc, price)` → `head(10)` | 80.4 ms | 3.1 ms | 26× |
+| `sort_by(qty)` → `slice(500_000, 10)` | 80.0 ms | 49.7 ms | 1.6× |
+
+A mid-frame window is the case the bound cannot help: `offset + count` is half
+the frame, so most of the selection is still paid. Windows near either end are
+where it pays.
+
 ### Nested keys canonicalize their float children (Phase 17)
 
 `RowKeys.canonical` reached floats only at the top level and inside dictionary
@@ -2210,7 +2243,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | --- | --- | --- |
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d (done) |
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
-| Physical top-k for a pinned slice | the gather half landed in 9d; the sort half is an `arrow-cr` limit bug, filed as `shard_issues/arrow-cr.1.md` | 9d (Prism done, upstream filed) |
+| Physical top-k for a pinned slice | gather half in 9d; sort half needed an `arrow-cr` fix (`5b4b958`, filed as `shard_issues/arrow-cr.1.md`), now wired up | done (Phase 18) |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (landed; see §14) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 (done) |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |

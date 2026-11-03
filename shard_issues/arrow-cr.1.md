@@ -1,6 +1,27 @@
 # `arrow-cr`: sorting with `limit` sorts every row instead of selecting the top-k
 
-## Status: open, reproduced 2026-11-02
+## Status: fixed upstream, consumer wired up (2026-11-03)
+
+Fixed in `arrow-cr` commit `5b4b958` ("port: bound sort work by the requested
+limit"), merged to `main`. `sort_to_indices` and `lexsort_to_indices` now select
+a bounded prefix with `partial_sort` and only sort that prefix; the full sort is
+kept as the fallback for a limit that covers most of the input. Re-measured from
+Prism on the reproducer below (Apple M4, Crystal 1.22.2, `--release`, best of
+three, after `shards update`):
+
+```text
+sort_to_indices, no limit            best 63.9 ms
+sort_to_indices, limit 10            best  6.0 ms   (was 87.1)
+lexsort_to_indices 2 keys, no limit  best 129.3 ms
+lexsort_to_indices 2 keys, limit 10  best  13.5 ms  (was 231.5)
+bounded prefix matches full sort: true
+lex bounded prefix matches:      true
+```
+
+Prism already gathered only the window; it now also passes the bound, so
+`LazyFrame#sort_by(...).head(n)` on 1e6 rows went from 81.9 ms to 10.1 ms
+(8.1x) and the two-key form from 80.4 ms to 3.1 ms (26x) — see
+[docs/benchmarks.md](../docs/benchmarks.md).
 
 `sort_to_indices` and `lexsort_to_indices` accept a `limit`, but only truncate the
 result *after* a full sort. The port already contains `partial_sort`; nothing
@@ -84,12 +105,10 @@ and ~230 ms to produce ten indices.
 ## Downstream impact (`prism`)
 
 `prism` sorts through this API for `DataFrame#sort_by(...).head(n)` /
-`LazyFrame#sort_by(...).head(n)`. The pinned-slice path already gathers only the
-window (`DataFrame#sort_by_slice`), but it cannot avoid the sort:
-`docs/benchmarks.md` measures `sort_by -> head(10)` at 153 ms against 318 ms for
-eager sort-then-trim, and the 165 ms difference is the gather, not the sort. This
-is the only item in `prism`'s "Next up" that is blocked on `arrow-cr`; the
-consumer side is ready.
+`LazyFrame#sort_by(...).head(n)`. The pinned-slice path already gathered only the
+window (`DataFrame#sort_by_slice`) but could not avoid the sort, and it passed no
+limit at all — that half is now done: `sort_by_slice` hands the sort
+`offset + count` (Phase 18).
 
 ## Suggested fix direction (not a patch)
 

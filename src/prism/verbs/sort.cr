@@ -97,32 +97,45 @@ module Prism
       raise ArgumentError.new("offset must be >= 0 (got #{offset})") if offset < 0
       raise ArgumentError.new("count must be >= 0 (got #{count})") if count < 0
 
-      sort_by_keys(keys.to_a, offset.to_i32, count.to_i32)
+      # Keep the window in `Int64`: an offset past the frame is legal and can be
+      # larger than `Int32::MAX`, and only the sort bound is ever narrowed.
+      sort_by_keys(keys.to_a, offset.to_i64, count.to_i64)
     end
 
     private def sort_by_keys(
       keys : Array(SortKey),
-      offset : Int32? = nil,
-      count : Int32? = nil,
+      offset : Int64? = nil,
+      count : Int64? = nil,
     ) : DataFrame
       raise ArgumentError.new("sort_by needs at least one key") if keys.empty?
 
       batch = to_arrow
+      windowed = !!(offset || count)
+      start = offset || 0_i64
+      available = Math.max(batch.num_rows.to_i64 - start, 0)
+      length = count.nil? ? available : Math.min(count, available)
+
+      # A window needs only the first `start + length` sorted rows, so hand the
+      # sort a bound and let `Arrow.lexsort_to_indices` select it instead of
+      # sorting every row (a bounded `limit` uses `partial_sort`; §14). The bound
+      # is capped at the row count — it never asks for rows that do not exist, so
+      # the output is unchanged (the bounded prefix *is* the prefix a full sort
+      # produces, tie-break included) and a huge offset cannot overflow the cast.
+      # The sort still runs for an empty window: resolving the keys is what
+      # rejects an unknown column, and returning before it would swallow that.
+      limit = windowed ? Math.min(start + length, batch.num_rows.to_i64).to_i32 : nil
       indices = if batch.num_rows <= 1
                   nil
                 else
-                  sort_indices(batch, keys)
+                  sort_indices(batch, keys, limit)
                 end
 
-      unless offset || count
+      unless windowed
         return self if indices.nil?
 
         return DataFrame.new(@schema, [Arrow.take_record_batch(batch, indices)])
       end
 
-      start = (offset || 0).to_i64
-      available = Math.max(batch.num_rows.to_i64 - start, 0)
-      length = count.nil? ? available : Math.min(count.to_i64, available)
       return DataFrame.new(@schema, [] of Arrow::RecordBatch) if length <= 0
 
       if indices
@@ -134,7 +147,14 @@ module Prism
     end
 
     # Sort indices for one batch, resolved through the expression evaluator.
-    private def sort_indices(batch : Arrow::RecordBatch, keys : Array(SortKey)) : Arrow::PrimitiveArray(UInt32)
+    #
+    # `limit` bounds how many indices come back; the sort uses it to skip rows
+    # that cannot land in the window.
+    private def sort_indices(
+      batch : Arrow::RecordBatch,
+      keys : Array(SortKey),
+      limit : Int32? = nil,
+    ) : Arrow::PrimitiveArray(UInt32)
       types = TypeCache.new(@schema)
       duplicates = Cse.duplicate_keys(keys.map(&.expr))
       ctx = EvalContext.new(batch, types, duplicates)
@@ -144,7 +164,7 @@ module Prism
         Arrow::SortColumn.new(values, options)
       end
 
-      Arrow.lexsort_to_indices(columns)
+      Arrow.lexsort_to_indices(columns, limit)
     end
   end
 end

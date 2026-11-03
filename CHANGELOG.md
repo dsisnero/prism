@@ -6,6 +6,14 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Performance
+
+- A sort with a pinned window (`LazyFrame#sort_by(...).head(n)`) now bounds the
+  sort instead of ordering every row: `DataFrame#sort_by_slice` passes
+  `offset + count` to `Arrow.lexsort_to_indices`, which selects that prefix with
+  `partial_sort`. On 1e6 rows, `head(10)` went from 82 ms to 10 ms (8.1x) and the
+  two-key form from 80 ms to 3 ms (26x). Requires `arrow-cr` `5b4b958`.
+
 ### Fixed
 
 - Float keys nested inside a struct, list, list-view, fixed-size list or map now
