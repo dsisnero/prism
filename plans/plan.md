@@ -59,7 +59,7 @@ set the suite is **441**. Run both before a release.
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
 benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit
 (`a7f1cd7`), then the Phase 14 interval and row-key commit (`2eac6e4`), then the
-Phase 15 vectorized-aggregation commit `____________`. Everything is on `main`;
+Phase 15 vectorized-aggregation commit (`414cf68`). Everything is on `main`;
 nothing is released since `v0.1.1`.
 
 **Owner actions, not code:**
