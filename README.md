@@ -257,7 +257,7 @@ snippet that stops working fails a spec.
 `v0.2.0` is the current release: it adds row materialization (`DataFrame#rows`
 and a generated typed row per schema), interval columns, vectorized grouped
 aggregation, and a bounded sort behind a pinned window. The API in this README is
-implemented, tested (452 specs plus opt-in compile and example suites) and
+implemented, tested (463 specs plus opt-in compile and example suites) and
 measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
