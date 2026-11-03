@@ -14,8 +14,10 @@ dependencies:
   # (`path: ../arrow-cr`, `path: ../parquet-cr`); see docs/development.md.
   arrow-cr:
     github: dsisnero/arrow-cr
+    branch: main
   parquet-cr:
     github: dsisnero/parquet-cr
+    branch: main
 
 development_dependencies:
   ameba:

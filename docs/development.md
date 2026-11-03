@@ -34,9 +34,14 @@ dependencies:
   prism:
     github: dsisnero/prism
 # resolves transitively:
-#   arrow-cr:    github: dsisnero/arrow-cr
-#   parquet-cr:  github: dsisnero/parquet-cr
+#   arrow-cr:    github: dsisnero/arrow-cr, branch: main
+#   parquet-cr:  github: dsisnero/parquet-cr, branch: main
 ```
+
+Both are pinned to `branch: main` explicitly rather than a tag, so consumers
+track the dependencies' heads while all three shards are still moving together.
+`shard.lock` records the resolved commits, so a checkout is reproducible even
+though the constraint is a branch. Revisit tag pinning once the trio stabilises.
 
 To hack on `arrow-cr` or `parquet-cr` themselves, point the two dependencies at
 your sibling checkouts instead (`path: ../arrow-cr`, `path: ../parquet-cr`);
