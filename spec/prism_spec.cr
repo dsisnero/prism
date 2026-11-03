@@ -4,8 +4,12 @@ require "./spec_helper"
 # on actually works from this project's dependency graph. These specs guard the
 # dependency contract described in plans/plan.md §3.
 describe Prism do
+  # The number itself is not repeated here: `spec/prism/version_spec.cr` owns the
+  # agreement with `shard.yml`, so a release bumps one place. A literal here was a
+  # third copy that could silently drift.
   it "exposes a version" do
-    Prism::VERSION.should eq("0.1.1")
+    Prism::VERSION.should_not be_empty
+    Prism::VERSION.should match(/^\d+\.\d+\.\d+/)
   end
 end
 

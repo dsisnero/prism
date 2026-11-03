@@ -245,14 +245,18 @@ snippet that stops working fails a spec.
 
 ## Status
 
-`v0.1.1` is the current release (`v0.1.0` was the first), adding decimal
-arithmetic and nested materialization: the API in this README is implemented,
-tested (360 specs plus opt-in compile and example suites) and measured.
+`v0.2.0` is the current release: it adds row materialization (`DataFrame#rows`
+and a generated typed row per schema), interval columns, vectorized grouped
+aggregation, and a bounded sort behind a pinned window. The API in this README is
+implemented, tested (452 specs plus opt-in compile and example suites) and
+measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
-async/object store IO. Interval columns are the one dtype that still cannot
-materialize. The [plan's deferred table](plans/plan.md#17-deferred-work) lists
-every known gap with the phase that would close it.
+async/object store IO. Every Arrow dtype the library accepts materializes into a
+`Prism::Value`, though nested cells come back as containers (`Array(Value)`,
+`Hash`) rather than per-schema structs unless you use a typed schema. The
+[plan's deferred table](plans/plan.md#17-deferred-work) lists every known gap with
+the phase that would close it.
 
 ## Contributing
 

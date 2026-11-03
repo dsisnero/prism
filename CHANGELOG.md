@@ -6,8 +6,18 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-03
+
 ### Performance
 
+- Grouped aggregation is vectorized: one pass across every group replaces one
+  evaluation per group, and an operand named by several aggregates is evaluated
+  once. On 1e6 rows and 1e5 groups, three aggregates cost what one used to
+  (544 ms → 237 ms) and `count` alone 419 ms → 235 ms.
+- Eager `group_by` prunes the columns it does not read before the key sort and
+  the row gather (`GroupBy.required_columns`). A wide frame with a key-only
+  aggregation is 12.5x faster (252.6 ms → 20.2 ms on 52 columns, 200k rows,
+  1e5 groups).
 - A sort with a pinned window (`LazyFrame#sort_by(...).head(n)`) now bounds the
   sort instead of ordering every row: `DataFrame#sort_by_slice` passes
   `offset + count` to `Arrow.lexsort_to_indices`, which selects that prefix with
@@ -19,9 +29,22 @@ All notable changes to this project are documented here. This project adheres to
 - Float keys nested inside a struct, list, list-view, fixed-size list or map now
   canonicalize like top-level floats, so `{NaN}` matches `{NaN}` and `{0.0}`
   matches `{-0.0}` in `distinct`, `n_unique`, `group_by` and joins.
+- A dictionary-encoded float key is canonicalized through its values (keys, key
+  type and `ordered?` preserved), so `distinct`, `n_unique`, `group_by` and joins
+  agree with the plain float column on `-0.0`/`0.0` and NaN payloads.
 
 ### Added
 
+- Row materialization: `DataFrame#each_row`, `#rows` and `#row` decode each row
+  into `Prism::RowHash` (`Hash(String, Value)`), keeping nulls as `nil` and
+  nested cells as containers. `define_schema` generates `S::Row` alongside
+  `S::Frame` — nullable typed fields, positional constructor, `to_h`,
+  `from_hash`, and `S::Frame#each_row`/`#rows`/`#row` that re-type the dynamic
+  row, so both views agree on order, nulls and bounds.
+- Interval columns materialize (`YearMonth`, `DayTime`, `MonthDayNano`) as
+  `Prism::IntervalValue` and display in Arrow's `IntervalMonthDayNano` style, so
+  intervals read through `to_a`, `[]`, rows, typed frames and `to_s` instead of
+  raising.
 - `Prism::Series` comparison operators: `==`, `!=`, `<`, `<=`, `>`, `>=` against
   another series or a scalar, producing a boolean column. Scalars follow the same
   coercion rule expressions use — the literal adopts the column's dtype when the
@@ -55,6 +78,9 @@ All notable changes to this project are documented here. This project adheres to
   literal half of `#target`, so `Series` comparisons and expressions cannot drift.
 - `Prism::DuplicateColumn` takes an optional reason, used when a one-call
   aggregate names a grouping key.
+- The version lives in exactly two places (`shard.yml` and `Prism::VERSION`,
+  checked by `spec/prism/version_spec.cr`); the suite no longer repeats the
+  literal, so a release bumps one number instead of hunting copies.
 
 ## [0.1.1] - 2026-11-02
 
@@ -240,5 +266,6 @@ optional compile-time typed schemas.
   physical layout; on unclustered data a row filter costs more than it saves,
   which `docs/benchmarks.md` documents with numbers.
 
+[0.2.0]: https://github.com/dsisnero/prism/releases/tag/v0.2.0
 [0.1.1]: https://github.com/dsisnero/prism/releases/tag/v0.1.1
 [0.1.0]: https://github.com/dsisnero/prism/releases/tag/v0.1.0

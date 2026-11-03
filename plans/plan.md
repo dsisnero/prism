@@ -20,18 +20,19 @@ implicit.
 
 ## Where we are
 
-*Updated 2026-11-02.*
+*Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(436 examples, ~30 s warm). The table below is the only place that tracks status;
+(452 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
-**State:** `v0.1.1` is tagged and published at
-[`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
-Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage work
-the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning, the
-Phase 17 nested-key canonicalization and the Phase 18 bounded sort (all
-unreleased). Phases 0–18 are closed apart from the cosmetic local folder rename.
+**State:** `v0.2.0` is tagged and published at
+[`dsisnero/prism`](https://github.com/dsisnero/prism), and it is what `main`
+carries: the Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14
+value-coverage work, the Phase 15 vectorized aggregation, the Phase 16
+eager-grouping pruning, the Phase 17 nested-key canonicalization and the Phase 18
+bounded sort. Phases 0–18 are closed apart from the cosmetic local folder
+rename; nothing is unreleased.
 
 **Dependencies verified against:** `arrow-cr` `728ce51` (includes the bounded
 sort, `5b4b958`) and `parquet-cr` `25a889e` (both `branch: main`, resolved from
@@ -40,13 +41,20 @@ what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Release `v0.2.0`** — Phases 12–18 are unreleased (`v0.1.1` is the last tag):
-   changelog, a benchmark refresh against the current arrows, and the tag.
-2. **Eager `sort_by(...).head(n)` is still two calls.** The bounded sort only
+1. **Eager `sort_by(...).head(n)` is still two calls.** The bounded sort only
    pays off when a slice is pinned to the sort, which today means the lazy path
-   (`Plan::Sort` + `Slice` → `DataFrame#sort_by_slice`). Eager code has to build
-   the plan by hand; consider fusing `head`/`slice` after `sort_by` in the eager
-   API if a real call site wants it.
+   (`Plan::Sort` + `Slice` → `DataFrame#sort_by_slice`), so eager code pays the
+   full sort and then copies every row before trimming: 190 ms against 7.5 ms
+   through the plan on 1e6 rows. Needs a fusion point in the eager API (`head`
+   immediately after `sort_by`) without making the eager surface lazy.
+2. **Two-key sorts are the slowest verb left.** 820 ms on 1e6 rows against
+   185 ms for one key (`docs/benchmarks.md`); the second key is `Utf8`, so the
+   candidate is to dictionary-encode a low-cardinality key (4 distinct values)
+   before the lexsort, not to touch the gather. Needs a profile first — the
+   comparison and the row copy are both in that number.
+3. **Nothing else is queued.** The deferred table (§17) is closed apart from the
+   owner-gated folder rename; a new item should be proposed with a measurement
+   or a failing case, not planned speculatively.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -97,6 +105,7 @@ nothing is released since `v0.1.1`.
 | 16 | Eager `group_by` prunes unread columns before the sort and gather | **done** |
 | 17 | Nested float keys canonicalized (struct, list, list-view, fixed-size list, map) | **done** |
 | 18 | Bounded sort: a pinned window passes its limit to `lexsort_to_indices` | **done** |
+| 19 | `v0.2.0` release: changelog for Phases 12–18, benchmark refresh, tag | **done** |
 
 ---
 
@@ -1522,6 +1531,15 @@ a struct array: decimals materialize instead of raising.
       `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (365),
       and verified as a consumer: a fresh project with
       `prism: github: dsisnero/prism` resolves `0.1.1` and runs `group_by`
+- [x] v0.2.0 tag — Phases 12–18 released on `2026-11-03` after
+      `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (457;
+      452 without the opt-in suites). `shard.yml` and `Prism::VERSION` both say
+      `0.2.0` and the spec suite checks them against each other, so the release
+      prep bumped one number instead of three — the literal in `spec/prism_spec.cr`
+      that used to repeat it now asserts the shape only. The benchmark table was
+      refreshed against `arrow-cr` `728ce51` / `parquet-cr` `25a889e` in Phase 18,
+      which is the same run that produced the bounded-sort A/B. Consumer check
+      (`prism: github: dsisnero/prism` resolves `0.2.0`) follows the push.
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:
@@ -2260,11 +2278,11 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` existed | 12 (done) |
 | Hash-based grouping | the stated gate was "only if a benchmark shows grouping dominating"; a probe put the key sort at 35 ms of a 1005 ms 1e5-key group-by, so hashing would buy ~4% for the group views and deterministic order | 12 follow-up (measured, declined) |
 | Vectorized per-group aggregation | the real cost is per group (~4 µs for `count`, ~2.5 µs per extra aggregate at 1e5 groups); it needs one kernel across all groups instead of one slice per group, which is a redesign of the aggregate layer | 15 (done) |
-| Column pruning inside eager `group_by` | after Phase 15 the aggregates are nearly free, so the key sort and the full-width `take_record_batch` are the floor; the planner prunes for lazy pipelines but the eager verb still gathers every column | candidate (next up) |
+| Column pruning inside eager `group_by` | after Phase 15 the aggregates are nearly free, so the key sort and the full-width `take_record_batch` are the floor; the planner prunes for lazy pipelines but the eager verb still gathers every column | 16 (done) |
 | Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | 13 (done) |
 | Interval materialization: `Value` had no month/day/nano member, so interval columns could not reach `to_a`/`rows`/display | it needed a value shape for all three Arrow units; `Arrow::IntervalValue` is that shape, so no new type was introduced | 14 (done) |
 | Dictionary-encoded float keys were compared by value but not canonicalized | the values are what gets encoded, so canonicalizing them in place keeps the dictionary dtype and makes keying agree with plain float columns | 14 (done) |
-| Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | candidate (needs a case) |
+| Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**
 (`slice { carat > 1 }`), which works because Ruby `instance_eval`s the block
