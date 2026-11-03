@@ -283,8 +283,10 @@ module Prism
         ranges.map(&.begin.to_u32)
       )
       key_columns = sorted_keys.map { |array| Arrow.take(array, first_rows) }.to_a
+      eval_context = EvalContext.new(sorted_batch, types)
+      operands = {} of String => Arrow::ArrayBase
       aggregate_columns = columns.values.map do |expr|
-        concatenate_groups(expr, sorted_batch, ranges, types)
+        aggregate_column(expr, sorted_batch, ranges, types, eval_context, operands)
       end
 
       if @maintain_order && ranges.size > 1
@@ -304,7 +306,55 @@ module Prism
       )
     end
 
-    # One pass over the group ranges; each group is a view into `sorted_batch`.
+    # One aggregate column of the output.
+    #
+    # The common path evaluates the aggregate's operand once over the whole
+    # sorted frame and lets `GroupedAgg` reduce every group in one pass. Two
+    # shapes keep the original per-group evaluation: an operand that itself
+    # contains an aggregation (`col("a").sum.mean`, which has no defined
+    # cross-group meaning), and a dtype the vectorized tier does not cover, so
+    # the error a user sees is still the one `Series` raises.
+    private def aggregate_column(
+      expr : Expr,
+      sorted_batch : Arrow::RecordBatch,
+      ranges : Array(Range(Int32, Int32)),
+      types : TypeCache,
+      ctx : EvalContext,
+      operands : Hash(String, Arrow::ArrayBase),
+    ) : Arrow::ArrayBase
+      node = expr.is_a?(Alias) ? expr.as(Alias).operand : expr
+      return concatenate_groups(expr, sorted_batch, ranges, types) unless node.is_a?(Agg)
+
+      agg = node.as(Agg)
+      return concatenate_groups(expr, sorted_batch, ranges, types) if aggregation_inside?(agg.operand)
+
+      vectorized = GroupedAgg.vectorizable?(agg.fn, types.dtype(agg.operand))
+      unless vectorized || GroupedAgg.per_group_kernel?(agg.fn)
+        return concatenate_groups(expr, sorted_batch, ranges, types)
+      end
+
+      # Two aggregates over the same operand (`col("qty").sum` and
+      # `col("qty").count`) share one evaluation.
+      operand = operands[agg.operand.key]? || begin
+        array = Datums.array(ctx.evaluate(agg.operand), ctx)
+        operands[agg.operand.key] = array
+        array
+      end
+
+      if vectorized
+        GroupedAgg.reduce(agg.fn, operand, ranges)
+      else
+        GroupedAgg.reduce_per_group(agg.fn, operand, ranges)
+      end
+    end
+
+    private def aggregation_inside?(expr : Expr) : Bool
+      expr.is_a?(Agg) || expr.children.any? { |child| aggregation_inside?(child) }
+    end
+
+    # Last resort: evaluate the aggregate expression once per group. Reached
+    # only for the shapes `aggregate_column` declines, because the per-group
+    # cost (~4 µs a group) is what `GroupedAgg` exists to remove.
     private def concatenate_groups(
       expr : Expr,
       sorted_batch : Arrow::RecordBatch,

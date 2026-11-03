@@ -23,37 +23,44 @@ implicit.
 _Updated 2026-11-02._
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(422 examples, ~30 s warm). The table below is the only place that tracks status;
+(436 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `v0.1.1` is tagged and published at
 [`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
-Phase 12 ergonomics work, the Phase 13 row layer and the Phase 14 value-coverage
-work (all unreleased). Phases 0–14 are closed apart from the cosmetic local
-folder rename.
+Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage work
+and the Phase 15 vectorized aggregation (all unreleased). Phases 0–15 are closed
+apart from the cosmetic local folder rename.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Vectorized per-group aggregation** — the largest in-memory cost by far:
-   ~95% of a 1e5-group `group_by` is per-group overhead, not the sort (§14). It
-   needs one kernel across all groups instead of a slice per group, which is a
-   redesign of the aggregate layer. Take it only with a benchmark in hand — the
-   numbers are in [`docs/benchmarks.md`](../docs/benchmarks.md).
+1. **Prune columns in eager `group_by`** — the aggregate layer is now nearly free
+   (Phase 15), so what a 1e5-key group-by costs is the key sort plus the
+   `take_record_batch` that gathers **every** column (§14). A 50-column frame
+   currently pays to gather 50 columns to aggregate two; the planner already
+   prunes for lazy pipelines, and the eager verb should reuse that.
+2. **Floats nested inside list/struct/map key columns** are still keyed by
+   `totalOrder` bits rather than canonicalized; reaching a float child means
+   rebuilding the parent layout, so it needs a real case before it is worth it.
 
-**Closed, do not re-open:** hash-based grouping. Measured in Phase 12's
-follow-up: the sort is 35 ms of a 1005 ms 1e5-key group-by, so a hash table would
-buy ~4% while giving up contiguous group views and deterministic order (§14).
+**Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
+the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
+nearly free and the sort plus the row gather *is* the floor — and the contiguous
+ranges it produces are exactly what lets one pass reduce every group (§14). A
+hash table would trade one sort for a per-group gather, which is the work
+vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **429 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**430**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**433**, ~1 min); with both
-set the suite is **434**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **436 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**437**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**440**, ~1 min); with both
+set the suite is **441**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
 benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit
-(`a7f1cd7`), then the Phase 14 interval and row-key commit. Everything is on
-`main`; nothing is released since `v0.1.1`.
+(`a7f1cd7`), then the Phase 14 interval and row-key commit (`2eac6e4`), then the
+Phase 15 vectorized-aggregation commit `____________`. Everything is on `main`;
+nothing is released since `v0.1.1`.
 
 **Owner actions, not code:**
 
@@ -81,6 +88,7 @@ benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit
 | 12 | RedAmber ergonomics: masks, `remove`, ranges, `-` sorts, one-call aggregates | **done** |
 | 13 | Rows: `DataFrame#rows` and `define_schema`-generated `S::Row` | **done** |
 | 14 | Value coverage: interval materialization and dictionary float keys | **done** |
+| 15 | Vectorized grouped aggregation: one pass across all groups | **done** |
 
 ---
 
@@ -194,9 +202,11 @@ Polars has the same two representations and picks by data shape: hash-based
 (`GroupsType::Slice`, contiguous `[start, len]` pairs) when keys are sorted. We
 always take the slice path because it yields `RecordBatch#slice` views instead
 of index lists, and because it makes output order deterministic instead of
-unspecified. The benchmark in §14 has since closed the hash alternative on
-evidence: the key's sort is under 4% of a 1e5-group `group_by`, so hashing would
-trade away the views and the ordering for almost nothing.
+unspecified. Two measurements have since closed the hash alternative on
+evidence: before Phase 15 the key's sort was under 4% of a 1e5-group `group_by`,
+and after it the aggregates are nearly free, so the contiguous ranges are what
+let one pass reduce every group — a hash table would trade the sort for a
+per-group gather (§14).
 
 #### C6. No `mean`, `count`, or `count_distinct` kernels
 
@@ -509,7 +519,7 @@ macros, so no single reference library fits. Each contributes one axis:
 
 | Library | Axis | Adopted as | Deliberately not adopted |
 | --- | --- | --- | --- |
-| [Polars](https://deepwiki.com/pola-rs/polars) | Execution | Expression engine; lazy plan; pass ordering (projection pruning, predicate pushdown, slice pushdown, constant folding, dead-column elimination) | Common-subplan elimination via `Cache` nodes, join reordering, sort collapse — no payoff at v0.1 scale, and they need plan-level cost modelling |
+| [Polars](https://deepwiki.com/pola-rs/polars) | Execution | Expression engine; lazy plan; pass ordering (projection pruning, predicate pushdown, slice pushdown, constant folding, dead-column elimination); contiguous-slice groups (`GroupsType::Slice`) reduced in one pass across all groups (`agg_first`/`agg_last` as a single take, `agg_valid_count` over validity bits) | Common-subplan elimination via `Cache` nodes, join reordering, sort collapse — no payoff at v0.1 scale, and they need plan-level cost modelling |
 | [Kotlin DataFrame](https://deepwiki.com/Kotlin/dataframe) | Type safety | Declared schema → generated typed accessors and compile-time column names | Pipeline-wide schema *refinement* (see below) |
 | [RedAmber](https://github.com/heronshoes/red_amber) | API feel | Block verbs returning new frames; Arrow as the storage substrate | Ruby-only dynamic typing; we pair blocks with typed `Expr` values |
 | [Arquero](https://deepwiki.com/uwdata/arquero) | Verb vocabulary | Small relational verb set (`select`, `filter`, `derive`, `groupby`+`rollup`, `orderby`, `join`) | Its expression-string parser and its "no-copy" claims |
@@ -583,6 +593,7 @@ src/prism/verbs/sort.cr
 src/prism/verbs/distinct.cr
 src/prism/verbs/concat.cr
 src/prism/group_by.cr
+src/prism/grouped_agg.cr      # Phase 15: one pass across all groups
 src/prism/agg.cr
 src/prism/join.cr
 src/prism/lazy/frame.cr
@@ -1006,8 +1017,9 @@ library are expression sugar (`filter { … }`), typed-schema accessors
 ### 9.3 Executor
 
 A plan node yields an `Array(RecordBatch)` (the scan streams via `Iterator`;
-`DataFrame` materializes per node). Grouped aggregation sorts once then
-processes ranges; joins build a hash table on the right side keyed by each row's
+`DataFrame` materializes per node). Grouped aggregation sorts once, then reduces
+each aggregate across **all** ranges in one pass (`Prism::GroupedAgg`, Phase 15);
+joins build a hash table on the right side keyed by each row's
 `arrow-row` encoding (`Prism::RowKeys`), and the same encoding answers `distinct`
 and `n_unique`.
 
@@ -1201,14 +1213,18 @@ zero rows out, correct schema). Specs: `spec/prism/group_by_spec.cr`
 **Notes carried forward:**
 
 - Grouping is **sort-based**, which is Polars' `GroupsType::Slice` path: keys are
-  lexsorted, `Arrow.partition` yields contiguous ranges, and each range is
-  aggregated through a `RecordBatch#slice` view. No group is copied out and no
-  index list is built. Polars hashes by default and sorts only when keys are
-  already sorted; we always sort because it gives deterministic output order and
-  view-based groups, at O(n log n).
+  lexsorted, `Arrow.partition` yields contiguous ranges, and each range is a
+  `RecordBatch#slice` view. No group is copied out and no index list is built.
+  Polars hashes by default and sorts only when keys are already sorted; we always
+  sort because it gives deterministic output order and view-based groups, at
+  O(n log n). Phase 15 kept this shape and made it pay: contiguous ranges let one
+  pass reduce every group, and only `n_unique`/`median`/`std`/`var` still walk
+  per group.
 - All aggregations in one `aggregate` call walk the same ranges, so several
-  aggregates cost one sort, not one per aggregate.
-- `first`/`last` return an array slice, so they never materialize values.
+  aggregates cost one sort, not one per aggregate — and since Phase 15 they also
+  cost one pass each rather than one evaluation per group.
+- `first`/`last` are a single `Arrow.take` of the group's edge rows (Phase 15 —
+  before that they were one slice per group).
 - `std`/`variance`/`median` use Arrow kernels on the group (`cast` to Float64,
   `sub`/`mul`/`sum` for variance, `sort` + middle row for median) rather than
   materializing Crystal values.
@@ -1682,6 +1698,64 @@ and groups like the equivalent plain float column. Specs:
   `Prism::RowKeys` and in `docs/architecture.md` rather than silently fixed for
   one container type.
 
+### Phase 15 — Vectorized grouped aggregation (done)
+
+The §17 candidate the Phase 12 follow-up measured and could not justify
+touching until the numbers said where the time went: ~95% of a 1e5-key
+`group_by` was per-group overhead, not the sort.
+
+- [x] `Prism::GroupedAgg` reduces one operand across **every** group in one pass
+      instead of evaluating the aggregate expression per group: the operand is
+      evaluated once over the whole sorted batch (and shared between aggregates
+      that name it), and the result is one typed array
+- [x] Vectorized tier: `count` (validity-bitmap popcount per range, as Polars'
+      `agg_valid_count` does), `count_all` (range lengths), `first`/`last` (one
+      `Arrow.take` of the boundary rows), `sum`/`mean` (one fold per group,
+      wrapping integers and IEEE floats), `min`/`max` (one fold per group, IEEE
+      total order for floats, `bool_and`/`bool_or` for booleans, byte order for
+      strings)
+- [x] `n_unique`/`std`/`variance`/`median` keep the per-group Arrow kernel but
+      start from the already-evaluated operand and build one result array, so no
+      expression is re-evaluated and no `Arrow.concat` happens
+- [x] A nested aggregation (`col("a").sum.mean`) and any dtype `Series#min` itself
+      rejects keep the original per-group evaluation, so error messages and
+      undefined shapes are unchanged
+- [x] `GroupBy#execute` no longer keeps `Arrow.concat`-of-pieces on the common
+      path; `concatenate_groups` survives only as that last resort
+
+**Acceptance:** `make bench` with the same harness before and after: on a
+1e6-row/1e5-group frame, `count` 419 → 235 ms, one `sum` 326 → 235 ms, three
+aggregates 544 → 237 ms, `n_unique` 469 → 329 ms. One aggregate and three cost
+the same, which is the whole point — the aggregate layer is no longer where a
+group-by spends its time. Results are unchanged: the full suite is green and
+`group_by_spec.cr` gained parity specs for wrapping integer sums, IEEE total-order
+float extremes, boolean extremes, null-at-the-edge `first`/`last`, all-null
+groups, and a counting expression that proves the operand is evaluated **once**
+for all groups (shared by `sum` and `count` over the same operand).
+`property_spec.cr` adds a per-key oracle for `first`/`last`/`count`/`count_all`.
+Suite: 436 examples.
+
+**Notes carried forward:**
+
+- **Contiguous ranges are what make this possible**, and that is the strongest
+  argument yet for sort-based grouping: `first`/`last` collapse to one `take`,
+  `count` to a popcount, and each numeric fold to one pass. A hash grouping
+  (`GroupsType::Idx`) would need a gather per group — the exact cost this phase
+  deleted. Polars draws the same line: its `GroupsType::Slice` path is the fast
+  one, and its per-group `_agg_helper_slice` fallback preallocates the output,
+  which is the shape the remaining per-group kernels here use.
+- **`count` reads validity bits, not rows.** `ArrayBase#count` is
+  `len - logical_null_count`, so counting valid bits in the group's sliced
+  validity buffer gives the same answer with one bit operation per eight rows.
+  Using `logical_nulls` (not `nulls`) keeps dictionary arrays agreeing with
+  `Series#count`.
+- **Empty and all-null groups are pinned.** `first`/`last` return the group's
+  edge row even when it is null (they are views, not "first non-null"), and an
+  all-null group's `sum`/`min`/`max`/`mean` is null, not zero.
+- **The remaining cost is the sort and the full-width gather**, not the
+  aggregation, which is what moves column pruning in eager `group_by` to the top
+  of the next-up list.
+
 ## 13. Testing strategy
 
 - Spec layout mirrors `src/prism/`. See
@@ -1841,16 +1915,19 @@ Why this shape:
   match nulls (`nulls_equal: false`) checks the key columns' null bitmaps before
   indexing or probing, which costs nothing when the keys have no nulls.
 - **Grouping stays sort-based on purpose, and the benchmark closed the
-  question.** `group_by` yields contiguous `[start, len]` ranges as
+  question twice.** `group_by` yields contiguous `[start, len]` ranges as
   `RecordBatch#slice` views and a deterministic output order; a hash table would
-  give both up. The gate was "only if a benchmark shows grouping dominating", and
-  the decomposition says otherwise: on 1e6 rows / 1e5 keys, the key's
-  `lexsort_to_indices` is **35 ms of a 1005 ms** group-by, while ~95% of the time
-  is per group (a `Series`, an `EvalContext`, a length-1 array and one
-  `Arrow.concat` piece each). Hash grouping would therefore buy ~4% and cost the
-  views, so it is declined rather than deferred. The real lever is vectorizing
-  the per-group work, which is a redesign of the aggregate layer (§14
-  *Benchmarks*, [`docs/benchmarks.md`](../docs/benchmarks.md)).
+  give both up. The first measurement (Phase 12 follow-up) found the key's
+  `lexsort_to_indices` to be **35 ms of a 1005 ms** group-by, while ~95% of the
+  time was per group (a `Series`, an `EvalContext`, a length-1 array and one
+  `Arrow.concat` piece each), so hashing would have bought ~4%. That named the
+  real lever: vectorize the per-group work. **Phase 15 did that**, and the answer
+  strengthened rather than weakened: with one pass across all groups, `count`,
+  `first`, `last` and the numeric folds are nearly free, so the sort plus the
+  full-width row gather *is* the remaining cost — and the contiguous ranges are
+  what make the single pass possible. A hash table would now trade one sort for a
+  gather per group, which is precisely the cost vectorization removed (§14
+  *Vectorized grouped aggregation*).
 
 The decision trail is kept because it explains why this waited for a dependency:
 
@@ -1875,6 +1952,62 @@ the time — there were no benchmarks to justify a ~4k-line dependency port — 
 the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
 implementation request rather than a guess.
 
+### Vectorized grouped aggregation (Phase 15)
+
+`Prism::GroupedAgg` replaced the per-group loop. Before, an aggregate was evaluated
+per group: a batch slice, an `EvalContext`, a `Series`, a length-1 array and one
+`Arrow.concat` piece, ~2–4 µs per group. Now the operand expression is evaluated
+**once** over the whole sorted batch — shared between aggregates that name the
+same operand — and one walk over it fills one result array:
+
+| Aggregate | Kernel |
+| --- | --- |
+| `count` | popcount of the group's sliced validity buffer |
+| `count_all` | the range length |
+| `first`, `last` | one `Arrow.take` of the group-start / group-end rows |
+| `sum`, `mean` | one fold per group (wrapping integers, IEEE floats) |
+| `min`, `max` | one fold per group (IEEE total order for floats, `bool_and`/`bool_or` for booleans, byte order for strings) |
+| `n_unique`, `std`, `variance`, `median` | the per-group Arrow kernel, from the already-evaluated operand, into one result array |
+
+This is Polars' split, taken from the same place Polars takes it. In its
+`GroupsType::Slice` path (`polars-core/frame/group_by/aggregations`),
+`agg_first`/`agg_last` collect the group boundary indices and do a **single**
+`take`, `agg_valid_count` counts set bits in the group's validity `BitMask`, and
+the numeric aggregates either use a rolling kernel or fall back to a per-group
+`_agg_helper_slice` that **preallocates** the output — which is exactly the shape
+of the `n_unique`/`median`/`std`/`var` tier here. Polars' per-group fallback is
+fast in a way Crystal cannot be (a Rust `par_iter` over slices, no per-group
+allocations), which is why the fold-per-group kernels are one Crystal loop rather
+than a call per group.
+
+Reduction semantics stay Arrow's, so a grouped result equals the kernel applied to
+the same rows: nulls are skipped and an all-null group is null, integer sums wrap
+(`&+`), and float extremes compare in IEEE total order — `-0.0` below `0.0`,
+every NaN above `+inf` — matching `Arrow.min`/`max`'s `total_cmp`. Two shapes keep
+the old per-group expression evaluation on purpose: an operand that contains an
+aggregation (`col("a").sum.mean`, which has no defined cross-group meaning), and
+a dtype `Series#min` itself rejects, so the error message a user sees is still the
+one `Series` raises.
+
+Measured with the same harness, best of five, on `group_by("user_id")` over the
+1e6-row frame (1e5 groups):
+
+| step | before (ms) | after (ms) |
+| --- | ---: | ---: |
+| `lexsort_to_indices` on the key alone | 118 | 151 |
+| `group_by` + `count` | 419 | 235 |
+| `group_by` + one `sum` | 326 | 235 |
+| `group_by` + three aggregates | 544 | 237 |
+| `group_by` + `n_unique` | 469 | 329 |
+| `distinct` on the same keys (one hash pass) | 61 | 58 |
+
+One aggregate and three now cost the same, which is the point: the aggregate
+layer stopped being where a group-by spends its time. The floor is the sort plus
+the `take_record_batch` that gathers every column, so **column pruning in eager
+`group_by`** is the next item rather than another aggregate optimisation.
+`n_unique` remains the one visibly-above-floor aggregate, because distinctness
+per group is a hash pass per group rather than a fold.
+
 ### Where we deliberately differ from Arquero
 
 Arquero's deferred `BitSet` mask makes eager `filter` free, but every subsequent
@@ -1890,29 +2023,34 @@ projection is zero-copy, so filter-dominated workloads are not the bottleneck
 
 `make bench` runs [`bench/main.cr`](../bench/main.cr) over one 1e6-row frame;
 scenarios, numbers and the reading of them live in
-[`docs/benchmarks.md`](../docs/benchmarks.md). Headlines (Apple M4, Crystal
-1.22.2, best of five):
+[`docs/benchmarks.md`](../docs/benchmarks.md). Headlines, from the latest run
+(Apple M4, Crystal 1.22.2, best of five; the machine was loaded, so every
+absolute is ~1.3–1.5x an idle run and only the within-run comparisons matter):
 
 | Path | Time |
 | --- | ---: |
-| `filter` on half the rows | 48 ms |
+| `filter` on half the rows | 50 ms |
 | `select` / `to_arrow` (one chunk) | 0 ms (same buffers) |
-| `sort_by` one key / two keys | 202 ms / 935 ms |
-| `sort_by` + `limit 10`, eager / window gathered | 211 ms / 130 ms |
-| `group_by` 4 keys / 1e5 keys | 220 ms / 381 ms |
-| `distinct` / `n_unique` on 1e5 keys, before / after row keys | 163 / 144 ms → 54 / 48 ms |
-| join 1e6 → 1e5, before / after row keys | 284 ms → 219 ms |
-| Parquet read all / 2 of 4 columns / `limit 100` | 117 ms / 74 ms / 3 ms |
-| Parquet predicate, unclustered / clustered | 155 ms / 111 ms |
-| Lazy scan+filter+select vs eager | 119 ms vs 142 ms |
+| `sort_by` one key / two keys | 212 ms / 1134 ms |
+| `sort_by` + `limit 10`, eager / window gathered | 318 ms / 153 ms |
+| `group_by` 4 keys / 1e5 keys | 263 ms / 293 ms |
+| `distinct` / `n_unique` on 1e5 keys, before / after row keys | 163 / 144 ms → 80 / 69 ms |
+| join 1e6 → 1e5 | 309 ms (219 ms in the idle run; row keys bought 284 → 219) |
+| Parquet read all / 2 of 4 columns / `limit 100` | 139 ms / 83 ms / 4 ms |
+| Parquet predicate, unclustered / clustered | 176 ms / 224 ms (285 ms unfiltered) |
+| Lazy scan+filter+select vs eager | 159 ms vs 187 ms |
 
 What they decide:
 
 - **A pinned slice gathers only its window** (`DataFrame#sort_by_slice`, wired
-  into `Plan::Sort#execute`): `sort + head(10)` costs 130 ms through the plan
-  against 211 ms for eager sort-then-trim, and the gap is the 1e6-row copy the
+  into `Plan::Sort#execute`): `sort + head(10)` costs 153 ms through the plan
+  against 318 ms for eager sort-then-trim, and the gap is the 1e6-row copy the
   eager path still makes. The sort itself is still `O(n log n)` — a bounded-heap
   top-k is an `arrow-cr` kernel this port does not have, not a Prism change.
+- **`group_by` is no longer dominated by its aggregates** (Phase 15): 4 keys and
+  1e5 keys now cost about the same as the sort that precedes them, because one
+  pass reduces every group. See *Vectorized grouped aggregation* above for the
+  before/after decomposition.
 - **`arrow-row` was worth it, and mostly for `distinct`/`n_unique`.** Those were
   sort-bound at 163/144 ms and are now 3.0x faster (54/48 ms); the join improves
   1.3x, because a 1e6-row encode, probe and gather is not dominated by key
@@ -1940,13 +2078,15 @@ separate probe decomposed one 1e5-key group-by on the same frame, best of five
 | `group_by` + three aggregates | 1005 ms |
 | `distinct` on the same keys (row-keyed) | 91 ms |
 
-The sort a hash table would remove is under 4% of the total, so **hash-based
-grouping is declined, not deferred**: it would give up contiguous group views and
-deterministic ordering for ~4%. What *is* worth attacking later is the per-group
-work — ~4 µs per group for `count`, ~2.5 µs per additional aggregate, against
-`distinct`'s single hash pass over the identical keys (11x cheaper). That is the
-"vectorized per-group aggregation" candidate in the resume block, and it needs
-one kernel across all groups rather than one slice per group.
+The sort a hash table would remove was under 4% of that total, so hash-based
+grouping was declined at the time: it would have given up contiguous group views
+and deterministic ordering for ~4%. What the probe *did* show was where the time
+went — ~4 µs per group for `count`, ~2.5 µs per additional aggregate, against
+`distinct`'s single hash pass over the identical keys — and that is what Phase 15
+removed. The same probe re-run after it (see *Vectorized grouped aggregation*)
+puts one aggregate and three at the same 235 ms, so the aggregates are no longer
+the cost, and hashing would now trade the sort for a per-group gather: the exact
+work vectorization deleted. Declined a second time, with a sharper reason.
 
 ## 15. Risks and open questions
 
@@ -1956,7 +2096,7 @@ one kernel across all groups rather than one slice per group.
 | `&` precedence mis-parses user expressions | `.and`/`.or` provided; docs lead with the parenthesised form |
 | `arrow-cr`/`parquet-cr` are young; a kernel may be missing or wrong | Never patch `lib/`; reproduce, file upstream, document the workaround in this plan |
 | Multi-chunk frames complicate every verb | Element-wise verbs are chunk-agnostic by construction; ordering verbs materialize |
-| Group-by via sort is O(n log n) | Measured: the sort is 35 ms of a 1005 ms 1e5-key group-by, so `O(n log n)` is not where the time goes. Per-group overhead is the real cost (vectorizing it is candidate work, §14); a hash path was measured and declined |
+| Group-by via sort is O(n log n) | Measured twice: the sort was 35 ms of a 1005 ms 1e5-key group-by before vectorization, and after it the sort plus the row gather *is* the floor while the aggregates are nearly free (§14). The `O(n log n)` sort is the price of the contiguous ranges that make the single pass possible, and a hash path was measured and declined twice |
 | Typed-schema macro complexity | Isolated in Phase 8 with its own spec file; API is additive |
 | Users expect Kotlin-style typing through every verb | §4.1 states the boundary limit up front; `S.from_dataframe` documented as the re-entry point |
 | Out-of-range literal vs a narrow column raises instead of folding | Polars rewrites such comparisons to a constant. Constant folding is Phase 7 work; documented in §8.2 |
@@ -2034,7 +2174,8 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | `remove(expr)`, the inverse of `filter` (RedAmber) | needs its own null rule — keep rows where the predicate is false **or** null, which is not `filter(pred.not)` | 12 (done) |
 | Boolean-mask filtering: `df.filter(series > 10)` (RedAmber) | needs elementwise `>`/`<`/`>=`/`<=` on `Series` first; only `==` existed | 12 (done) |
 | Hash-based grouping | the stated gate was "only if a benchmark shows grouping dominating"; a probe put the key sort at 35 ms of a 1005 ms 1e5-key group-by, so hashing would buy ~4% for the group views and deterministic order | 12 follow-up (measured, declined) |
-| Vectorized per-group aggregation | the real cost is per group (~4 µs for `count`, ~2.5 µs per extra aggregate at 1e5 groups); it needs one kernel across all groups instead of one slice per group, which is a redesign of the aggregate layer | candidate (needs a design, numbers in §14) |
+| Vectorized per-group aggregation | the real cost is per group (~4 µs for `count`, ~2.5 µs per extra aggregate at 1e5 groups); it needs one kernel across all groups instead of one slice per group, which is a redesign of the aggregate layer | 15 (done) |
+| Column pruning inside eager `group_by` | after Phase 15 the aggregates are nearly free, so the key sort and the full-width `take_record_batch` are the floor; the planner prunes for lazy pipelines but the eager verb still gathers every column | candidate (next up) |
 | Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | 13 (done) |
 | Interval materialization: `Value` had no month/day/nano member, so interval columns could not reach `to_a`/`rows`/display | it needed a value shape for all three Arrow units; `Arrow::IntervalValue` is that shape, so no new type was introduced | 14 (done) |
 | Dictionary-encoded float keys were compared by value but not canonicalized | the values are what gets encoded, so canonicalizing them in place keeps the dictionary dtype and makes keying agree with plain float columns | 14 (done) |

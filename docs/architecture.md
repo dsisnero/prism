@@ -345,7 +345,7 @@ Arrow provides sort and partition, not group-by:
 
 ```text
 lexsort_to_indices(keys) -> take_record_batch -> partition(keys) -> ranges
-  -> per-range aggregate on a slice view -> Arrow.concat the scalars
+  -> one vectorized pass per aggregate over the ranges
 ```
 
 This is Polars' sort-based path (`GroupsType::Slice`, contiguous `[start, len]`
@@ -358,17 +358,46 @@ always sort, which buys:
 - **Deterministic order.** `maintain_order: true` (default) restores discovery
   order by tracking each group's smallest original row index; `false` leaves the
   sorted order.
+- **Vectorized aggregation.** Contiguous ranges are what let one pass reduce
+  every group (below). A hash representation (`GroupsType::Idx`) would need a
+  gather per group, so the sort now pays for itself rather than merely ordering
+  the output.
 
-Cost is O(n log n) per grouping rather than O(n). A hash path is possible later
-(Polars' `Idx` representation); the tradeoff would be losing zero-copy group
-views.
+Cost is O(n log n) per grouping rather than O(n), which the benchmarks keep in
+perspective: at 1e5 keys the aggregates are ~free and the sort plus the row
+gather dominate.
 
-Aggregations run through `Prism::Series` and Arrow kernels on the group slice:
-`sum`/`mean`/`min`/`max` via `arrow-cr` aggregate kernels, `first`/`last` as
-array slices (never materialized), `variance`/`std` as
-`sum((x - mean)^2) / (n - ddof)` with `sub`/`mul`/`sum`, and `median` via
-`sort` plus the middle row. In-memory aggregation specializations that Polars
-uses for rolling windows are out of scope.
+### Vectorized aggregation
+
+`Prism::GroupedAgg` reduces the operand **once** for all groups instead of once
+per group, which is what made a 1e5-key `group_by` slow: per group it cost a
+batch slice, an `EvalContext`, a `Series`, a length-1 array and one
+`Arrow.concat` piece (~4 µs each). The operand expression is now evaluated once
+over the whole sorted batch — shared between aggregates that name the same
+operand — and the result is one array:
+
+| Aggregate | How |
+| --- | --- |
+| `count` | popcount of the group's validity bits, like Polars' `agg_valid_count` |
+| `count_all` | the range length |
+| `first`, `last` | one `Arrow.take` of the group-start/group-end rows |
+| `sum`, `mean` | one fold per group (wrapping integers, IEEE floats) |
+| `min`, `max` | one fold per group (IEEE total order for floats, `bool_and`/`bool_or` for booleans) |
+| `n_unique`, `std`, `variance`, `median` | per-group Arrow kernel, but the operand is already evaluated and the result is built once |
+
+That split matches Polars: it takes group boundary indices for `agg_first`/
+`agg_last`, counts validity bits for `agg_valid_count`, and falls back to a
+per-group kernel (`_agg_helper_slice`) for the rest — while preallocating the
+output buffer, which is why its fallback is fast. Reductions keep Arrow's
+semantics, so a grouped result equals the kernel applied to the same rows:
+nulls are skipped and an all-null group is null, integer sums wrap, and float
+extremes use total order (`-0.0` below `0.0`, every NaN above `+inf`). A nested
+aggregation (`col("a").sum.mean`) has no defined cross-group meaning, so it keeps
+the per-group evaluation rather than acquiring one silently.
+
+`variance`/`std` are `sum((x - mean)^2) / (n - ddof)` with `sub`/`mul`/`sum`, and
+`median` is `sort` plus the middle row — both per group, on the already-evaluated
+operand.
 
 Null keys form one group. `null_keys: :first | :last` controls placement
 (:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows

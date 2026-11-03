@@ -150,6 +150,7 @@ reference over seeded random frames (120 rows, six seeds, under 100 ms):
 | --- | --- |
 | `distinct` | first occurrence over a `Set` of key tuples |
 | `group_by` (one and two keys) | per-key `Hash` loop |
+| `group_by` `first`/`last`/`count`/`count_all` | per-key `Hash` loop tracking edges and counts |
 | `join` inner/left | nested loop, null keys never match |
 | `semi`/`anti` | membership filter over the inner-join row ids |
 | `sort_by` on a nullable float | stable sort with nulls last |

@@ -28,6 +28,7 @@ require "./prism/expression/operators"
 require "./prism/row_keys"
 require "./prism/aggregates"
 require "./prism/expression/aggregations"
+require "./prism/grouped_agg"
 
 require "./prism/verbs/filter"
 require "./prism/verbs/select"

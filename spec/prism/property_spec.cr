@@ -96,6 +96,42 @@ private def reference_group_by(frame : Prism::DataFrame) : Array(Array(Prism::Va
   end
 end
 
+# First and last row of each group's `amount` (nulls included, since a group's
+# edge row can be null), plus non-null and total counts, in discovery order.
+private def reference_group_edges(frame : Prism::DataFrame) : Array(Array(Prism::Value))
+  regions = frame["region"].to_a
+  amounts = frame["amount"].to_a
+
+  order = [] of Prism::Value
+  firsts = Hash(Prism::Value, Prism::Value).new
+  lasts = Hash(Prism::Value, Prism::Value).new
+  present = Hash(Prism::Value, UInt32).new
+  rows = Hash(Prism::Value, UInt32).new
+
+  regions.each_with_index do |region, row|
+    unless rows.has_key?(region)
+      order << region
+      present[region] = 0_u32
+      rows[region] = 0_u32
+    end
+
+    firsts[region] = amounts[row] unless firsts.has_key?(region)
+    lasts[region] = amounts[row]
+    present[region] += 1 unless amounts[row].nil?
+    rows[region] += 1
+  end
+
+  order.map do |region|
+    [
+      region,
+      firsts[region],
+      lasts[region],
+      present[region].as(Prism::Value),
+      rows[region].as(Prism::Value),
+    ] of Prism::Value
+  end
+end
+
 # Nested-loop join on `bucket`; null keys never match.
 private def reference_join(
   left : Prism::DataFrame,
@@ -160,6 +196,21 @@ describe "property checks" do
 
       rows_of(grouped, ["region", "total", "smallest", "largest", "average"])
         .should eq(reference_group_by(random_frame(Random.new(seed))))
+    end
+  end
+
+  it "group_by first/last and counts match a per-key loop" do
+    REPEATS.times do |seed|
+      frame = random_frame(Random.new(seed))
+      grouped = frame.group_by("region").aggregate(
+        first: col("amount").first,
+        last: col("amount").last,
+        present: col("amount").count,
+        rows: col("amount").count_all,
+      )
+
+      rows_of(grouped, ["region", "first", "last", "present", "rows"])
+        .should eq(reference_group_edges(frame))
     end
   end
 

@@ -28,6 +28,42 @@ private def null_key_frame : Prism::DataFrame
   Prism.from_arrow(null_key_batch)
 end
 
+# Counts evaluations, to prove a grouped aggregate reduces one operand across
+# every group instead of re-evaluating the expression per group.
+private class CountedOperand < Prism::Expr
+  @@evals = 0
+
+  def self.evals : Int32
+    @@evals
+  end
+
+  def self.reset : Nil
+    @@evals = 0
+  end
+
+  getter inner : Prism::Expr
+
+  def initialize(@inner : Prism::Expr)
+  end
+
+  def key : String
+    "counted(#{@inner.key})"
+  end
+
+  def columns : Array(String)
+    @inner.columns
+  end
+
+  def dtype(schema : Arrow::Schema) : Arrow::DataType
+    @inner.dtype(schema)
+  end
+
+  def eval(ctx : Prism::EvalContext) : Prism::Datum
+    @@evals += 1
+    @inner.eval(ctx)
+  end
+end
+
 describe Prism::GroupBy do
   describe "single key" do
     it "returns groups in discovery order by default" do
@@ -349,6 +385,101 @@ describe Prism::GroupBy do
       })
 
       expect_raises(Prism::DtypeError, /sum/) { frame.group_by("k").sum }
+    end
+  end
+
+  describe "vectorized aggregation" do
+    # Counts evaluations, to prove the operand is reduced once for all groups.
+    it "evaluates an aggregate operand once, sharing it between aggregates" do
+      frame = Prism.from_columns({
+        k: Arrow::Int64Array.from_values(Array.new(40) { |row| (row % 2).to_i64 }),
+        v: Arrow::Int64Array.from_values(Array.new(40, &.to_i64)),
+      })
+      operand = CountedOperand.new(col("v"))
+
+      CountedOperand.reset
+      grouped = frame.group_by("k").aggregate(total: operand.sum, present: operand.count)
+
+      # Two groups, but the operand is evaluated once for both.
+      CountedOperand.evals.should eq(1)
+      grouped["total"].to_a.should eq([380_i64, 400_i64])
+      grouped["present"].to_a.should eq([20_u32, 20_u32])
+    end
+
+    it "sums narrow integers in the column dtype, wrapping like Arrow" do
+      column = Arrow::PrimitiveArray(Int16)
+        .from_values([30_000_i16, 30_000_i16, 30_000_i16, 7_i16])
+      frame = Prism.from_columns({
+        k: Arrow::StringArray.from_values(["a", "a", "a", "b"]),
+        v: column,
+      })
+
+      grouped = frame.group_by("k").aggregate(total: col("v").sum)
+
+      grouped.dtypes["total"].should eq(Arrow::DataType.int16)
+      # 30_000 + 30_000 + 30_000 overflows Int16; the kernel wraps, and so must
+      # the grouped fold.
+      wrapped = Arrow.sum(column.slice(0, 3).as(Arrow::PrimitiveArray(Int16)))
+      grouped["total"].to_a.map(&.as(Int16?)).should eq([wrapped, 7_i16])
+    end
+
+    it "takes float extremes in IEEE total order, like Arrow" do
+      values = [0.0, -0.0, -1.5, Float64::NAN, 3.0]
+      frame = Prism.from_columns({
+        k: Arrow::StringArray.from_values(["a", "a", "a", "b", "b"]),
+        v: Arrow::Float64Array.from_values(values),
+      })
+
+      grouped = frame.group_by("k").aggregate(low: col("v").min, high: col("v").max)
+
+      # -0.0 sorts below 0.0, and NaN sorts above +inf, so it is never the min.
+      grouped["low"].to_a.should eq([-1.5, 3.0])
+      grouped["high"].to_a[0].as(Float64).should eq(0.0)
+      grouped["high"].to_a[1].as(Float64).nan?.should be_true
+    end
+
+    it "keeps a null at the group edge for first and last" do
+      batch = Arrow::RecordBatch.from_columns({
+        k: Arrow::StringArray.from_values(["a", "a", "a"]),
+        v: Arrow::Float64Array.from_nullable([nil, 2.0, nil]),
+      })
+
+      grouped = Prism.from_arrow(batch).group_by("k").aggregate(
+        first: col("v").first,
+        last: col("v").last,
+      )
+
+      grouped["first"].to_a.should eq([nil])
+      grouped["last"].to_a.should eq([nil])
+    end
+
+    it "counts zero for a group whose values are all null" do
+      frame = Prism.from_columns({
+        k: Arrow::StringArray.from_values(["a", "a", "b"]),
+        v: Arrow::Int64Array.from_nullable([nil, nil, 5_i64]),
+      })
+
+      grouped = frame.group_by("k").aggregate(
+        present: col("v").count,
+        rows: col("v").count_all,
+        total: col("v").sum,
+      )
+
+      grouped["present"].to_a.should eq([0_u32, 1_u32])
+      grouped["rows"].to_a.should eq([2_u32, 1_u32])
+      grouped["total"].to_a.should eq([nil, 5_i64])
+    end
+
+    it "takes boolean extremes like Arrow's bool_and/bool_or" do
+      frame = Prism.from_columns({
+        k:    Arrow::StringArray.from_values(["a", "a", "b", "b", "c"]),
+        flag: Arrow::BooleanArray.from_nullable([true, false, true, true, nil]),
+      })
+
+      grouped = frame.group_by("k").aggregate(low: col("flag").min, high: col("flag").max)
+
+      grouped["low"].to_a.should eq([false, true, nil])
+      grouped["high"].to_a.should eq([true, true, nil])
     end
   end
 
