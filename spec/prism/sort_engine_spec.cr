@@ -57,6 +57,22 @@ describe Prism::SortEngine do
       Prism::SortEngine.indices(columns, rows + 5).to_a.compact.should eq(full)
     end
 
+    # One unsortable key has no chain to fall back on: a single column goes
+    # straight to `sort_to_indices`, which has no struct case (Phase 23).
+    it "sorts a single key the per-key sort cannot order" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64]).as(Arrow::ArrayBase)},
+      ])
+      columns = [Arrow::SortColumn.new(structs.as(Arrow::ArrayBase))]
+
+      # x=1 rows are positions 1 and 3 (stable, in input order), then x=2.
+      Prism::SortEngine.indices(columns).to_a.compact
+        .should eq([1_u32, 3_u32, 0_u32, 2_u32])
+      Prism::SortEngine.indices(columns, 2).to_a.compact
+        .should eq([1_u32, 3_u32])
+    end
+
     it "falls back for a key the per-key sort cannot order" do
       structs = Arrow::StructArray.from_pairs([
         {Arrow::Field.new("x", Arrow::DataType.int64, true),

@@ -344,6 +344,24 @@ describe Prism::DataFrame do
       sorted["price"].to_a.should eq([5.0, 5.0, nil, nil])
     end
 
+    # Same dtype split as below, but with one key: `lexsort_to_indices` forwards a
+    # single column to `sort_to_indices`, so there is no chain to catch it and the
+    # sort has to compare the structs directly (Phase 23).
+    it "sorts by a single struct key" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64]).as(Arrow::ArrayBase)},
+      ])
+      frame = Prism.from_columns({
+        "s"   => structs.as(Arrow::ArrayBase),
+        "qty" => Arrow::Int64Array.from_values([3_i64, 4_i64, 1_i64, 2_i64]),
+      })
+
+      frame.sort_by(col("s").asc)["qty"].to_a.should eq([4_i64, 2_i64, 3_i64, 1_i64])
+      frame.sort_by(col("s").desc)["qty"].to_a.should eq([3_i64, 1_i64, 4_i64, 2_i64])
+      frame.top_n(2, col("s").desc)["qty"].to_a.should eq([3_i64, 1_i64])
+    end
+
     # Sorting a struct key is supported by the comparator chain but not by the
     # per-key `sort_to_indices`, so the multi-key path must fall back rather than
     # raise "Sort not supported" (Phase 21).

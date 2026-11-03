@@ -6,6 +6,16 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- `group_by` (and `sort_by` / `top_n`) on a single nested or otherwise unsortable
+  key — struct, map, decimal, interval, run-end, union — no longer raises
+  `Sort not supported for data type ...`. With one column there is no
+  `lexsort` comparator chain to fall back on, so `Prism::SortEngine` now sorts
+  those keys with `Arrow.make_comparator` directly, tie-breaking by position so
+  the order stays stable. A struct key grouped by `group_by` returns the same
+  groups `distinct` reports for that key.
+
 ### Performance
 
 - A multi-key sort now runs one stable single-key pass per key (least significant

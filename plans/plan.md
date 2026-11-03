@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(472 examples, ~30 s warm). The table below is the only place that tracks status;
+(475 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is prepared on `main` — version, changelog and README are
@@ -43,18 +43,13 @@ what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **A single nested key cannot be grouped at all.** `group_by(col("s"))` on a
-   struct column raises `Sort not supported for data type Struct(...)`, because
-   the one-key path hands the key straight to `Arrow.sort_to_indices`, which has
-   no struct case; the multi-key path works only because it falls back to
-   `make_comparator`. `distinct` already groups struct keys through the
-   `arrow-row` encoding, so the gap is the sort, not the key. Fix: a
-   comparator-driven index sort inside `Prism::SortEngine` for dtypes neither
-   `sort_to_indices` nor the row encoding can express, and a spec that
-   `group_by(struct_key)` returns the same groups `distinct` implies.
-2. **Nothing else is queued.** The deferred table (§17) is closed apart from the
-   owner-gated folder rename; a new item should be proposed with a measurement
-   or a failing case, not planned speculatively.
+1. **Nothing is queued.** The deferred table (§17) is closed apart from the
+   owner-gated folder rename, and Phase 23 closed the last known correctness gap.
+   A new item should be proposed with a measurement or a failing case, not
+   planned speculatively.
+2. **Release is the owner's call.** `0.2.0` is prepared on `main` and untagged:
+   on the word, push `main`, tag `v0.2.0`, then check that a consumer resolves
+   `prism: github: dsisnero/prism` at `0.2.0`.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -63,10 +58,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **472 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**473**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**476**, ~1 min); with both
-set the suite is **477**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **475 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**476**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**479**, ~1 min); with both
+set the suite is **480**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -112,6 +107,7 @@ with nothing pending.
 | 20 | Eager `top_n`: the fast spelling of `sort_by(...).head(n)` | **done** |
 | 21 | Multi-key sort as stable single-key passes | **done** |
 | 22 | Sort strategy by dtype, shared by `group_by` (`Prism::SortEngine`) | **done** |
+| 23 | Single nested keys sort by comparison, so `group_by` accepts them | **done** |
 
 ---
 
@@ -2020,6 +2016,36 @@ Two deliberate limits:
 
 Phase 22 kept both limits and added a third (all-fixed-width keys), after
 measuring that the passes only win where a comparison itself is expensive.
+
+### A single nested key sorts by comparison (Phase 23)
+
+`group_by(col("s"))` on a struct column raised `Sort not supported for data type
+Struct(...)`. The gap was the sort, not the key: `distinct` and `n_unique`
+already key structs through the `arrow-row` encoding, and a *multi-key*
+`group_by` with a struct key worked, because `lexsort_to_indices` builds a
+`make_comparator` chain for two or more columns. One column is different —
+`lexsort_to_indices` forwards it to `sort_to_indices`, whose dispatch has no
+struct, map, decimal, interval, run-end or union case, so there was never a chain
+to fall back on.
+
+`SortEngine.indices` now routes that shape to `comparator_sort`, which sorts the
+index array with the comparator `Arrow.make_comparator` builds and breaks ties by
+position, so the order is the stable one a `sort_to_indices` dtype would have
+produced. `Arrow.partition` already falls back to the same comparator for struct
+keys, so `group_by` works end to end on it; the emitted keys are the original
+values, and grouping still canonicalizes float key columns first (§14, Phase 17).
+
+`limit` truncates after the full order rather than bounding the sort. That is the
+rare path (a struct/interval/decimal key), and a bounded comparator selection
+would mean reimplementing `sort_bounded` against a comparison this module does not
+own; the prefix is still the prefix a bounded sort returns, which is what
+`sort_by_slice` and `top_n` need.
+
+Specs pin the shape at three levels: `SortEngine` (the comparator path, with and
+without a bound), `DataFrame#sort_by`/`top_n` on a single struct key in both
+directions, and `group_by` on a single struct key where the group count must equal
+what `distinct` reports for the same key. Struct is the dtype the specs pin; the
+other unsortable dtypes reach the same branch through `per_key_sortable?`.
 
 ### The sort strategy is chosen by dtype, and `group_by` shares it (Phase 22)
 

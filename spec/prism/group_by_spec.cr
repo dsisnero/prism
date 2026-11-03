@@ -184,6 +184,33 @@ describe Prism::GroupBy do
     end
   end
 
+  describe "nested keys" do
+    # A struct key is a legal grouping key — `distinct` already handles it through
+    # the row encoding — but the key sort has to compare structs directly, which
+    # only `make_comparator` can do (Phase 23).
+    it "groups by a single struct key" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64, 2_i64]).as(Arrow::ArrayBase)},
+      ])
+      frame = Prism.from_columns({
+        "s"   => structs.as(Arrow::ArrayBase),
+        "qty" => Arrow::Int64Array.from_values([3_i64, 4_i64, 1_i64, 2_i64, 5_i64]),
+      })
+
+      grouped = frame.group_by(col("s"), maintain_order: false).aggregate(
+        total: col("qty").sum,
+        rows: col("qty").count_all,
+      )
+
+      # x=1 is one group (4 + 2), x=2 another (3 + 1 + 5).
+      grouped["total"].to_a.should eq([6_i64, 9_i64])
+      grouped["rows"].to_a.should eq([2_u32, 3_u32])
+      # The same key set `distinct` sees, so the two keyed verbs agree.
+      grouped.row_count.should eq(frame.select(col("s")).distinct.row_count)
+    end
+  end
+
   describe "null keys" do
     it "keeps null keys as one group, in discovery order by default" do
       grouped = null_key_frame.group_by("region").aggregate(

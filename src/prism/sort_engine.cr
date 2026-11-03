@@ -36,7 +36,15 @@ module Prism
     ) : Arrow::PrimitiveArray(UInt32)
       # `lexsort_to_indices` raises for an empty list and for columns of
       # different lengths; let it, so both callers see Arrow's own error.
-      return Arrow.lexsort_to_indices(columns, limit) if columns.size <= 1
+      return Arrow.lexsort_to_indices(columns, limit) if columns.empty?
+
+      sortable = columns.all? { |column| per_key_sortable?(column.values) }
+      # One key the per-key sort cannot express has no chain to fall back on:
+      # with a single column `lexsort_to_indices` forwards to `sort_to_indices`
+      # and raises, so the values are compared directly (Phase 23).
+      return comparator_sort(columns.first, limit) if columns.size == 1 && !sortable
+      # A single sortable key already is one dtype-specialized sort.
+      return Arrow.lexsort_to_indices(columns, limit) if columns.size == 1
 
       # A bounded window, a dtype only the chain can order, and all-fixed-width
       # keys all take the chain; only variable-length keys pay for the passes.
@@ -45,14 +53,40 @@ module Prism
       row_count = columns.first.values.len
       unbounded = limit.nil? || limit >= row_count
       return Arrow.lexsort_to_indices(columns, limit) unless unbounded
-      unless columns.all? { |column| per_key_sortable?(column.values) }
-        return Arrow.lexsort_to_indices(columns, limit)
-      end
+      return Arrow.lexsort_to_indices(columns, limit) unless sortable
       unless columns.any? { |column| expensive_to_compare?(column.values.data_type) }
         return Arrow.lexsort_to_indices(columns, limit)
       end
 
       stable_lexsort(columns)
+    end
+
+    # Sorts one column with the comparator `Arrow.make_comparator` builds, for the
+    # dtypes `Arrow.sort_to_indices` has no case for: struct, map, decimal,
+    # interval, run-end and union keys are comparable but not sortable on their
+    # own. That also unblocks `group_by` on such a key, which is legal everywhere
+    # else in Arrow — `Arrow.partition` falls back to the same comparator.
+    #
+    # `limit` truncates after the full order rather than bounding the sort: this
+    # is the rare path, and a bounded selection through `make_comparator` would
+    # mean reimplementing `sort_bounded` for a comparison this module does not
+    # own. The prefix it returns is the same one a bounded sort would.
+    private def comparator_sort(
+      column : Arrow::SortColumn,
+      limit : Int32?,
+    ) : Arrow::PrimitiveArray(UInt32)
+      values = column.values
+      compare = Arrow.make_comparator(values, values, column.options || Arrow::SortOptions.default)
+      indices = Array(UInt32).new(values.len, &.to_u32)
+      indices.sort! do |left, right|
+        result = compare.call(left.to_i32, right.to_i32)
+        # Tie-break by position, which makes this a stable order and therefore
+        # the same order a stable sort of the same values would return.
+        result == 0 ? left.to_i32 <=> right.to_i32 : result
+      end
+
+      length = limit ? Math.min(limit, indices.size) : indices.size
+      Arrow::PrimitiveArray(UInt32).from_values(indices[0, length])
     end
 
     # `Arrow.sort_to_indices` dispatches on the array class and covers fewer
