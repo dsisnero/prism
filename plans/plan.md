@@ -26,13 +26,13 @@ implicit.
 (452 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
-**State:** `v0.2.0` is tagged and published at
-[`dsisnero/prism`](https://github.com/dsisnero/prism), and it is what `main`
-carries: the Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14
-value-coverage work, the Phase 15 vectorized aggregation, the Phase 16
-eager-grouping pruning, the Phase 17 nested-key canonicalization and the Phase 18
-bounded sort. Phases 0–18 are closed apart from the cosmetic local folder
-rename; nothing is unreleased.
+**State:** `0.2.0` is prepared on `main` — version, changelog and README are
+bumped for Phases 12–18 — but **not tagged**: tagging and publishing are
+owner-gated, so the last published release is still `v0.1.1`. `main` carries the
+Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage
+work, the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning,
+the Phase 17 nested-key canonicalization and the Phase 18 bounded sort. Phases
+0–18 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `728ce51` (includes the bounded
 sort, `5b4b958`) and `parquet-cr` `25a889e` (both `branch: main`, resolved from
@@ -68,8 +68,10 @@ vectorization just removed.
 `PRISM_EXAMPLE_SPECS=1` adds the four example specs (**456**, ~1 min); with both
 set the suite is **457**. Run both before a release.
 
-**Last commits:** `v0.2.0` is tagged at `66d11a8` (the release commit), which
-carries Phases 12–19. Per phase, on `main`: `326a0b4` ergonomics, `a7f1cd7` rows,
+**Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
+README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
+tag created during prep was removed on request. Per phase, on `main`: `326a0b4`
+ergonomics, `a7f1cd7` rows,
 `2eac6e4` intervals and dictionary float keys, `414cf68` vectorized aggregation,
 `cd473ea` group_by pruning, `b308373` nested float keys, `36aa01b` list-view keys
 plus the `arrow-cr` report, `30f28a9` the bounded sort. Everything is on `main`
@@ -1532,7 +1534,8 @@ a struct array: decimals materialize instead of raising.
       `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (365),
       and verified as a consumer: a fresh project with
       `prism: github: dsisnero/prism` resolves `0.1.1` and runs `group_by`
-- [x] v0.2.0 tag — Phases 12–18 released on `2026-11-03` after
+- [ ] v0.2.0 tag — **prepared, not tagged** (owner says when). Phases 12–18 are
+      release-ready as of `2026-11-03` after
       `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (457;
       452 without the opt-in suites). `shard.yml` and `Prism::VERSION` both say
       `0.2.0` and the spec suite checks them against each other, so the release
