@@ -41,6 +41,7 @@ module Bench
     projection(frame)
     sorting(frame)
     grouping(frame)
+    wide_grouping
     keys(frame, dimension)
     parquet(frame)
     clustered(frame)
@@ -107,6 +108,18 @@ module Bench
     end
 
     timed("group_by 1e5 keys", "one sort, three aggregates") do
+      frame.group_by("user_id").aggregate(
+        total: col("qty").sum,
+        average: col("price").mean,
+      )
+    end
+  end
+
+  # A wide frame: only the key and the two aggregated columns should be gathered.
+  def wide_grouping : Nil
+    frame = wide
+
+    timed("group_by 1e5 keys, 48 unused columns", "Phase 16 pruning") do
       frame.group_by("user_id").aggregate(
         total: col("qty").sum,
         average: col("price").mean,
@@ -225,6 +238,27 @@ module Bench
       "qty"     => Arrow::Int64Array.from_values(Array.new(ROWS) { rng.rand(1_000).to_i64 }),
       "price"   => Arrow::Float64Array.from_values(Array.new(ROWS) { rng.next_float * 100.0 }),
     })
+  end
+
+  # 52 columns where the aggregation reads three. Phase 16 prunes the rest before
+  # the key sort and the row gather, so this scenario tracks that pruning.
+  WIDE_ROWS    = 200_000
+  WIDE_PAYLOAD =      48
+
+  def wide : Prism::DataFrame
+    rng = Random.new(44)
+
+    columns = {} of String => Arrow::ArrayBase
+    columns["user_id"] = Arrow::Int64Array.from_values(Array.new(WIDE_ROWS) { rng.rand(USERS).to_i64 })
+    columns["region"] = Arrow::StringArray.from_values(Array.new(WIDE_ROWS) { REGIONS[rng.rand(REGIONS.size)] })
+    columns["qty"] = Arrow::Int64Array.from_values(Array.new(WIDE_ROWS) { rng.rand(1_000).to_i64 })
+    columns["price"] = Arrow::Float64Array.from_values(Array.new(WIDE_ROWS) { rng.next_float * 100.0 })
+    WIDE_PAYLOAD.times do |index|
+      columns["payload_#{index}"] =
+        Arrow::Int64Array.from_values(Array.new(WIDE_ROWS) { rng.rand(1_000).to_i64 })
+    end
+
+    Prism.from_columns(columns)
   end
 
   def segments : Prism::DataFrame

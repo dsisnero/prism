@@ -128,6 +128,23 @@ physical layout, which is what row-group statistics are for.
 the scan reads 3 of 4 columns instead of 4 and filters while decoding. The gap is
 small because the predicate's own column dominates the read.
 
+**Eager `group_by` now gathers only the columns it reads (Phase 16).** The
+aggregation output is keys plus aggregates, so payload columns are dead weight;
+the frame is pruned to the pruning set (`GroupBy.required_columns`) before the key
+sort and the `take`. Measured on a 52-column frame, 200k rows, 1e5 groups, two
+aggregates, best and median of five in one session:
+
+| scenario | before (ms) | after (ms) |
+| --- | ---: | ---: |
+| `group_by` on 52 columns, 2 aggregates (best) | 252.6 | 20.2 |
+| same (median) | 256.4 | 20.9 |
+
+Roughly 12.5×. What remains is the key sort plus gathering the three columns the
+aggregation actually reads; the 48 payload columns were pure overhead. The
+1e6-row four-column frame in the table above is unaffected, because it had
+nothing to prune. `bench/main.cr` tracks the case as "group_by 1e5 keys, 48
+unused columns".
+
 ## What is deliberately missing
 
 - **Allocation/copy counts.** The plan's "never allocates" list is still checked

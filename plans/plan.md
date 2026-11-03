@@ -29,8 +29,8 @@ do not re-derive it from `git log`.
 **State:** `v0.1.1` is tagged and published at
 [`dsisnero/prism`](https://github.com/dsisnero/prism), and `main` carries the
 Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage work
-and the Phase 15 vectorized aggregation (all unreleased). Phases 0–15 are closed
-apart from the cosmetic local folder rename.
+the Phase 15 vectorized aggregation and the Phase 16 eager-grouping pruning (all
+unreleased). Phases 0–16 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `62c5e91` and `parquet-cr`
 `25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
@@ -38,14 +38,15 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Prune columns in eager `group_by`** — the aggregate layer is now nearly free
-   (Phase 15), so what a 1e5-key group-by costs is the key sort plus the
-   `take_record_batch` that gathers **every** column (§14). A 50-column frame
-   currently pays to gather 50 columns to aggregate two; the planner already
-   prunes for lazy pipelines, and the eager verb should reuse that.
-2. **Floats nested inside list/struct/map key columns** are still keyed by
+1. **Floats nested inside list/struct/map key columns** are still keyed by
    `totalOrder` bits rather than canonicalized; reaching a float child means
    rebuilding the parent layout, so it needs a real case before it is worth it.
+2. **Physical top-k for a pinned slice** — `sort_by` + `head(n)` already gathers
+   only the window, but the sort is still `O(n log n)` because
+   `lexsort_to_indices` sorts everything. A bounded heap is an `arrow-cr` kernel
+   this port does not model, so this is an upstream item before it is a Prism one.
+3. **Release `v0.2.0`** — Phases 12–16 are unreleased (`v0.1.1` is the last tag):
+   changelog, a benchmark refresh against the current arrows, and the tag.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -54,10 +55,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **436 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**437**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**440**, ~1 min); with both
-set the suite is **441**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **442 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**443**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**446**, ~1 min); with both
+set the suite is **447**. Run both before a release.
 
 **Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
 `326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
@@ -93,6 +94,7 @@ nothing is released since `v0.1.1`.
 | 13 | Rows: `DataFrame#rows` and `define_schema`-generated `S::Row` | **done** |
 | 14 | Value coverage: interval materialization and dictionary float keys | **done** |
 | 15 | Vectorized grouped aggregation: one pass across all groups | **done** |
+| 16 | Eager `group_by` prunes unread columns before the sort and gather | **done** |
 
 ---
 
@@ -1958,6 +1960,21 @@ and the code would live in neither shard's ownership.
 the time — there were no benchmarks to justify a ~4k-line dependency port — and
 the Phase 9d numbers (see §14 *Benchmarks*) are what turned it into an
 implementation request rather than a guess.
+
+### Eager grouping prunes what it does not read (Phase 16)
+
+A group-by emits keys plus aggregates, so every other column in the frame is dead
+weight. `GroupBy.execute` now computes the pruning set first —
+`GroupBy.required_columns(keys, aggregates, columns)`, the union of the keys'
+columns and the aggregates' operands, in frame order — and projects the frame
+down to it before `to_arrow`, the key sort and the row gather. The degenerate
+case (a key-only aggregation such as `count_all` over the key) prunes to the key
+columns; an empty set keeps the frame, because `select` needs at least one.
+
+Measured on a 52-column, 200k-row frame with 1e5 groups and two aggregates:
+**252.6 ms → 20.2 ms** best of five, and 256.4 → 20.9 median. The remaining cost
+is the sort plus gathering the three columns the aggregation reads. Frames no
+wider than their aggregation are unaffected, because there is nothing to prune.
 
 ### Vectorized grouped aggregation (Phase 15)
 

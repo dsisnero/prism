@@ -494,3 +494,69 @@ describe Prism::GroupBy do
     end
   end
 end
+
+describe "eager group_by column pruning" do
+  describe ".required_columns" do
+    it "returns the keys and aggregate operands in frame order" do
+      keys = [col("region").as(Prism::Expr)]
+      aggregates = {"total" => col("qty").sum}
+
+      Prism::GroupBy
+        .required_columns(keys, aggregates, ["region", "price", "qty", "note"])
+        .should eq(["region", "qty"])
+    end
+
+    it "includes columns read inside an aggregate expression" do
+      keys = [col("region").as(Prism::Expr)]
+      aggregates = {"margin" => (col("price") - col("cost")).sum}
+
+      Prism::GroupBy
+        .required_columns(keys, aggregates, ["region", "price", "cost", "qty"])
+        .should eq(["region", "price", "cost"])
+    end
+
+    it "includes the columns an expression key reads" do
+      keys = [(col("qty") % lit(2)).alias("parity").as(Prism::Expr)]
+      aggregates = {"n" => col("qty").count}
+
+      Prism::GroupBy
+        .required_columns(keys, aggregates, ["region", "qty"])
+        .should eq(["qty"])
+    end
+
+    it "ignores columns nothing reads" do
+      keys = [col("region").as(Prism::Expr)]
+
+      Prism::GroupBy
+        .required_columns(keys, {"n" => col("qty").count}, ["region", "qty", "price"])
+        .should eq(["region", "qty"])
+    end
+  end
+
+  it "aggregates a wide frame correctly" do
+    columns = {} of String => Arrow::ArrayBase
+    columns["region"] = Arrow::StringArray.from_values(["east", "west", "east", "west"])
+    columns["qty"] = Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64])
+    40.times do |index|
+      columns["payload_#{index}"] = Arrow::Int64Array.from_values(
+        [index.to_i64, index.to_i64, index.to_i64, index.to_i64]
+      )
+    end
+
+    frame = Prism.from_columns(columns)
+    grouped = frame.group_by("region").aggregate(total: col("qty").sum)
+
+    grouped.column_names.should eq(["region", "total"])
+    grouped["region"].to_a.should eq(["east", "west"])
+    grouped["total"].to_a.should eq([4_i64, 6_i64])
+  end
+
+  it "does not need a payload column to exist for the aggregate to run" do
+    # `count_all` over a key reads no other column, so a frame with a single
+    # column still groups; this pins the pruning set for the degenerate case.
+    frame = Prism.from_columns({region: Arrow::StringArray.from_values(["east", "west"])})
+    grouped = frame.group_by("region").aggregate(n: col("region").count_all)
+
+    grouped["n"].to_a.should eq([1_u32, 1_u32])
+  end
+end

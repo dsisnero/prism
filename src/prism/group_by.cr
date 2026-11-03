@@ -60,6 +60,26 @@ module Prism
       end
     end
 
+    # Columns an aggregation reads: the keys' columns plus the aggregates'
+    # operands, in frame order.
+    #
+    # Everything else in the frame is pruned before the sort and the row gather,
+    # so a 50-column frame with a two-column aggregation does not pay to gather
+    # 48 unused columns (plan Phase 16).
+    def self.required_columns(
+      keys : Array(Expr),
+      aggregates : Hash(String, Expr),
+      columns : Array(String),
+    ) : Array(String)
+      needed = Set(String).new
+      keys.each { |key| key.columns.each { |name| needed << name } }
+      aggregates.each_value do |expr|
+        expr.columns.each { |name| needed << name }
+      end
+
+      columns.select { |name| needed.includes?(name) }
+    end
+
     # Aggregates by name: `aggregate(total: col("price").sum)`.
     def aggregate(**named) : DataFrame
       columns = {} of String => Expr
@@ -134,6 +154,16 @@ module Prism
     def count : DataFrame
       verify_output_name!("count")
       aggregate({"count" => row_count_expr})
+    end
+
+    # Restricts the frame to what the aggregation reads. A key-only aggregation
+    # (`count_all` over the key) prunes to the key columns; the degenerate case of
+    # no columns at all keeps the frame, since `select` needs at least one.
+    private def prune_columns(frame : DataFrame, aggregates : Hash(String, Expr)) : DataFrame
+      required = GroupBy.required_columns(@keys, aggregates, frame.column_names)
+      return frame if required.empty? || required.size == frame.column_count
+
+      frame.select(required.map { |name| Prism.col(name) })
     end
 
     private def aggregation?(expr : Expr) : Bool
@@ -248,6 +278,7 @@ module Prism
       raise ArgumentError.new("aggregate needs at least one column") if columns.empty?
 
       frame = @null_keys == :drop ? without_null_keys : @frame
+      frame = prune_columns(frame, columns)
       batch = frame.to_arrow
       types = TypeCache.new(frame.schema)
 
