@@ -68,12 +68,13 @@ vectorization just removed.
 `PRISM_EXAMPLE_SPECS=1` adds the four example specs (**456**, ~1 min); with both
 set the suite is **457**. Run both before a release.
 
-**Last commits:** `v0.1.1` is tagged at `379cb13` (release prep `2cbe4d7`).
-`326a0b4` is the Phase 12 feature commit (RedAmber ergonomics); the
-benchmark-closes-hash-grouping notes follow it, then the Phase 13 rows commit
-(`a7f1cd7`), then the Phase 14 interval and row-key commit (`2eac6e4`), then the
-Phase 15 vectorized-aggregation commit (`414cf68`). Everything is on `main`;
-nothing is released since `v0.1.1`.
+**Last commits:** `v0.2.0` is tagged at `66d11a8` (the release commit), which
+carries Phases 12–19. Per phase, on `main`: `326a0b4` ergonomics, `a7f1cd7` rows,
+`2eac6e4` intervals and dictionary float keys, `414cf68` vectorized aggregation,
+`cd473ea` group_by pruning, `b308373` nested float keys, `36aa01b` list-view keys
+plus the `arrow-cr` report, `30f28a9` the bounded sort. Everything is on `main`
+and `v0.2.0` is the current release, so a new feature starts from a clean tree
+with nothing pending.
 
 **Owner actions, not code:**
 
