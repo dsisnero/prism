@@ -1547,7 +1547,10 @@ a struct array: decimals materialize instead of raising.
       two `Performance` headings), and the release adds
       [`docs/polars-parity.md`](../docs/polars-parity.md). `shard.yml` and
       `Prism::VERSION` both say `0.2.0` and the suite checks them against each
-      other. Consumer check follows the push.
+      other. Verified as a consumer after the push: a fresh project with
+      `prism: github: dsisnero/prism` and `version: 0.2.0` installs `prism 0.2.0`
+      (`arrow-cr` from GitHub, `parquet-cr` `25a889e`) and runs `group_by`,
+      `if_else` and `sort_by`, with `Prism::VERSION` reporting `0.2.0`.
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:
