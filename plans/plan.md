@@ -28,7 +28,10 @@ do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
 [`dsisnero/prism`](https://github.com/dsisnero/prism), whose changelog documents
-phases 12–25. It carries the Phase 12 ergonomics work, the Phase 13 row layer,
+phases 12–26. The tag was re-pointed the same day at the commit that carries
+Phase 26 (`is_in`, `read_csv(infer_rows: 0)`) and the `arrow-cr` `78b0cd4` bump,
+because those closed two gaps a consumer was tracking and the release had not
+left the machine. It carries the Phase 12 ergonomics work, the Phase 13 row layer,
 the Phase 14 value-coverage work, the Phase 15 vectorized aggregation, the Phase
 16 eager-grouping pruning, the Phase 17 nested-key canonicalization, the Phase 18
 bounded sort, the Phase 20 `top_n`, the Phase 21 multi-key passes, the Phase 22
@@ -1553,6 +1556,10 @@ a struct array: decimals materialize instead of raising.
       `prism: github: dsisnero/prism` and `version: 0.2.0` installs `prism 0.2.0`
       (`arrow-cr` from GitHub, `parquet-cr` `25a889e`) and runs `group_by`,
       `if_else` and `sort_by`, with `Prism::VERSION` reporting `0.2.0`.
+      **Re-pointed** the same day to the Phase 26 commit (514/519 examples,
+      `arrow-cr` `78b0cd4`) — the changelog folded `[Unreleased]` into `[0.2.0]`
+      first, so the tag, the notes and the tree agree — and the consumer check
+      was re-run against the moved tag.
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:
