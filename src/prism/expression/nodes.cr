@@ -557,6 +557,10 @@ module Prism
       @operands.flat_map(&.columns).uniq!
     end
 
+    def to_s(io : IO) : Nil
+      io << key
+    end
+
     def dtype(schema : Arrow::Schema) : Arrow::DataType
       target = @operands.first.dtype(schema)
       @operands[1..].each { |operand| target = Coerce.unify(target, operand.dtype(schema)) }
@@ -576,6 +580,72 @@ module Prism
       end
 
       accumulator
+    end
+  end
+
+  # Row-aligned conditional: `then_value` where `condition` is true, `else_value`
+  # otherwise.
+  #
+  # A null condition selects `else_value`. That is what `Arrow.zip` does — a null
+  # mask reads as false — and what Polars' `when/then/otherwise` does, so the
+  # result never carries a null the selected branch does not have. It is also what
+  # makes nesting (`Prism.case_when`) mean "first branch that matches", since a
+  # null condition matches nothing.
+  #
+  # The branches are coerced with `Prism::Coerce.target`, so a literal follows the
+  # same rule arithmetic uses: `if_else(cond, int32_col, 7)` stays `Int32`, while
+  # `if_else(cond, int_col, 1.5)` widens to `Float64` instead of truncating. The
+  # condition has to be boolean, checked by `#dtype` before any data is read.
+  class IfElse < Expr
+    getter condition : Expr
+    getter then_value : Expr
+    getter else_value : Expr
+
+    def initialize(@condition : Expr, @then_value : Expr, @else_value : Expr)
+    end
+
+    def key : String
+      "if_else(#{@condition.key},#{@then_value.key},#{@else_value.key})"
+    end
+
+    def children : Array(Expr)
+      [@condition, @then_value, @else_value]
+    end
+
+    def columns : Array(String)
+      (@condition.columns + @then_value.columns + @else_value.columns).uniq
+    end
+
+    def to_s(io : IO) : Nil
+      io << key
+    end
+
+    def dtype(schema : Arrow::Schema) : Arrow::DataType
+      require_boolean!(@condition.dtype(schema))
+      # `Coerce.target` rather than a bare unify, so a literal branch follows the
+      # same rule arithmetic does: it adopts the column's dtype when the cast is
+      # lossless (`int32_col` + `lit(7)` stays `Int32`) and widens both sides when
+      # it is not (`int_col` against `1.5` runs in `Float64`).
+      Coerce.target(@then_value, @else_value, schema)
+    end
+
+    def eval(ctx : EvalContext) : Datum
+      target = dtype(ctx.schema)
+      mask = Datums.array(ctx.evaluate(@condition), ctx)
+
+      Datums.zip(
+        mask.as(Arrow::BooleanArray),
+        Coerce.cast(ctx.evaluate(@then_value), target),
+        Coerce.cast(ctx.evaluate(@else_value), target),
+      )
+    end
+
+    private def require_boolean!(dtype : Arrow::DataType) : Nil
+      return if dtype.kind.boolean?
+
+      raise DtypeError.new(
+        "if_else needs a boolean condition, got #{dtype}"
+      )
     end
   end
 end

@@ -6,6 +6,22 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `Prism.if_else(condition, then_value, else_value)` and
+  `Prism.case_when([{cond, value}, ...], otherwise)`: per-row conditionals as
+  expressions, usable anywhere an expression is (`with_column`, `select`,
+  `filter`, both eager and lazy). A null condition takes the else branch — Arrow's
+  `zip` and Polars' `when/then/otherwise` agree on that — so `case_when` means
+  "first branch that matches". Branch dtypes unify like arithmetic, non-expression
+  arguments are wrapped with `lit`, and a non-boolean condition is rejected before
+  any data is read.
+
+### Fixed
+
+- `Prism::Coalesce#to_s` prints its canonical key instead of an object address,
+  so every expression node is inspectable.
+
 ### Performance
 
 - A multi-key sort with two or more variable-length keys now encodes the keys into

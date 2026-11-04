@@ -131,6 +131,27 @@ A scalar adopts the column's dtype when the cast is lossless (`Int32` column,
 `Int64` literal) and widens both sides when it is not (`1.5` against an integer
 column), which is the rule expressions follow too.
 
+### Conditionals
+
+`if_else` picks per row and `case_when` chains branches, so derived columns do
+not need a callback verb:
+
+```crystal
+orders.with_column("label", Prism.if_else(col("qty") > 10, "bulk", "single"))
+orders.with_column("band",
+  Prism.case_when(
+    [{col("price") >= 90, lit("high")}, {col("price") >= 50, lit("mid")}],
+    lit("low"),
+  ))
+```
+
+A null condition takes the else branch (Arrow's `zip` reads a null mask as
+false, and Polars' `when/then/otherwise` does the same), so a null flag never
+invents a null result — and a null condition in `case_when` matches no branch.
+Branches unify through the same coercion rule as arithmetic (`Int64` against
+`1.5` runs in `Float64`), and a non-boolean condition is a `Prism::DtypeError`
+before any data is read.
+
 ### RedAmber-style ergonomics
 
 Filters and sorts accept the shapes RedAmber made familiar, without leaving the

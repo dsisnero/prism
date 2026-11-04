@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(482 examples, ~30 s warm). The table below is the only place that tracks status;
+(498 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is prepared on `main` — version, changelog and README are
@@ -34,9 +34,9 @@ work, the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning,
 the Phase 17 nested-key canonicalization, the Phase 18 bounded sort, the Phase 20
 `top_n`, the Phase 21 multi-key passes, the Phase 22 dtype-aware
 `Prism::SortEngine` that `group_by` shares, the Phase 23 fix for single nested
-keys — which `arrow-cr` now owns, with Prism's workaround deleted — and the Phase
-24 row-encoded multi-key sort. Phases 0–18 are closed apart from the cosmetic
-local folder rename.
+keys — which `arrow-cr` now owns, with Prism's workaround deleted — the Phase 24
+row-encoded multi-key sort and the Phase 25 conditionals. Phases 0–18 are closed
+apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `3023eac` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23) and `parquet-cr`
@@ -61,10 +61,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **482 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**483**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**486**, ~1 min); with both
-set the suite is **487**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **498 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**499**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**502**, ~1 min); with both
+set the suite is **503**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -112,6 +112,7 @@ with nothing pending.
 | 22 | Sort strategy by dtype, shared by `group_by` (`Prism::SortEngine`) | **done** |
 | 23 | Single nested keys sort, so `group_by` accepts them (fix landed in `arrow-cr`) | **done** |
 | 24 | Row-encoded multi-key sort for two or more variable-length keys | **done** |
+| 25 | Conditional expressions: `if_else` and `case_when` | **done** |
 
 ---
 
@@ -1790,6 +1791,53 @@ Suite: 436 examples.
 - **The remaining cost is the sort and the full-width gather**, not the
   aggregation, which is what moves column pruning in eager `group_by` to the top
   of the next-up list.
+
+### Phase 25 — Conditional expressions (done)
+
+The one expression family the library was missing: derived columns could be
+arithmetic, comparisons, `fill_null` or `coalesce`, but there was no per-row
+choice, so "label these rows" needed a `with_column` per case or a mask filter.
+
+- [x] `Prism.if_else(condition, then_value, else_value)` — one node, `IfElse`,
+      evaluated with `Arrow.zip`
+- [x] `Prism.case_when([{cond, value}, ...], otherwise)` — folded into nested
+      `if_else` calls, first match wins, so it reads like SQL `CASE` or Polars'
+      `when().then().when().then().otherwise()`
+- [x] Non-expression arguments are wrapped with `Prism.lit`, so both branches can
+      be plain values; the `Prism::DSL` mixin exposes both functions
+- [x] Branch dtypes coerce through `Coerce.target`, the rule arithmetic uses: a
+      literal adopts the column's dtype when the cast is lossless
+      (`if_else(cond, int32_col, 7)` stays `Int32`), and mismatched families widen
+      (`if_else(cond, int_col, 1.5)` runs in `Float64` instead of truncating)
+- [x] `if_else(cond, a, b).to_s` is its canonical key, and `Coalesce` gained the
+      same `to_s` — it printed an object address until this phase, which
+      contradicted "expressions are values"
+
+**Acceptance:** a null condition takes the else branch, pinned from both sides —
+`Arrow.zip` treats a null mask as false (verified directly: mask
+`[true, false, nil]` over `[1,2,3]`/`[10,20,30]` returns `[1, 20, 30]`) and
+Polars' `when/then/otherwise` does the same, so `case_when` means "first branch
+that matches" without a special null rule. Specs cover per-row selection, null
+conditions, nulls inside the selected branch, scalar branches, dtype coercion
+(`Int64`+`Float64` widens, `Int32`+`Int64` literal stays `Int32`), use inside
+`filter`/`select`, nesting, two
+chunks, the lazy plan, `key`/`columns`/`dtype` without data, and the error paths
+(non-boolean condition, branches with no common dtype, unknown column).
+`spec/prism/conditional_spec.cr` plus the `Coalesce` printing spec. Suite: 498
+examples.
+
+**Notes carried forward:**
+
+- **The kernel already had the semantics.** `Arrow.zip`'s null-mask rule is
+  Polars' rule, so the conditional needed no divergence note — worth checking
+  before writing one, since the intuition ("null condition → null result", which
+  is what R's `if_else` does) is wrong for both Arrow and Polars.
+- **Nesting is the implementation, not a second semantic.** `case_when` is
+  `reverse_each` over `if_else`, so the two can never drift; a null condition
+  falls through because the inner call takes the else branch.
+- **`filter` needs no null special case.** `if_else(...) > 5` on a row whose
+  selected branch is null yields a null comparison, and `filter` already drops
+  those — the same rule as any other expression.
 
 ## 13. Testing strategy
 

@@ -197,6 +197,9 @@ describe Prism::Expr do
       coalesced = checked(col("price").coalesce(lit(9.0)))
 
       values(coalesced).should eq([1.5, 9.0, 3.0])
+      # Expressions are values (§ principle 5), so printing one is its canonical
+      # key, not an object address.
+      coalesced.to_s.should eq(coalesced.key)
     end
   end
 

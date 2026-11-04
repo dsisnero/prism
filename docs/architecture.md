@@ -162,12 +162,14 @@ abstract struct Expr
 end
 ```
 
-Nodes: `Col`, `Lit`, `Unary`, `Binary`, `Agg`, `Cast`, `Alias`.
+Nodes: `Col`, `Lit`, `Binary`, `Neg`, `Not`, `IsNull`, `IsNotNull`, `Cast`,
+`Alias`, `FillNull`, `Coalesce`, `Agg` and `IfElse`.
 
 - `dtype(schema)` is total and cheap. It is what makes coercion, typed schemas,
   and plan-time schema propagation possible without reading any data.
-- `eval` sees a single `RecordBatch` (plus optional group ranges), never a whole
-  table. Aggregates return length-1 arrays that the group executor broadcasts.
+- `eval` returns a `Datum` (array or length-1 scalar) for a single
+  `RecordBatch` (plus optional group ranges), never a whole table. Aggregates
+  return length-1 arrays that the group executor broadcasts.
 - Expressions have no side effects, so the optimizer may reorder, duplicate, or
   drop them freely.
 
@@ -175,6 +177,15 @@ Numeric coercion lives in `expression/coerce.cr` and is applied before kernels
 are called, because Arrow's kernels require matching dtypes. When one side is a
 literal, the literal is cast to the column's dtype (matching Polars) instead of
 widening the column, so a narrow column is never copied into a wider buffer.
+
+Conditionals are one node, `IfElse`, and a chain of them: `Prism.if_else` maps
+straight onto `Arrow.zip`, and `Prism.case_when` folds its branches into nested
+`if_else` calls with the `otherwise` value at the bottom. A null condition
+selects the else branch — `zip` reads a null mask as false, and Polars'
+`when/then/otherwise` agrees — so nesting means "first branch that matches" rather
+than propagating nulls. Branch dtypes unify through `Prism::Coerce`, which is the
+same rule arithmetic uses, and a non-boolean condition is rejected by
+`dtype(schema)` before any data is read.
 
 Boolean `and`/`or` use Arrow's Kleene kernels: a known `false` wins over null in
 AND, matching SQL and Polars. Negation is `.not` — Crystal's `!` is a
