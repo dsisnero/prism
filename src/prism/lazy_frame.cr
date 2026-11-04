@@ -147,7 +147,7 @@ module Prism
 
       targets = {} of String => Expr
       schema.fields.each do |field|
-        next unless Arrow.can_cast_types(literal_dtype, field.data_type)
+        next unless Coerce.fillable?(field.data_type, literal_dtype)
 
         targets[field.name] = FillNull.new(Prism.col(field.name), replacement)
       end
@@ -269,6 +269,20 @@ module Prism
     end
 
     private def fill_replacements(targets : Hash(String, Expr)) : LazyFrame
+      # Filling never changes a dtype, so the plan's schema cannot catch an
+      # unfillable replacement on its own — check it when the plan is built, as
+      # the eager verb does, instead of at `collect`.
+      targets.each do |name, expr|
+        target = schema.field_with_name(name).data_type
+        replacement = expr.dtype(schema)
+        next if Coerce.fillable?(target, replacement)
+
+        raise DtypeError.new(
+          "cannot fill column #{name.inspect} (#{target}) with #{replacement}; " \
+          "cast the replacement explicitly"
+        )
+      end
+
       targets.reduce(self) do |frame, (name, expr)|
         frame.with_column(name, expr)
       end

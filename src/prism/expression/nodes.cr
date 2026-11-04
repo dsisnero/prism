@@ -526,7 +526,14 @@ module Prism
 
     def dtype(schema : Arrow::Schema) : Arrow::DataType
       target = @operand.dtype(schema)
-      @replacement.dtype(schema)
+      replacement = @replacement.dtype(schema)
+      unless Coerce.fillable?(target, replacement)
+        raise DtypeError.new(
+          "cannot fill #{@operand.key} (#{target}) with #{replacement}; " \
+          "cast the replacement explicitly"
+        )
+      end
+
       target
     end
 

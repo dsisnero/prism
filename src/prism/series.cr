@@ -99,6 +99,19 @@ module Prism
 
     # Replaces nulls, keeping this column's dtype.
     def fill_null(value : Value) : Series
+      # The same rule the frame-wide verb applies: a replacement has to fit the
+      # column's family, or a string column would be "filled" with 0 and become
+      # "0". Values that only materialize from Arrow (decimals, intervals,
+      # containers) keep the old path, which rejects them deeper down.
+      if literal = literal_dtype_of(value)
+        unless Coerce.fillable?(@dtype, literal)
+          raise DtypeError.new(
+            "cannot fill #{@name.inspect} (#{@dtype}) with #{literal}; " \
+            "cast the replacement explicitly"
+          )
+        end
+      end
+
       filler = Arrow::Scalar(Arrow::ArrayBase).new(
         Aggregates.array(value, @dtype)
       )
@@ -141,6 +154,24 @@ module Prism
     end
 
     # Converts to `target`, casting each chunk.
+    # The dtype of a `Value` that is also a literal (everything `Prism.lit`
+    # accepts), or nil for the values that only exist after materialization.
+    private def literal_dtype_of(value : Value) : Arrow::DataType?
+      # Normalized the way `Prism.lit` normalizes: a width is not part of the
+      # literal's meaning, so `0_i32` and `0_i64` both mean `Int64`.
+      case value
+      when Nil                                    then Arrow::DataType.null
+      when Bool                                   then Arrow::DataType.boolean
+      when String                                 then Arrow::DataType.utf8
+      when Bytes                                  then Arrow::DataType.binary
+      when Time                                   then Arrow::DataType.timestamp(Arrow::TimeUnit::Microsecond)
+      when Int8, Int16, Int32, Int64, Int128      then Arrow::DataType.int64
+      when UInt8, UInt16, UInt32, UInt64, UInt128 then Arrow::DataType.uint64
+      when Float32, Float64                       then Arrow::DataType.float64
+      else                                             nil
+      end
+    end
+
     def cast(target : Arrow::DataType) : Series
       return self if target == @dtype
 

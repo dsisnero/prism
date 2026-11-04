@@ -124,6 +124,31 @@ describe Prism::LazyFrame do
     end
   end
 
+  describe "#fill_null" do
+    it "fills only the columns the value fits, like the eager verb" do
+      frame = Prism.from_columns({
+        "i" => Arrow::Int64Array.from_nullable([1_i64, nil]),
+        "s" => Arrow::StringArray.from_nullable(["a", nil]),
+      })
+
+      lazy = frame.lazy.fill_null(0).collect
+
+      lazy["i"].to_a.should eq([1_i64, 0_i64])
+      lazy["s"].to_a.should eq(["a", nil])
+      lazy.dtypes.should eq(frame.fill_null(0).dtypes)
+    end
+
+    it "rejects a named column the value cannot fill" do
+      frame = Prism.from_columns({
+        "i" => Arrow::Int64Array.from_nullable([1_i64, nil]),
+      })
+
+      expect_raises(Prism::DtypeError, /cannot fill/) do
+        frame.lazy.fill_null({"i" => 1.5})
+      end
+    end
+  end
+
   describe "group_by output names" do
     it "rejects an aggregate that reuses a key name" do
       expect_raises(Prism::DuplicateColumn, /grouping key/) do

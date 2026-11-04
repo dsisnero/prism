@@ -67,6 +67,29 @@ module Prism
       unify_pair(column, literal)
     end
 
+    # Whether `fill_null` may put `literal` into `column` without changing the
+    # column's dtype or losing information.
+    #
+    # Deliberately narrower than `Arrow.can_cast_types`, which says yes to an
+    # `Int64` into `Utf8` and to a scalar into `List<Int64>`: that is how a
+    # frame-wide `fill_null(0)` used to turn a null string into `"0"`, a null
+    # boolean into `false` and a null list into `[0]`. Same family, and no
+    # narrowing — a float literal never fills an integer column.
+    # ameba:disable Metrics/CyclomaticComplexity
+    def fillable?(column : Arrow::DataType, literal : Arrow::DataType) : Bool
+      return true if column == literal
+      return true if literal.kind.null?
+      return true if column.decimal? && literal.integer?
+      return true if column.integer? && literal.integer?
+      return true if column.floating? && (literal.integer? || literal.floating?)
+      # Numbers are settled above: a float literal must not fill an integer
+      # column, so the same-family fallback below is for strings, binaries and
+      # temporal types only.
+      return false if column.numeric? || literal.numeric?
+
+      same_family?(column, literal) && Arrow.can_cast_types(literal, column)
+    end
+
     # Widening both sides, with the decimal rule ahead of the equality shortcut:
     # decimals compare at a common scale, and a literal must not drag the column
     # into a wider precision first.

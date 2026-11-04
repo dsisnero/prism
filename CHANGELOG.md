@@ -130,6 +130,14 @@ documented): the only deferred item left is the owner-gated repository rename.
   `can_sort_to_indices` guard on the fast path), so those keys reach the
   comparator chain; `top_n` on such a key selects a bounded prefix instead of
   sorting every row. Reported in `shard_issues/arrow-cr.2.md`.
+- `fill_null` only fills a column with a value from its own family, through the
+  new `Coerce.fillable?`: a frame-wide `fill_null(0)` fills integer and float
+  columns and leaves strings, booleans and lists alone, where it used to cast the
+  literal into every column Arrow could reach — a null string became `"0"`, a
+  null boolean `false`, a null list `[0]`. A float literal no longer fills an
+  integer column. The named form, `Series#fill_null` and `Expr#fill_null` raise
+  `Prism::DtypeError` naming the column instead of coercing. **Behaviour change**:
+  these used to return silently coerced values.
 - `rename`, `select` and `group_by` reject output names that would collide,
   raising `Prism::DuplicateColumn` with the offending column: `rename("a", "b")`
   when `b` still exists, two renames onto one name, `select("a", "a")`, an alias

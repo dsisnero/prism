@@ -208,6 +208,16 @@ than propagating nulls. Branch dtypes unify through `Prism::Coerce`, which is th
 same rule arithmetic uses, and a non-boolean condition is rejected by
 `dtype(schema)` before any data is read.
 
+`fill_null` follows the same family rule as literal coercion, through
+`Coerce.fillable?`: a replacement fills a column only when the two are in one
+family and the value does not narrow (`fill_null(0)` fills integer and float
+columns and leaves strings, booleans and lists alone; `fill_null(1.5)` leaves an
+integer column alone). `Arrow.can_cast_types` is *not* that rule — it says yes to
+an `Int64` into `Utf8` and to a scalar into `List<Int64>`, which is how a
+frame-wide fill once turned a null string into `"0"` and a null list into `[0]`.
+A named replacement that cannot fill its column raises `Prism::DtypeError`
+instead of being coerced.
+
 Boolean `and`/`or` use Arrow's Kleene kernels: a known `false` wins over null in
 AND, matching SQL and Polars. Negation is `.not` — Crystal's `!` is a
 pseudo-method and cannot be overloaded. `&`/`|` are available but bind tighter

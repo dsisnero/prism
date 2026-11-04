@@ -82,6 +82,11 @@ largest / smallest) but their output order is unspecified in Polars; Prism's is
 unless `null_keys: :last`; `null_keys: :drop` removes null-key rows. The
 `null_keys:` option is Prism's own.
 
+**`fill_null` only fills what the value fits.** A frame-wide `fill_null(0)` fills
+the integer and float columns and leaves strings, booleans and lists untouched,
+as Polars does; a named replacement that cannot fill its column raises
+`Prism::DtypeError` rather than being coerced into `"0"` or `[0]`.
+
 **Duplicate column names are rejected.** `rename`, `select` and `group_by` raise
 `Prism::DuplicateColumn` where Polars raises its own `DuplicateError` — a frame
 with two columns of one name silently loses one to `df[name]`. A key swap in

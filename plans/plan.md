@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(544 examples, ~30 s warm). The table below is the only place that tracks status;
+(553 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -41,8 +41,8 @@ deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals a
 the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
 downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phase
 27 property oracles plus dictionary membership, the Phase 28 `concat` diagnostics
-and the Phase 29 unique-name checks. Phases 0–29 are closed apart from the
-cosmetic local folder rename.
+the Phase 29 unique-name checks and the Phase 30 `fill_null` family rule. Phases
+0–30 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
@@ -67,10 +67,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **544 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**545**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**548**, ~1 min); with both
-set the suite is **549**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **553 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**554**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**557**, ~1 min); with both
+set the suite is **558**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -124,6 +124,7 @@ so a new feature starts from a clean tree.
 | 27 | Property oracles for the sort engine, and `is_in` on dictionary columns | **done** |
 | 28 | `concat` diagnostics, and zero-row frames in a schema check | **done** |
 | 29 | Unique output names in `rename`, `select` and `group_by` | **done** |
+| 30 | `fill_null` fills only what the value fits | **done** |
 
 ---
 
@@ -2072,6 +2073,57 @@ col("qty").alias("right"))`, distinct aggregate names. Suite: 544 examples.
 - **Two of the three were found by listing the constructors of a schema**, not by
   reading the verbs' docs: `Arrow::Schema.new` call sites are the places a
   duplicate can be born.
+
+### Phase 30 — `fill_null` fills only what the value fits (done)
+
+Probing `fill_null` across dtypes, the last item on Phase 29's "untried surface"
+list:
+
+```text
+fill_null(0)    -> i: 0 ✓   f: 0.0 ✓   s: "0" ✗   b: false ✗   l: [0] ✗
+fill_null("z")  -> s: "z" ✓                              l: [nil] ✗
+fill_null(true) -> b: true ✓  i: 1 ✗  f: 1.0 ✗  s: "true" ✗  l: [1] ✗
+```
+
+The verb asked `Arrow.can_cast_types`, which says yes to an `Int64` into `Utf8`
+and to a scalar into `List<Int64>`, so a frame-wide fill rewrote columns the value
+has nothing to do with — quietly, and with plausible-looking output.
+
+- [x] `Coerce.fillable?` — same family, no narrowing: equal dtypes, null, decimal
+      from integer, integer into integer, integer or float into float, and, for
+      the non-numeric families, `same_family?` plus a legal cast. A float literal
+      never fills an integer column; nothing fills a list, struct or map with a
+      scalar
+- [x] the frame-wide verb filters with it, so `fill_null(0)` fills integer and
+      float columns only; the named form, `Series#fill_null` and
+      `Expr#fill_null` (through `FillNull#dtype`) raise `Prism::DtypeError`
+      naming the column instead of coercing
+- [x] eager `fill_replacements` validates before building batches, because filling
+      never changes a dtype and therefore never ran `#dtype` on its own — the
+      silent cast lived in `Coerce.cast` at eval time
+- [x] lazy mirrors both forms and validates when the plan is built, matching the
+      eager verb, rather than failing at `collect`
+
+**Acceptance:** a mixed frame of `Int64`, `Float64`, `Utf8`, `Boolean` and
+`List<Int64>` is filled with `0`, `"z"`, `true` and `1.5`, and each time only the
+columns the value fits change; a narrow `Int32` column stays `Int32`; named
+replacements for a list or a float-into-integer raise; lazy matches eager for both
+forms; `Series#fill_null` and `Expr#fill_null` follow the same rule. Suite: 553
+examples.
+
+**Notes carried forward:**
+
+- **`can_cast_types` is not "fits".** Arrow's cast table is about representability,
+  not intent: `"0"` is a representable cast of `0`, `[0]` of `0`, `false` of `0`.
+  A verb that offers to "fill every column that can accept the value" needs the
+  narrower question, and Prism already had it for comparisons
+  (`literal_cast_safe?`) — the fix was to name it (`Coerce.fillable?`) and use it
+  in every fill path.
+- **The silent cast was at eval time, not the verb.** `fill_replacements` reuses
+  the frame's schema because filling cannot change a dtype, so the new
+  `FillNull#dtype` check never ran on that path; the cast happened in
+  `Coerce.cast` inside the chunk loop. The named form had to validate up front,
+  eagerly and in the plan, which is also where its error belongs.
 
 ## 13. Testing strategy
 

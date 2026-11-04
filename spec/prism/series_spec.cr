@@ -295,6 +295,25 @@ describe Prism::Series do
     end
   end
 
+  describe "#fill_null" do
+    # Same rule as the frame-wide verb: a replacement has to fit the column's
+    # family, so a string column cannot be "filled" with 0 and become "0".
+    it "fills only with a replacement that fits" do
+      strings = Prism.from_columns({
+        "s" => Arrow::StringArray.from_nullable(["a", nil]),
+      })["s"]
+      ints = Prism.from_columns({
+        "i" => Arrow::Int64Array.from_nullable([1_i64, nil]),
+      })["i"]
+
+      strings.fill_null("z").to_a.should eq(["a", "z"])
+      ints.fill_null(0).to_a.should eq([1_i64, 0_i64])
+
+      expect_raises(Prism::DtypeError, /cannot fill/) { strings.fill_null(0) }
+      expect_raises(Prism::DtypeError, /cannot fill/) { ints.fill_null(1.5) }
+    end
+  end
+
   describe "#is_in" do
     it "tests membership and yields a boolean series" do
       member = chunked_series.is_in([2_i64, 4_i64])

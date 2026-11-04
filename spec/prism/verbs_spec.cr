@@ -249,6 +249,98 @@ describe Prism::DataFrame do
     end
   end
 
+  # `fill_null(0)` used to cast the literal into *every* column Arrow could cast
+  # it to: a null string became "0", a null boolean became false, and a null list
+  # became [0]. A frame-wide fill has to stay inside the value's own family.
+  describe "#fill_null" do
+    it "fills only the columns the value fits" do
+      frame = Prism.from_columns({
+        "i" => Arrow::Int64Array.from_nullable([1_i64, nil]),
+        "f" => Arrow::Float64Array.from_nullable([1.5, nil]),
+        "s" => Arrow::StringArray.from_nullable(["a", nil]),
+        "b" => Arrow::BooleanArray.from_nullable([true, nil]),
+      })
+
+      filled = frame.fill_null(0)
+
+      filled["i"].to_a.should eq([1_i64, 0_i64])
+      filled["f"].to_a.should eq([1.5, 0.0])
+      filled["s"].to_a.should eq(["a", nil])
+      filled["b"].to_a.should eq([true, nil])
+      filled.dtypes["s"].should eq(Arrow::DataType.utf8)
+      filled.dtypes["b"].should eq(Arrow::DataType.boolean)
+    end
+
+    it "fills strings and booleans only with their own kind" do
+      frame = Prism.from_columns({
+        "i"    => Arrow::Int64Array.from_nullable([1_i64, nil]),
+        "s"    => Arrow::StringArray.from_nullable(["a", nil]),
+        "flag" => Arrow::BooleanArray.from_nullable([true, nil]),
+      })
+
+      frame.fill_null("z")["i"].to_a.should eq([1_i64, nil])
+      frame.fill_null("z")["s"].to_a.should eq(["a", "z"])
+      frame.fill_null(true)["i"].to_a.should eq([1_i64, nil])
+      frame.fill_null(true)["flag"].to_a.should eq([true, true])
+    end
+
+    it "does not narrow a column with a float literal" do
+      frame = Prism.from_columns({
+        "i" => Arrow::Int64Array.from_nullable([1_i64, nil]),
+        "f" => Arrow::Float64Array.from_nullable([1.5, nil]),
+      })
+
+      filled = frame.fill_null(1.5)
+
+      filled["i"].to_a.should eq([1_i64, nil])
+      filled.dtypes["i"].should eq(Arrow::DataType.int64)
+      filled["f"].to_a.should eq([1.5, 1.5])
+    end
+
+    it "keeps a narrow column narrow" do
+      frame = Prism.from_columns({
+        "small" => Arrow::PrimitiveArray(Int32).from_nullable([1, nil]),
+      })
+
+      filled = frame.fill_null(0)
+
+      filled.dtypes["small"].should eq(Arrow::DataType.int32)
+      filled["small"].to_a.should eq([1, 0])
+    end
+
+    it "never turns a scalar into a list" do
+      frame = Prism.from_columns({
+        "l" => Arrow::ListArray.from_iter_primitive(Int64, [
+          [1_i64] of Int64?,
+          nil,
+        ] of Array(Int64?)?).as(Arrow::ArrayBase),
+      })
+
+      filled = frame.fill_null(0)
+
+      filled.dtypes["l"].should eq(frame.dtypes["l"])
+      filled["l"].to_a.should eq([[1_i64], nil])
+    end
+
+    it "rejects a named column the value cannot fill" do
+      frame = Prism.from_columns({
+        "i" => Arrow::Int64Array.from_nullable([1_i64, nil]),
+        "l" => Arrow::ListArray.from_iter_primitive(Int64, [
+          [1_i64] of Int64?,
+          nil,
+        ] of Array(Int64?)?).as(Arrow::ArrayBase),
+      })
+
+      expect_raises(Prism::DtypeError, /cannot fill/) do
+        frame.fill_null({"l" => 0})
+      end
+      expect_raises(Prism::DtypeError, /cannot fill/) do
+        frame.fill_null({"i" => 1.5})
+      end
+      frame.fill_null({"i" => 0})["i"].to_a.should eq([1_i64, 0_i64])
+    end
+  end
+
   describe "#rename" do
     # A frame with two columns of one name loses one of them to `df[name]`, and
     # nothing else complains: `to_s`, `to_arrow` and a Parquet write all succeed.

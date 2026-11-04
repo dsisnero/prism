@@ -157,7 +157,7 @@ module Prism
       literal_dtype = replacement.dtype(@schema)
 
       targets = @schema.fields.each_with_object({} of String => Expr) do |field, memo|
-        next unless Arrow.can_cast_types(literal_dtype, field.data_type)
+        next unless Coerce.fillable?(field.data_type, literal_dtype)
 
         memo[field.name] = replacement
       end
@@ -204,6 +204,21 @@ module Prism
       return self if replacements.empty?
 
       types = TypeCache.new(@schema)
+      # Filling never changes a dtype, so the schema is reused and `#dtype` would
+      # never run on its own; a replacement has to be checked here or an
+      # unfillable one reaches `Coerce.cast` and is coerced into nonsense (a
+      # scalar into a list, a float into an integer column).
+      replacements.each do |name, expr|
+        target = @schema.field_with_name(name).data_type
+        replacement = types.dtype(expr)
+        next if Coerce.fillable?(target, replacement)
+
+        raise DtypeError.new(
+          "cannot fill column #{name.inspect} (#{target}) with #{replacement}; " \
+          "cast the replacement explicitly"
+        )
+      end
+
       duplicates = Cse.duplicate_keys(replacements.values)
       batches = @batches.map do |batch|
         ctx = EvalContext.new(batch, types, duplicates)
