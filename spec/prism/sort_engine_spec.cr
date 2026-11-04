@@ -73,6 +73,27 @@ describe Prism::SortEngine do
         .should eq([1_u32, 3_u32])
     end
 
+    # Same branch, different unsortable dtype: a decimal column is a
+    # `PrimitiveArray(Int128)` in arrow-cr, so `sort_to_indices` falls through its
+    # `Int8..Float64` arms and raises. Null placement and tie order come from the
+    # `SortOptions` the caller passes plus the index tie-break, as for any other
+    # dtype.
+    it "sorts a single decimal key" do
+      amounts = Arrow::PrimitiveArray(Int128)
+        .from_nullable([250_i128, 125_i128, nil, 125_i128])
+        .with_data_type(Arrow::DataType.decimal128(10, 2))
+      values = amounts.as(Arrow::ArrayBase)
+
+      nulls_last = [Arrow::SortColumn.new(values, Arrow::SortOptions.new(false, false))]
+      # 1.25 at positions 1 and 3, 2.50 at 0, then the null at 2.
+      Prism::SortEngine.indices(nulls_last).to_a.compact
+        .should eq([1_u32, 3_u32, 0_u32, 2_u32])
+
+      nulls_first = [Arrow::SortColumn.new(values, Arrow::SortOptions.new(false, true))]
+      Prism::SortEngine.indices(nulls_first).to_a.compact
+        .should eq([2_u32, 1_u32, 3_u32, 0_u32])
+    end
+
     it "falls back for a key the per-key sort cannot order" do
       structs = Arrow::StructArray.from_pairs([
         {Arrow::Field.new("x", Arrow::DataType.int64, true),

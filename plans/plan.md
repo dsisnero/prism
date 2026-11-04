@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(475 examples, ~30 s warm). The table below is the only place that tracks status;
+(477 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is prepared on `main` — version, changelog and README are
@@ -43,10 +43,14 @@ what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Nothing is queued.** The deferred table (§17) is closed apart from the
-   owner-gated folder rename, and Phase 23 closed the last known correctness gap.
-   A new item should be proposed with a measurement or a failing case, not
-   planned speculatively.
+1. **Row-encoded multi-key sort (Polars' default) is the next measurement.** Every
+   multi-key sort here still compares values, and the dtype table in §14 shows
+   what that costs: 293–367 ms for two string keys. Polars avoids the comparison
+   entirely — `arg_sort_multiple` encodes the keys once with `_get_rows_encoded`
+   and sorts the bytes (`argsort_multiple_row_fmt`). `Arrow::RowConverter` already
+   backs `Prism::RowKeys`, so the pieces exist. Measure it on the same 1e6-row
+   frame against the current path before choosing it; the pass path stays if the
+   encoded sort does not win.
 2. **Release is the owner's call.** `0.2.0` is prepared on `main` and untagged:
    on the word, push `main`, tag `v0.2.0`, then check that a consumer resolves
    `prism: github: dsisnero/prism` at `0.2.0`.
@@ -58,10 +62,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **475 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**476**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**479**, ~1 min); with both
-set the suite is **480**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **477 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**478**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**481**, ~1 min); with both
+set the suite is **482**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -1988,7 +1992,10 @@ implementation request rather than a guess.
 
 The two-key sort cost 900 ms on 1e6 rows while each key alone cost 100–200 ms and
 the gather only 35 ms. The cost was `lexsort_to_indices`' chain: one proc call per
-key per comparison, ~37 ns across ~20M comparisons.
+key per comparison, ~37 ns across ~20M comparisons. (Upstream narrows that: it
+specializes 2–5 columns into `sort_fixed_column::<N>` so the comparators are
+destructured, where the port keeps one generic loop. The measurement is the
+port's, and so is every number in this section.)
 
 `sort_indices` now composes stable single-key sorts for the unbounded multi-key
 case — least significant key first, then refine, gathering each key through the
@@ -2023,17 +2030,27 @@ measuring that the passes only win where a comparison itself is expensive.
 Struct(...)`. The gap was the sort, not the key: `distinct` and `n_unique`
 already key structs through the `arrow-row` encoding, and a *multi-key*
 `group_by` with a struct key worked, because `lexsort_to_indices` builds a
-`make_comparator` chain for two or more columns. One column is different —
-`lexsort_to_indices` forwards it to `sort_to_indices`, whose dispatch has no
-struct, map, decimal, interval, run-end or union case, so there was never a chain
-to fall back on.
+`make_comparator` chain for two or more columns. One column is different: the
+port forwards it to `sort_to_indices` unconditionally, and that dispatch has no
+struct, map, decimal, interval or union arm.
+
+That guard is a port bug, not an Arrow rule. Upstream `arrow-ord` 60.0.0 gates
+the fast path — `if columns.len() == 1 && can_sort_to_indices(dtype)` — and
+otherwise falls through to its `LexicographicalComparator`, so one struct key
+sorts there. It is filed as [`shard_issues/arrow-cr.2.md`](../shard_issues/arrow-cr.2.md)
+with the reproducer and the wider dispatch gap (upstream's `can_sort_to_indices`
+also admits decimal and interval primitives, which this port's `Int8..Float64`
+arms do not).
 
 `SortEngine.indices` now routes that shape to `comparator_sort`, which sorts the
 index array with the comparator `Arrow.make_comparator` builds and breaks ties by
 position, so the order is the stable one a `sort_to_indices` dtype would have
-produced. `Arrow.partition` already falls back to the same comparator for struct
-keys, so `group_by` works end to end on it; the emitted keys are the original
-values, and grouping still canonicalizes float key columns first (§14, Phase 17).
+produced — the same fallback upstream reaches through its guard, with the
+tie-break explicit instead of inherited. Nothing under `lib/` changed.
+`Arrow.partition` already falls back to the same comparator for struct keys (as
+upstream `find_boundaries` does), so `group_by` works end to end on it; the emitted
+keys are the original values, and grouping still canonicalizes float key columns
+first (§14, Phase 17).
 
 `limit` truncates after the full order rather than bounding the sort. That is the
 rare path (a struct/interval/decimal key), and a bounded comparator selection
@@ -2044,8 +2061,12 @@ own; the prefix is still the prefix a bounded sort returns, which is what
 Specs pin the shape at three levels: `SortEngine` (the comparator path, with and
 without a bound), `DataFrame#sort_by`/`top_n` on a single struct key in both
 directions, and `group_by` on a single struct key where the group count must equal
-what `distinct` reports for the same key. Struct is the dtype the specs pin; the
-other unsortable dtypes reach the same branch through `per_key_sortable?`.
+what `distinct` reports for the same key. Two more specs cover the second real
+dtype family, decimal: `SortEngine` sorts a decimal key under both null
+placements, and `group_by` groups one (nulls first under `maintain_order: false`,
+then the values). A decimal column is a `PrimitiveArray(Int128)` here, which is
+why it falls through the port's `Int8..Float64` arms; interval keys take the same
+branch and are not separately spec'd.
 
 ### The sort strategy is chosen by dtype, and `group_by` shares it (Phase 22)
 

@@ -184,7 +184,7 @@ describe Prism::GroupBy do
     end
   end
 
-  describe "nested keys" do
+  describe "unsortable keys" do
     # A struct key is a legal grouping key — `distinct` already handles it through
     # the row encoding — but the key sort has to compare structs directly, which
     # only `make_comparator` can do (Phase 23).
@@ -208,6 +208,26 @@ describe Prism::GroupBy do
       grouped["rows"].to_a.should eq([2_u32, 3_u32])
       # The same key set `distinct` sees, so the two keyed verbs agree.
       grouped.row_count.should eq(frame.select(col("s")).distinct.row_count)
+    end
+
+    # A decimal key is a `PrimitiveArray(Int128)` with a decimal data type, so it
+    # is unsortable per column for the same reason and takes the same path.
+    it "groups by a single decimal key" do
+      amounts = Arrow::PrimitiveArray(Int128)
+        .from_nullable([250_i128, 125_i128, nil, 125_i128])
+        .with_data_type(Arrow::DataType.decimal128(10, 2))
+      frame = Prism.from_columns({
+        "amount" => amounts.as(Arrow::ArrayBase),
+        "qty"    => Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64]),
+      })
+
+      grouped = frame.group_by(col("amount"), maintain_order: false).aggregate(
+        total: col("qty").sum,
+      )
+
+      # Nulls first under `maintain_order: false`, then 1.25 (rows 2 and 4), 2.50.
+      grouped["amount"].to_a.should eq([nil, 1.25, 2.5])
+      grouped["total"].to_a.should eq([3_i64, 6_i64, 1_i64])
     end
   end
 

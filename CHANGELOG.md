@@ -8,13 +8,15 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Fixed
 
-- `group_by` (and `sort_by` / `top_n`) on a single nested or otherwise unsortable
-  key — struct, map, decimal, interval, run-end, union — no longer raises
-  `Sort not supported for data type ...`. With one column there is no
-  `lexsort` comparator chain to fall back on, so `Prism::SortEngine` now sorts
-  those keys with `Arrow.make_comparator` directly, tie-breaking by position so
-  the order stays stable. A struct key grouped by `group_by` returns the same
-  groups `distinct` reports for that key.
+- `group_by` (and `sort_by` / `top_n`) on a single unsortable key — struct, map,
+  decimal, interval, union — no longer raises `Sort not supported for data type
+  ...`. This dependency's `lexsort_to_indices` forwards a one-column sort to
+  `sort_to_indices` unconditionally (upstream `arrow-rs` guards that path with
+  `can_sort_to_indices` and otherwise compares), so `Prism::SortEngine` does the
+  comparison itself with `Arrow.make_comparator`, tie-breaking by position so the
+  order stays stable. A struct key grouped by `group_by` returns the same groups
+  `distinct` reports for that key. Filed upstream as
+  `shard_issues/arrow-cr.2.md`.
 
 ### Performance
 

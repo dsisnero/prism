@@ -123,6 +123,13 @@ comparison itself is expensive (best of five, 1e6 rows):
 
 Fixed-width keys land within ~15% in either direction, so they keep the chain; a
 variable-length (or nested) key makes the chain 2.5–3x slower than the passes.
+Both numbers are this dependency's, not Arrow's: `arrow-cr` compares whole byte
+slices and materializes a string per row, where upstream `arrow-rs` compares a
+4-byte big-endian prefix first and specializes 2–5 columns. Polars sidesteps the
+comparison entirely — its default multi-key sort row-encodes the keys once and
+sorts the bytes. The threshold here is calibrated to `arrow-cr`; moving a dtype
+across it needs a paired measurement.
+
 `Prism::SortEngine` holds that dispatch, and `group_by`'s key sort now uses it
 too — the case where the difference shows most, since the key sort is most of a
 multi-key group-by:
