@@ -294,6 +294,86 @@ describe Prism::DataFrame do
       expect_raises(Prism::SchemaError) { Prism.concat([join_left, other]) }
     end
 
+    # A zero-row frame contributes no rows, so its nullability cannot violate the
+    # others' non-null columns. Building a seed frame from an empty array used to
+    # fail with "schema differs (["id", "name", "score"] vs ["id", "name",
+    # "score"])", which is self-contradictory.
+    # An empty seed frame's columns come out non-nullable (nullability is derived
+    # from the data), while a frame that holds nulls is nullable; the mismatch
+    # used to fail with "schema differs (["id", "name", "score"] vs ["id", "name",
+    # "score"])". A zero-row frame carries no rows, so it cannot violate the
+    # nullable contract either way.
+    it "accepts a zero-row frame whose columns differ only in nullability" do
+      nullable = Prism.from_columns({
+        id:    Arrow::Int64Array.from_nullable([1_i64, nil]),
+        name:  Arrow::StringArray.from_nullable(["a", nil]),
+        score: Arrow::Float64Array.from_nullable([1.0, nil]),
+      })
+      seed = Prism.from_columns({
+        id:    Arrow::Int64Array.from_values([] of Int64),
+        name:  Arrow::StringArray.from_values([] of String),
+        score: Arrow::Float64Array.from_values([] of Float64),
+      })
+      seed.schema.fields[0].nullable?.should be_false
+      nullable.schema.fields[0].nullable?.should be_true
+
+      combined = Prism.concat([seed, nullable])
+
+      combined.row_count.should eq(2)
+      combined.schema.should eq(nullable.schema)
+      combined["name"].to_a.should eq(["a", nil])
+
+      # Order must not matter, and an all-empty input still carries a schema.
+      Prism.concat([nullable, seed]).schema.should eq(nullable.schema)
+      Prism.concat([seed]).row_count.should eq(0)
+    end
+
+    it "still rejects a zero-row frame with a different dtype" do
+      seed = Prism.from_columns({
+        id:    Arrow::PrimitiveArray(Int32).from_nullable([] of Int32?),
+        name:  Arrow::StringArray.from_nullable([] of String?),
+        score: Arrow::Float64Array.from_nullable([] of Float64?),
+      })
+
+      expect_raises(Prism::SchemaError, /id: Int64 vs Int32/) do
+        Prism.concat([join_left, seed])
+      end
+    end
+
+    it "names the difference instead of repeating the column list" do
+      # Same names, different dtypes: the old message said the schemas differed
+      # and then printed two identical name lists.
+      other = Prism.from_columns({
+        id:    Arrow::Int64Array.from_values([9_i64]),
+        name:  Arrow::StringArray.from_values(["w"]),
+        score: Arrow::Int64Array.from_values([7_i64]),
+      })
+
+      expect_raises(Prism::SchemaError, /score: Float64 vs Int64/) do
+        Prism.concat([join_left, other])
+      end
+
+      wider = Prism.from_columns({
+        id:    Arrow::Int64Array.from_values([9_i64]),
+        name:  Arrow::StringArray.from_values(["w"]),
+        score: Arrow::Float64Array.from_values([7.0]),
+        extra: Arrow::Int64Array.from_values([1_i64]),
+      })
+
+      expect_raises(Prism::SchemaError, /extra/) do
+        Prism.concat([join_left, wider])
+      end
+
+      narrower = Prism.from_columns({
+        id:   Arrow::Int64Array.from_values([9_i64]),
+        name: Arrow::StringArray.from_values(["w"]),
+      })
+
+      expect_raises(Prism::SchemaError, /missing column "score"/) do
+        Prism.concat([join_left, narrower])
+      end
+    end
+
     it "rejects an empty list" do
       expect_raises(ArgumentError) { Prism.concat([] of Prism::DataFrame) }
     end

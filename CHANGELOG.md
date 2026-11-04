@@ -130,6 +130,11 @@ documented): the only deferred item left is the owner-gated repository rename.
   `can_sort_to_indices` guard on the fast path), so those keys reach the
   comparator chain; `top_n` on such a key selects a bounded prefix instead of
   sorting every row. Reported in `shard_issues/arrow-cr.2.md`.
+- `Prism.concat` accepts a zero-row frame whose columns differ only in
+  nullability (an empty seed is non-nullable by construction, a frame with nulls
+  is nullable), and its `SchemaError` now names the column and the difference —
+  `column score: Float64 vs Int64`, `missing column "score"`, `unexpected column
+  "extra"` — instead of printing two identical column lists.
 - `is_in` and `Series#is_in` accept a dictionary-encoded column (and a
   dictionary-encoded set), comparing through the dictionary's values as
   `distinct` and `group_by` already do. They used to raise `cannot combine

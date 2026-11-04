@@ -512,9 +512,11 @@ source schema, which declares non-nullable columns that the join nulls. The join
 therefore rebuilds the batch against a relaxed schema and restores precise
 nullability when composing the result.
 
-`Prism.concat` stacks frames vertically (schemas must match) and `hstack` places
-columns side by side (row counts must match, names must not collide). Both
-collapse to a single batch, since combining is the point.
+`Prism.concat` stacks frames vertically (names and dtypes must match; nullability
+only for a frame that carries rows, since a zero-row frame cannot violate a
+non-null column) and `hstack` places columns side by side (row counts must match,
+names must not collide). Both collapse to a single batch, since combining is the
+point.
 
 ## Distinct
 

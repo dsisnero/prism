@@ -82,10 +82,12 @@ largest / smallest) but their output order is unspecified in Polars; Prism's is
 unless `null_keys: :last`; `null_keys: :drop` removes null-key rows. The
 `null_keys:` option is Prism's own.
 
-**`concat` is exact.** Schemas must match field for field; there is no
-`vertical_relaxed` that coerces to a supertype. Horizontal stacking is `hstack`,
-which requires equal heights and no colliding names — there is no
-`horizontal_extend` that pads with nulls.
+**`concat` is exact.** Names and dtypes must match field for field; there is no
+`vertical_relaxed` that coerces to a supertype. Nullability is the one
+exception, and only for a frame with no rows — an empty seed cannot violate a
+nullable contract — so concatenating results onto an empty accumulator works.
+Horizontal stacking is `hstack`, which requires equal heights and no colliding
+names — there is no `horizontal_extend` that pads with nulls.
 
 **Joins keep Polars' vocabulary, including the sharp edges.** `how: :inner`,
 `:left`, `:right`, `:full` (or its alias `:outer`), `:semi`, `:anti`; `on:` for

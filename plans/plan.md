@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(527 examples, ~30 s warm). The table below is the only place that tracks status;
+(530 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -39,9 +39,9 @@ dtype-aware `Prism::SortEngine` that `group_by` shares, the Phase 23 fix for
 single nested keys — which `arrow-cr` now owns, with Prism's workaround
 deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals and
 the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
-downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), and the
-Phase 27 property oracles plus dictionary membership. Phases 0–27 are closed
-apart from the cosmetic local folder rename.
+downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phase
+27 property oracles plus dictionary membership, and the Phase 28 `concat`
+diagnostics. Phases 0–28 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
@@ -66,10 +66,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **527 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**528**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**531**, ~1 min); with both
-set the suite is **532**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **530 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**531**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**534**, ~1 min); with both
+set the suite is **535**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -121,6 +121,7 @@ so a new feature starts from a clean tree.
 | 25 | Conditional expressions: `if_else` and `case_when` | **done** |
 | 26 | `is_in` set membership, and `read_csv(infer_rows: 0)` as documented | **done** |
 | 27 | Property oracles for the sort engine, and `is_in` on dictionary columns | **done** |
+| 28 | `concat` diagnostics, and zero-row frames in a schema check | **done** |
 
 ---
 
@@ -1972,6 +1973,53 @@ Suite: 527 examples.
   a dictionary's values; membership doing something different was the whole bug.
   The rule now lives in one place (`Membership.target`) so a third surface cannot
   invent its own.
+
+### Phase 28 — `concat` says what differs, and tolerates an empty seed (done)
+
+Phase 27's note said the next phase should start by probing what the oracles do
+not reach. Probing verbs instead of dtypes found this, in five lines:
+
+```text
+concat with empty frame   RAISES Prism::SchemaError: cannot concatenate frame 1:
+                          schema differs (["a", "b", "c"] vs ["a", "b", "c"])
+```
+
+The message contradicts itself, and it fires for the ordinary "concat results
+onto an empty accumulator" pattern: an empty frame built from empty arrays is
+non-nullable (nullability is derived from the data), while a frame that holds
+nulls is nullable, so the schemas differ on a flag that a zero-row frame cannot
+violate.
+
+- [x] `Prism.concat` reports the actual difference — `column score: Float64 vs
+      Int64`, `column 1: expected "name", got "label"`, `missing column "score"`,
+      `unexpected column "extra"`, `column id: expected nullable, got non-null`
+      — instead of printing two column-name lists
+- [x] names and dtypes still have to match for every frame, rows or not: an empty
+      frame with an `Int32` column against `Int64` is a bug in the caller and
+      says so
+- [x] nullability is only checked for a frame that carries rows, and zero-row
+      frames are skipped when building the batch, so a nullable seed no longer
+      fails and no longer sets the output schema
+- [x] the reference schema is the first frame **with rows**, so an empty seed
+      cannot become the result's schema; an all-empty input keeps the first
+      frame's schema and produces a zero-row frame
+
+**Acceptance:** the three cases are pinned in `join_spec.cr` (the file that owns
+`Prism.concat`): a nullable frame with a non-nullable seed both ways round, a
+zero-row frame with a different dtype still raising, and the three message shapes
+(dtype, extra column, missing column). Suite: 530 examples.
+
+**Notes carried forward:**
+
+- **A self-contradictory error is a bug.** `cannot concatenate frame 1: schema
+  differs (["a","b","c"] vs ["a","b","c"])` named no difference at all — principle
+  6 ("fail with context") was only half met: it said which frame, not what. The
+  field-by-field comparison that produces the message is also what makes the
+  nullability rule expressible.
+- **Nullability is not data.** Arrow derives it from the arrays, so an empty
+  frame is non-nullable whether or not its author meant it to be; treating it as
+  part of the concat contract made the accumulator pattern depend on an accident.
+  Dtypes stay strict because they *are* the data contract.
 
 ## 13. Testing strategy
 
