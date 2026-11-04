@@ -5,7 +5,7 @@
 > `make test`. Details: [docs/resuming.md](docs/resuming.md). Do not re-derive
 > state from git history.
 
-`Prism` (v0.1.0) is a Crystal DataFrame library built on
+`Prism` (v0.2.0) is a Crystal DataFrame library built on
 [`dsisnero/arrow-cr`](https://github.com/dsisnero/arrow-cr) (Apache Arrow) and
 [`dsisnero/parquet-cr`](https://github.com/dsisnero/parquet-cr) (Apache Parquet). Tables are chunked Arrow record
 batches; transformations are inspectable expressions; Parquet reads push
@@ -38,6 +38,7 @@ volume they can otherwise be mistaken for `*_spec.cr` files. See
 ## Docs
 
 - [Resuming work](docs/resuming.md)
+- [Coming from Polars](docs/polars-parity.md)
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
 - [Coding Guidelines](docs/coding-guidelines.md)

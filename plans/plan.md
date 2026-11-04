@@ -26,19 +26,19 @@ implicit.
 (498 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
-**State:** `0.2.0` is prepared on `main` — version, changelog and README are
-bumped for Phases 12–18 — but **not tagged**: tagging and publishing are
-owner-gated, so the last published release is still `v0.1.1`. `main` carries the
-Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage
-work, the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning,
-the Phase 17 nested-key canonicalization, the Phase 18 bounded sort, the Phase 20
-`top_n`, the Phase 21 multi-key passes, the Phase 22 dtype-aware
-`Prism::SortEngine` that `group_by` shares, the Phase 23 fix for single nested
-keys — which `arrow-cr` now owns, with Prism's workaround deleted — the Phase 24
-row-encoded multi-key sort and the Phase 25 conditionals. Phases 0–18 are closed
-apart from the cosmetic local folder rename.
+**State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
+[`dsisnero/prism`](https://github.com/dsisnero/prism), whose changelog documents
+phases 12–25. It carries the Phase 12 ergonomics work, the Phase 13 row layer,
+the Phase 14 value-coverage work, the Phase 15 vectorized aggregation, the Phase
+16 eager-grouping pruning, the Phase 17 nested-key canonicalization, the Phase 18
+bounded sort, the Phase 20 `top_n`, the Phase 21 multi-key passes, the Phase 22
+dtype-aware `Prism::SortEngine` that `group_by` shares, the Phase 23 fix for
+single nested keys — which `arrow-cr` now owns, with Prism's workaround
+deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals and
+[`docs/polars-parity.md`](../docs/polars-parity.md). Phases 0–25 are closed apart
+from the cosmetic local folder rename.
 
-**Dependencies verified against:** `arrow-cr` `3023eac` (bounded sort `5b4b958`,
+**Dependencies verified against:** `arrow-cr` `744f9ae` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23) and `parquet-cr`
 `25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
 gitignored, so this line is the record of what the suite below was run against.
@@ -50,9 +50,9 @@ gitignored, so this line is the record of what the suite below was run against.
    one gather of the output columns plus one pass over the keys, and Phase 20
    already bounded the window cases. A new item needs a measurement or a failing
    case.
-2. **Release is the owner's call.** `0.2.0` is prepared on `main` and untagged:
-   on the word, push `main`, tag `v0.2.0`, then check that a consumer resolves
-   `prism: github: dsisnero/prism` at `0.2.0`.
+2. **The next release waits for a new item.** `0.2.0` is out and nothing is
+   unreleased, so `0.2.1` starts from the first measured fix or feature rather
+   than from a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -66,15 +66,16 @@ vectorization just removed.
 `PRISM_EXAMPLE_SPECS=1` adds the four example specs (**502**, ~1 min); with both
 set the suite is **503**. Run both before a release.
 
-**Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
-README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
-tag created during prep was removed on request. Per phase, on `main`: `326a0b4`
-ergonomics, `a7f1cd7` rows,
+**Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
+phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
+README). Per phase, on `main`: `326a0b4` ergonomics, `a7f1cd7` rows,
 `2eac6e4` intervals and dictionary float keys, `414cf68` vectorized aggregation,
 `cd473ea` group_by pruning, `b308373` nested float keys, `36aa01b` list-view keys
-plus the `arrow-cr` report, `30f28a9` the bounded sort. Everything is on `main`
-and `v0.2.0` is the current release, so a new feature starts from a clean tree
-with nothing pending.
+plus the `arrow-cr` report, `30f28a9` the bounded sort, `79a035b` `top_n`,
+`297ff04` multi-key passes, `820d447` `SortEngine`, `2125335` single nested keys,
+`8a2cd37` the `arrow-cr` fix, `6e573ae` row-encoded sort, `ab6429c` conditionals.
+Everything is on `main`, `v0.2.0` is the current release, and nothing is pending,
+so a new feature starts from a clean tree.
 
 **Owner actions, not code:**
 
@@ -1538,16 +1539,15 @@ a struct array: decimals materialize instead of raising.
       `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (365),
       and verified as a consumer: a fresh project with
       `prism: github: dsisnero/prism` resolves `0.1.1` and runs `group_by`
-- [ ] v0.2.0 tag — **prepared, not tagged** (owner says when). Phases 12–18 are
-      release-ready as of `2026-11-03` after
-      `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (457;
-      452 without the opt-in suites). `shard.yml` and `Prism::VERSION` both say
-      `0.2.0` and the spec suite checks them against each other, so the release
-      prep bumped one number instead of three — the literal in `spec/prism_spec.cr`
-      that used to repeat it now asserts the shape only. The benchmark table was
-      refreshed against `arrow-cr` `728ce51` / `parquet-cr` `25a889e` in Phase 18,
-      which is the same run that produced the bounded-sort A/B. Consumer check
-      (`prism: github: dsisnero/prism` resolves `0.2.0`) follows the push.
+- [x] v0.2.0 tag — tagged and pushed on `2026-11-03` after
+      `PRISM_COMPILE_SPECS=1 PRISM_EXAMPLE_SPECS=1 make test` went green (503;
+      498 without the opt-in suites, against `arrow-cr` `744f9ae` /
+      `parquet-cr` `25a889e`). The changelog was re-merged for phases 12–25 (it
+      had been assembled by prepending, so `[Unreleased]` carried two `Fixed` and
+      two `Performance` headings), and the release adds
+      [`docs/polars-parity.md`](../docs/polars-parity.md). `shard.yml` and
+      `Prism::VERSION` both say `0.2.0` and the suite checks them against each
+      other. Consumer check follows the push.
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:

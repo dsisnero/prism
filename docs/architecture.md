@@ -651,6 +651,11 @@ type is a compile error naming it, raised from the fallback overload.
 
 ## Parity and divergence
 
+Polars is the execution model this library borrows, so the verb-by-verb mapping
+and the deliberate differences live in
+[Coming from Polars](polars-parity.md); this section covers the design decisions
+behind them.
+
 `arrow-cr` is a behaviour-faithful port of `arrow-rs`; `parquet-cr` likewise for
 the `parquet` crate. This library therefore inherits upstream semantics wherever
 it forwards a call, including null propagation, IEEE total ordering for floats,

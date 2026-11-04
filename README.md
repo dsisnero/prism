@@ -17,6 +17,10 @@ It is not a wrapper around another dataframe. Every boundary type is an
 `Arrow::Schema`, and `#to_arrow` hands back an `Arrow::RecordBatch`. There is no
 second schema dialect to keep in sync.
 
+Coming from Polars? [docs/polars-parity.md](docs/polars-parity.md) maps the verbs
+and expressions you already know, and lists the handful of semantics that differ
+on purpose.
+
 ```crystal
 require "prism"
 include Prism::DSL
@@ -248,6 +252,7 @@ table and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 | | |
 | --- | --- |
+| [Coming from Polars](docs/polars-parity.md) | Verb and expression map, plus the semantics that differ on purpose |
 | [Architecture](docs/architecture.md) | Chunking, zero-copy rules, expressions, grouping, joins, IO, memory |
 | [Benchmarks](docs/benchmarks.md) | Scenarios, numbers, and what they decide |
 | [Testing](docs/testing.md) | Spec layout, oracles, compile-time and example specs |
@@ -275,12 +280,12 @@ snippet that stops working fails a spec.
 
 ## Status
 
-`0.2.0` is prepared on `main` — tagging and publishing are the maintainer's call,
-so `v0.1.1` is still the last published release. It adds row materialization
+`0.2.0` is the current release (`v0.2.0`). It adds row materialization
 (`DataFrame#rows` and a generated typed row per schema), interval columns,
-vectorized grouped aggregation, and a bounded sort behind a pinned window. The API
-in this README is implemented, tested (472 specs plus opt-in compile and example
-suites) and measured.
+conditionals (`if_else`/`case_when`), vectorized grouped aggregation, a rewritten
+sort engine with a bounded window, and a [Polars mapping](docs/polars-parity.md).
+The API in this README is implemented, tested (498 specs plus opt-in compile and
+example suites) and measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
 async/object store IO. Every Arrow dtype the library accepts materializes into a

@@ -6,84 +6,12 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
-### Added
-
-- `Prism.if_else(condition, then_value, else_value)` and
-  `Prism.case_when([{cond, value}, ...], otherwise)`: per-row conditionals as
-  expressions, usable anywhere an expression is (`with_column`, `select`,
-  `filter`, both eager and lazy). A null condition takes the else branch — Arrow's
-  `zip` and Polars' `when/then/otherwise` agree on that — so `case_when` means
-  "first branch that matches". Branch dtypes unify like arithmetic, non-expression
-  arguments are wrapped with `lit`, and a non-boolean condition is rejected before
-  any data is read.
-
-### Fixed
-
-- `Prism::Coalesce#to_s` prints its canonical key instead of an object address,
-  so every expression node is inspectable.
-
-### Performance
-
-- A multi-key sort with two or more variable-length keys now encodes the keys into
-  `arrow-row` bytes once and sorts those, instead of re-sorting by each key and
-  gathering it: two `Utf8` keys go from 519 ms to 378 ms and a `group_by` on two
-  of them from 616 ms to 485 ms on 1e6 rows. One variable-length key still uses
-  the stable passes, fixed-width keys still use the comparator chain, and bounded
-  windows (`sort_by_slice`, `top_n`) still use the bounded lexsort.
-
-### Fixed
-
-- `group_by` (and `sort_by` / `top_n`) on a single unsortable key — struct, map,
-  decimal, interval, union — no longer raises `Sort not supported for data type
-  ...`. `arrow-cr` now sorts one column the same way it sorts several: upstream's
-  `can_sort_to_indices` guard on the fast path, so those keys reach the comparator
-  chain (fix `3023eac`, reported in `shard_issues/arrow-cr.2.md`). A struct key
-  grouped by `group_by` returns the same groups `distinct` reports for that key,
-  and `top_n` on such a key selects a bounded prefix instead of sorting every row.
-  A temporary fallback in `Prism::SortEngine` was removed once the fix landed.
-
-### Performance
-
-- A multi-key sort now runs one stable single-key pass per key (least significant
-  first) instead of a per-comparison chain of procs, so the dtype-specialized
-  `sort_to_indices` does the work: 900 ms → 360 ms for two keys and 964 ms →
-  482 ms for three on 1e6 rows, with exactly the same rows out.
-- The strategy is chosen by dtype, because that is where the win is: a
-  variable-length (or nested) key makes the chain 2.5–3x slower than the passes,
-  while all-fixed-width keys stay within ~15% either way and keep the chain.
-  Bounded windows (`sort_by_slice`, `top_n`) also keep the bounded lexsort, and
-  keys only `make_comparator` can order (struct, map) keep the chain too.
-- `group_by`'s key sort goes through the same dispatch (`Prism::SortEngine`), so
-  a multi-key group-by is 2.2x faster with a `Utf8` first key (1.18 s → 0.53 s)
-  and 1.8x faster with three keys (1.49 s → 0.84 s) on 1e6 rows, with identical
-  groups and group order.
-
 ## [0.2.0] - 2026-11-03
 
-### Performance
-
-- Grouped aggregation is vectorized: one pass across every group replaces one
-  evaluation per group, and an operand named by several aggregates is evaluated
-  once. On 1e6 rows and 1e5 groups, three aggregates cost what one used to
-  (544 ms → 237 ms) and `count` alone 419 ms → 235 ms.
-- Eager `group_by` prunes the columns it does not read before the key sort and
-  the row gather (`GroupBy.required_columns`). A wide frame with a key-only
-  aggregation is 12.5x faster (252.6 ms → 20.2 ms on 52 columns, 200k rows,
-  1e5 groups).
-- A sort with a pinned window (`LazyFrame#sort_by(...).head(n)`) now bounds the
-  sort instead of ordering every row: `DataFrame#sort_by_slice` passes
-  `offset + count` to `Arrow.lexsort_to_indices`, which selects that prefix with
-  `partial_sort`. On 1e6 rows, `head(10)` went from 82 ms to 10 ms (8.1x) and the
-  two-key form from 80 ms to 3 ms (26x). Requires `arrow-cr` `5b4b958`.
-
-### Fixed
-
-- Float keys nested inside a struct, list, list-view, fixed-size list or map now
-  canonicalize like top-level floats, so `{NaN}` matches `{NaN}` and `{0.0}`
-  matches `{-0.0}` in `distinct`, `n_unique`, `group_by` and joins.
-- A dictionary-encoded float key is canonicalized through its values (keys, key
-  type and `ordered?` preserved), so `distinct`, `n_unique`, `group_by` and joins
-  agree with the plain float column on `-0.0`/`0.0` and NaN payloads.
+Rows and typed rows, intervals, conditionals, a rewritten sort engine, vectorized
+grouped aggregation and a documented Polars mapping. `0.2.0` is the release that
+closes every correctness gap the plan knew about: the only deferred item left is
+the owner-gated repository rename.
 
 ### Added
 
@@ -111,6 +39,19 @@ All notable changes to this project are documented here. This project adheres to
   are kept where the predicate is false **or** null, which is deliberately not
   `filter(pred.not)` — a null predicate would otherwise drop a row the predicate
   could not judge. `LazyFrame#remove` matches.
+- `DataFrame#top_n(count, *keys, order: :desc, nulls: :last)` — the eager spelling
+  of `sort_by(...).head(n)` that bounds the sort instead of ordering every row.
+  `order: :desc` is the default because "top" means largest, matching Polars'
+  `top_k`; the rows come back sorted, where `top_k`'s order is unspecified.
+  `TypedVerbs#top_n` keeps a typed frame typed.
+- `Prism.if_else(condition, then_value, else_value)` and
+  `Prism.case_when([{cond, value}, ...], otherwise)`: per-row conditionals as
+  expressions, usable anywhere an expression is (`with_column`, `select`,
+  `filter`, both eager and lazy). A null condition takes the else branch — Arrow's
+  `zip` and Polars' `when/then/otherwise` agree on that — so `case_when` means
+  "first branch that matches". Branch dtypes coerce like arithmetic, non-expression
+  arguments are wrapped with `lit`, and a non-boolean condition is rejected before
+  any data is read.
 - `sort_by("-col")` descending shorthand (RedAmber), resolved by a shared
   `Prism.sort_key` so eager and lazy verbs agree; `nulls:` still applies to the
   prefixed key.
@@ -123,6 +64,57 @@ All notable changes to this project are documented here. This project adheres to
   (Polars' rule); with no column names the aggregate covers every eligible
   column and never a grouping key; `count` with no columns is Polars' `count`
   (one `count` column of row counts per group).
+- [`docs/polars-parity.md`](docs/polars-parity.md) — a verb and expression map for
+  Polars users, with the semantics that differ on purpose (null placement, sort
+  stability, `select`, group order, `concat`, joins) and the reason for each.
+
+### Performance
+
+- Grouped aggregation is vectorized: one pass across every group replaces one
+  evaluation per group, and an operand named by several aggregates is evaluated
+  once. On 1e6 rows and 1e5 groups, three aggregates cost what one used to
+  (544 ms → 237 ms) and `count` alone 419 ms → 235 ms.
+- Eager `group_by` prunes the columns it does not read before the key sort and
+  the row gather (`GroupBy.required_columns`). A wide frame with a key-only
+  aggregation is 12.5x faster (252.6 ms → 20.2 ms on 52 columns, 200k rows,
+  1e5 groups).
+- A sort with a pinned window (`LazyFrame#sort_by(...).head(n)`) now bounds the
+  sort instead of ordering every row: `DataFrame#sort_by_slice` passes
+  `offset + count` to `Arrow.lexsort_to_indices`, which selects that prefix with
+  `partial_sort`. On 1e6 rows, `head(10)` went from 82 ms to 10 ms (8.1x) and the
+  two-key form from 80 ms to 3 ms (26x). Requires `arrow-cr` `5b4b958`.
+- The same bound reaches the eager surface: `top_n(10)` is 7.7 ms against 194 ms
+  for `sort_by(...).head(10)`, which cannot see the `head` that follows it.
+- A multi-key sort no longer uses one comparator proc per key per comparison.
+  Unbounded sorts compose stable single-key passes (900 ms → 360 ms for two keys,
+  964 ms → 482 ms for three), and with two or more variable-length keys they
+  encode the keys into `arrow-row` bytes once and sort those (519 ms → 378 ms for
+  two `Utf8` keys, and 616 ms → 485 ms for a `group_by` on two of them). The
+  choice is `Prism::SortEngine`'s and is pinned by specs: one key is the
+  dependency's specialized sort, a bounded window keeps the bounded lexsort,
+  fixed-width keys keep the comparator chain.
+- `group_by`'s key sort goes through the same dispatch, so a multi-key group-by is
+  2.2x faster with a `Utf8` first key (1.18 s → 0.53 s) and 1.8x faster with three
+  keys (1.49 s → 0.84 s) on 1e6 rows, with identical groups and group order.
+- `distinct`, `unique` and `n_unique` use `arrow-row` keys, and a float key is
+  canonicalized first, so keyed verbs agree on what one key is.
+
+### Fixed
+
+- Float keys nested inside a struct, list, list-view, fixed-size list or map now
+  canonicalize like top-level floats, so `{NaN}` matches `{NaN}` and `{0.0}`
+  matches `{-0.0}` in `distinct`, `n_unique`, `group_by` and joins.
+- A dictionary-encoded float key is canonicalized through its values (keys, key
+  type and `ordered?` preserved), so `distinct`, `n_unique`, `group_by` and joins
+  agree with the plain float column on `-0.0`/`0.0` and NaN payloads.
+- `group_by` (and `sort_by` / `top_n`) on a single unsortable key — struct, map,
+  decimal, interval, union — no longer raises `Sort not supported for data type
+  ...`. `arrow-cr` now sorts one column the way it sorts several (upstream's
+  `can_sort_to_indices` guard on the fast path), so those keys reach the
+  comparator chain; `top_n` on such a key selects a bounded prefix instead of
+  sorting every row. Reported in `shard_issues/arrow-cr.2.md`.
+- `Prism::Coalesce#to_s` prints its canonical key instead of an object address,
+  so every expression node is inspectable.
 
 ### Changed
 
@@ -133,6 +125,11 @@ All notable changes to this project are documented here. This project adheres to
 - The version lives in exactly two places (`shard.yml` and `Prism::VERSION`,
   checked by `spec/prism/version_spec.cr`); the suite no longer repeats the
   literal, so a release bumps one number instead of hunting copies.
+- Sort strategy lives in `Prism::SortEngine` (`indices`, `strategy`), shared by
+  `DataFrame#sort_by` and `GroupBy`, so the two cannot disagree about order.
+- The `0.2.0` release notes cover phases 12–25; the plan
+  ([`plans/plan.md`](plans/plan.md)) records each decision with the measurement or
+  upstream reference behind it.
 
 ## [0.1.1] - 2026-11-02
 
