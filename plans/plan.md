@@ -1559,7 +1559,11 @@ a struct array: decimals materialize instead of raising.
       **Re-pointed** the same day to the Phase 26 commit (519/524 examples,
       `arrow-cr` `78b0cd4`) — the changelog folded `[Unreleased]` into `[0.2.0]`
       first, so the tag, the notes and the tree agree — and the consumer check
-      was re-run against the moved tag.
+      was re-run against the moved tag: a fresh project installs `prism 0.2.0`
+      with `Prism::Membership` present and gets `[false, true, nil, true]` from
+      both `col("title").is_in(titles)` and `frame["title"].is_in(titles)`, the
+      mask filter `[2, 4]`, and `read_csv(infer_rows: 0)` as `Utf8`
+      `["1989", "1993"]`.
 
 **Notes:** the examples are run, not eyeballed: `spec/examples_spec.cr` compiles
 and executes each one and asserts the summary lines it prints (`rows: 5, columns:
