@@ -216,7 +216,10 @@ integer column alone). `Arrow.can_cast_types` is *not* that rule — it says yes
 an `Int64` into `Utf8` and to a scalar into `List<Int64>`, which is how a
 frame-wide fill once turned a null string into `"0"` and a null list into `[0]`.
 A named replacement that cannot fill its column raises `Prism::DtypeError`
-instead of being coerced.
+instead of being coerced. Polars raises for the frame-wide form too; Prism keeps
+the documented "every column that can accept the value" and skips the rest, which
+is the only way the convenience form works on a mixed frame — the strict path is
+the per-column one, and it is strict everywhere (`Series`, `Expr`, named hash).
 
 Boolean `and`/`or` use Arrow's Kleene kernels: a known `false` wins over null in
 AND, matching SQL and Polars. Negation is `.not` — Crystal's `!` is a
@@ -534,7 +537,10 @@ nullability when composing the result.
 only for a frame that carries rows, since a zero-row frame cannot violate a
 non-null column) and `hstack` places columns side by side (row counts must match,
 names must not collide). Both collapse to a single batch, since combining is the
-point.
+point. The strictness is Prism's, not Arrow's: `concat_batches` takes the caller's
+schema and only requires the arrays' types to match, so it would happily stack a
+nullable column into a non-null field — Prism refuses that frame instead, because
+the result would claim a contract the data breaks.
 
 ## Distinct
 

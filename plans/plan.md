@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(553 examples, ~30 s warm). The table below is the only place that tracks status;
+(554 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -67,10 +67,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **553 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**554**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**557**, ~1 min); with both
-set the suite is **558**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **554 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**555**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**558**, ~1 min); with both
+set the suite is **559**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -2073,6 +2073,11 @@ col("qty").alias("right"))`, distinct aggregate names. Suite: 544 examples.
 - **Two of the three were found by listing the constructors of a schema**, not by
   reading the verbs' docs: `Arrow::Schema.new` call sites are the places a
   duplicate can be born.
+- **Verified against Polars**: `rename` matches (it raises `DuplicateError` when
+  the target is taken), and `select` is stricter than Polars, which tolerates
+  duplicate output names and only rejects them on `df.columns = [...]`. Prism
+  rejects them because `df[name]` is single-valued — a second column of that name
+  would be silently unreachable — and `polars-parity.md` records the difference.
 
 ### Phase 30 — `fill_null` fills only what the value fits (done)
 
@@ -2108,8 +2113,28 @@ has nothing to do with — quietly, and with plausible-looking output.
 `List<Int64>` is filled with `0`, `"z"`, `true` and `1.5`, and each time only the
 columns the value fits change; a narrow `Int32` column stays `Int32`; named
 replacements for a list or a float-into-integer raise; lazy matches eager for both
-forms; `Series#fill_null` and `Expr#fill_null` follow the same rule. Suite: 553
+forms; `Series#fill_null` and `Expr#fill_null` follow the same rule. Suite: 554
 examples.
+
+**Verified against upstream (DeepWiki + vendor sources):**
+
+- Polars' *frame-wide* `fill_null(value)` **raises** when a column cannot hold the
+  value (`InvalidOperationError`, via `polars-expr/src/dispatch/misc.rs`) rather
+  than skipping. Prism skips, which is the wording its own docs have always used
+  and the only reading under which the convenience form works on a mixed frame;
+  the named form, `Series#fill_null` and `Expr#fill_null` are strict, so the
+  divergence is limited and the docs say so (`polars-parity.md`).
+- `arrow-rs` `concat_batches` (`arrow-select/src/concat.rs`) **ignores the input
+  schemas** and only requires the underlying array types to match — the output
+  schema is whatever the caller passes. So Phase 28's strictness is Prism's rule,
+  not an Arrow requirement: it exists to avoid publishing a non-null field that
+  holds nulls. Widening nullability across frames (a schema union) would also be
+  correct and is recorded in §17 rather than done.
+- Polars' `is_in` on a categorical compares physical codes but implicitly converts
+  a string set into the categorical encoding; two dictionaries can map one code
+  to different values, so Prism decodes and compares values. A spec pins the case
+  codes would get wrong — `Dictionary(Int32) ["b","a","c"]` against
+  `Dictionary(Int8) ["a","b"]` → `[true, true, false]`.
 
 **Notes carried forward:**
 
@@ -2808,6 +2833,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Typed row structs: `define_schema` generating `S::Row` so rows are nominal | only meaningful for a declared schema, and nested fields would still be containers (§10 "Why `Values` returns containers") | 13 (done) |
 | Interval materialization: `Value` had no month/day/nano member, so interval columns could not reach `to_a`/`rows`/display | it needed a value shape for all three Arrow units; `Arrow::IntervalValue` is that shape, so no new type was introduced | 14 (done) |
 | Dictionary-encoded float keys were compared by value but not canonicalized | the values are what gets encoded, so canonicalizing them in place keeps the dictionary dtype and makes keying agree with plain float columns | 14 (done) |
+| `concat` nullability union | nullability is checked per frame today (a zero-row frame is exempt); unioning the flags would be lossless since `concat_batches` takes the caller's schema, but no caller has needed the looser rule | when a caller hits it |
 | Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**

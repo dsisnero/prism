@@ -305,6 +305,23 @@ describe Prism::Expr do
       values(col("d").is_in(wide)).should eq([false, false, nil])
     end
 
+    # Two dictionaries can map the same code to different values, so membership
+    # must compare *values*, not physical codes — the mistake Polars avoids by
+    # converting a string set into the categorical's own encoding.
+    it "compares two dictionaries by value, not by code" do
+      left = Arrow::DictionaryArray(Int32).from_values(["b", "a", "c"])
+      right = Arrow::DictionaryArray(Int8).from_values(["a", "b"])
+      frame = Prism.from_columns({
+        "d" => left.as(Arrow::ArrayBase),
+        "q" => Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64]),
+      })
+
+      Prism::Values.extract(Prism::Membership.matches(left.as(Arrow::ArrayBase), right.as(Arrow::ArrayBase), false))
+        .should eq([true, true, false])
+      frame.with_column("m", col("d").is_in(right.as(Arrow::ArrayBase)))["m"].to_a
+        .should eq([true, true, false])
+    end
+
     it "rejects a dictionary of a different value family" do
       dict = Arrow::DictionaryArray(Int32).from_options(["a"])
       schema = Arrow::Schema.new(Arrow::Fields.from([

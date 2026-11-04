@@ -308,7 +308,7 @@ snippet that stops working fails a spec.
 conditionals (`if_else`/`case_when`), set membership (`is_in`), vectorized
 grouped aggregation, a rewritten sort engine with a bounded window, and a
 [Polars mapping](docs/polars-parity.md). The API in this README is implemented,
-tested (553 specs plus opt-in compile and example suites) and measured.
+tested (554 specs plus opt-in compile and example suites) and measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
 async/object store IO. Every Arrow dtype the library accepts materializes into a

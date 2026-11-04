@@ -82,21 +82,35 @@ largest / smallest) but their output order is unspecified in Polars; Prism's is
 unless `null_keys: :last`; `null_keys: :drop` removes null-key rows. The
 `null_keys:` option is Prism's own.
 
-**`fill_null` only fills what the value fits.** A frame-wide `fill_null(0)` fills
-the integer and float columns and leaves strings, booleans and lists untouched,
-as Polars does; a named replacement that cannot fill its column raises
-`Prism::DtypeError` rather than being coerced into `"0"` or `[0]`.
+**`fill_null` only fills what the value fits — and skips the rest.** A
+frame-wide `fill_null(0)` fills the integer and float columns and leaves strings,
+booleans and lists untouched; a named replacement that cannot fill its column
+raises `Prism::DtypeError` rather than being coerced into `"0"` or `[0]`.
 
-**Duplicate column names are rejected.** `rename`, `select` and `group_by` raise
-`Prism::DuplicateColumn` where Polars raises its own `DuplicateError` — a frame
-with two columns of one name silently loses one to `df[name]`. A key swap in
-`rename` and two aliases of one column are still fine, because the *result* has
-unique names.
+This is a deliberate difference in the *frame-wide* form: Polars raises when a
+column cannot hold the value (`fill_null(0)` on a frame with a string column is
+an `InvalidOperationError` there), which makes the convenience form unusable on
+the common mixed frame. Prism skips what it cannot fill — the wording its docs have
+always used, "every column that can accept the value" — and the per-column form,
+`Series#fill_null` and `Expr#fill_null` are strict, so a mistake still surfaces
+whenever you name the column.
+
+**Duplicate column names are rejected, which is stricter than Polars in one
+place.** `rename` matches Polars (`DuplicateError` when the target name is taken),
+and `group_by` cannot produce two columns of one name in either library. For
+`select`, Polars tolerates duplicate output names — only assigning `df.columns`
+raises — while Prism raises `Prism::DuplicateColumn`, because its `df[name]` is
+single-valued: a second column of that name would be silently unreachable. A key
+swap in `rename` and two aliases of one column are still fine, because the
+*result* has unique names.
 
 **`concat` is exact.** Names and dtypes must match field for field; there is no
-`vertical_relaxed` that coerces to a supertype. Nullability is the one
-exception, and only for a frame with no rows — an empty seed cannot violate a
-nullable contract — so concatenating results onto an empty accumulator works.
+`vertical_relaxed` that coerces to a supertype. The strictness is Prism's, not
+Arrow's: `concat_batches` uses the caller's schema and only requires the arrays
+to match, so a laxer nullability rule would work — it is refused because the
+result would publish a non-null field that holds nulls. Nullability is the one
+exception, and only for a frame with no rows, which cannot violate a nullable
+contract, so concatenating results onto an empty accumulator works.
 Horizontal stacking is `hstack`, which requires equal heights and no colliding
 names — there is no `horizontal_extend` that pads with nulls.
 
@@ -125,9 +139,13 @@ Prism encodes it once, so a 12k-element list does not become a 12k-term `|` chai
 It exists on both surfaces — `col("x").is_in(...)` as an expression and
 `series.is_in(...)` as a mask — and they run the same helper, so a mask filter and
 an expression filter agree row for row. Dictionary-encoded columns (Polars'
-categoricals) compare through their values. It pushes into the Parquet reader
-like any other predicate, and the kernel is a hash probe — 1.2x a hand-written
-`Set` on the same input, per [benchmarks](benchmarks.md).
+categoricals) compare through their **values**: Polars compares categoricals by
+physical code but implicitly converts a string set into the categorical encoding,
+and two dictionaries can map one code to different values, so decoding is the
+encoding-independent answer — `Dictionary(Int32)` `["b","a","c"]` against
+`Dictionary(Int8)` `["a","b"]` gives `[true, true, false]`. It pushes into the
+Parquet reader like any other predicate, and the kernel is a hash probe — 1.2x a
+hand-written `Set` on the same input, per [benchmarks](benchmarks.md).
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and
