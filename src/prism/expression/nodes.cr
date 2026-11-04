@@ -661,11 +661,6 @@ module Prism
   # null as a value instead — null then matches only when the set itself contains
   # null, which is what Arrow's kernel does and what a boolean mask usually wants.
   class IsIn < Expr
-    # A length-1 null boolean, broadcast by `Arrow.zip` to propagate nulls.
-    NULL_MATCH = Arrow::Scalar(Arrow::ArrayBase).new(
-      Arrow::BooleanArray.from_nullable([nil] of Bool?)
-    )
-
     getter operand : Expr
     getter values : Arrow::ArrayBase
     getter? nulls_equal : Bool
@@ -702,21 +697,17 @@ module Prism
 
     def dtype(schema : Arrow::Schema) : Arrow::DataType
       # Raising here is what rejects `col("i").is_in(["a"])` before any data is
-      # read; the result of the coercion itself is only needed by `eval`.
-      Coerce.unify(@operand.dtype(schema), @values.data_type)
+      # read; `Membership.matches` computes the same target at run time.
+      Membership.target(@operand.dtype(schema), @values.data_type)
       Arrow::DataType.boolean
     end
 
     def eval(ctx : EvalContext) : Datum
-      array = Datums.array(ctx.evaluate(@operand), ctx)
-      target = Coerce.unify(array.data_type, @values.data_type)
-      operand = Coerce.cast(array, target).as(Arrow::ArrayBase)
-      set = Coerce.cast(@values, target).as(Arrow::ArrayBase)
-
-      matches = operand.is_in(set)
-      return matches if @nulls_equal || operand.logical_null_count == 0
-
-      Arrow.zip(Arrow.is_not_null(operand), matches, NULL_MATCH)
+      Membership.matches(
+        Datums.array(ctx.evaluate(@operand), ctx),
+        @values,
+        @nulls_equal,
+      )
     end
   end
 end

@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(514 examples, ~30 s warm). The table below is the only place that tracks status;
+(519 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -65,10 +65,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **514 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**515**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**518**, ~1 min); with both
-set the suite is **519**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **519 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**520**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**523**, ~1 min); with both
+set the suite is **524**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -1556,7 +1556,7 @@ a struct array: decimals materialize instead of raising.
       `prism: github: dsisnero/prism` and `version: 0.2.0` installs `prism 0.2.0`
       (`arrow-cr` from GitHub, `parquet-cr` `25a889e`) and runs `group_by`,
       `if_else` and `sort_by`, with `Prism::VERSION` reporting `0.2.0`.
-      **Re-pointed** the same day to the Phase 26 commit (514/519 examples,
+      **Re-pointed** the same day to the Phase 26 commit (519/524 examples,
       `arrow-cr` `78b0cd4`) — the changelog folded `[Unreleased]` into `[0.2.0]`
       first, so the tag, the notes and the tree agree — and the consumer check
       was re-run against the moved tag.
@@ -1861,6 +1861,11 @@ all-`utf8` schema when reading a CSV.
 - [x] `Expr#is_in(values, nulls_equal: false)` and `Expr#is_in(array)`: one
       `IsIn` node holding a **constant** set encoded once, evaluated with
       `arrow-cr`'s `ArrayBase#is_in`
+- [x] `Series#is_in(values, nulls_equal: false)` for the mask surface
+      (`df.filter(df["title"].is_in(titles))`), sharing
+      `Prism::Membership.matches` with the node so the coercion rule, the null
+      rule and the kernel cannot drift — and validating the dtype up front, so
+      an empty column rejects a mismatched set instead of passing silently
 - [x] nulls follow comparisons (a null cell yields null) unless
       `nulls_equal: true`, which is Polars' `nulls_equal` flag and Arrow's
       kernel rule — so `filter` and `remove` behave exactly as for any predicate
@@ -1876,7 +1881,11 @@ all-`utf8` schema when reading a CSV.
       returns every field as `Null` — the documented contract actually holds now,
       and a negative `infer_rows` is an `ArgumentError` instead of nonsense
 
-**Acceptance:** membership matches the column dtype after `Coerce.unify`, so
+**Acceptance:** both surfaces run one helper over one kernel — measured on the
+phase's fixture, the kernel alone is 34.1 ms for 1e6 rows against a 12k-title
+set, `Series#is_in` 36.1 ms, and `filter` through either form 61–63 ms (it was
+682 ms before `78b0cd4`), with identical rows out. Membership matches the column
+dtype after `Coerce.unify`, so
 `col("b").is_in([10, 30])` works against an `Int64` column with `Int32` literals;
 nulls are pinned in both modes, `is_in([] of String)` is all-false, a 5,000-value
 set keeps a key under 80 characters, and a set with no common dtype with the
@@ -1887,7 +1896,8 @@ and OR'd — since that is what the consumer's scan actually writes; the lazy sp
 pin the pushdown in `explain` and compare the collected rows against the eager
 reader. CSV specs cover the all-string schema, a value round-tripping as its
 source text, an explicit schema winning over `infer_rows: 0`, and the negative
-argument. Suite: 514 examples.
+argument, and `series_spec` pins column/expression parity, chunking, dtype
+coercion and the empty-series dtype check. Suite: 519 examples.
 
 **Notes carried forward:**
 

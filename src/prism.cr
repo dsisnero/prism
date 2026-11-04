@@ -26,6 +26,7 @@ require "./prism/expression/dsl"
 require "./prism/expression/operators"
 
 require "./prism/row_keys"
+require "./prism/membership"
 require "./prism/aggregates"
 require "./prism/expression/aggregations"
 require "./prism/grouped_agg"

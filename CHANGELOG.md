@@ -65,9 +65,11 @@ documented): the only deferred item left is the owner-gated repository rename.
   (Polars' rule); with no column names the aggregate covers every eligible
   column and never a grouping key; `count` with no columns is Polars' `count`
   (one `count` column of row counts per group).
-- `col("x").is_in(values)` — set membership as an expression, with the set
-  encoded once when the expression is built, so a large list is one array rather
-  than an OR-chain of literals. Nulls follow comparisons (a null cell yields
+- `col("x").is_in(values)` — set membership as an expression, and
+  `series.is_in(values)` as a boolean mask, both routed through one helper
+  (`Prism::Membership`) and `arrow-cr`'s hash-probe kernel so the two surfaces
+  agree row for row. The set is encoded once when the expression is built, so a
+  large list is one array rather than an OR-chain of literals. Nulls follow comparisons (a null cell yields
   null, so `filter` drops it and `remove` keeps it);
   `is_in(values, nulls_equal: true)` treats null as a value instead, matching
   Polars' `nulls_equal`. Accepts an `Enumerable` of Crystal values or a prebuilt

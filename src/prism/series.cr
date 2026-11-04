@@ -109,6 +109,37 @@ module Prism
       Series.new(@name, chunks, @dtype)
     end
 
+    # Whether each value is in `values`, as a boolean column — the mask form of
+    # `Expr#is_in`, for `DataFrame#filter`:
+    #
+    # ```
+    # df.filter(df["title"].is_in(titles))
+    # ```
+    #
+    # Both forms run the same code (`Prism::Membership`), so the coercion rule,
+    # the null rule and the kernel cannot drift between them. Nulls follow
+    # comparisons: a null cell yields a null mask bit and `filter` drops that row.
+    # `nulls_equal: true` treats null as a value instead, matching only when the
+    # set contains null. The set may be any `Enumerable` of Crystal values or an
+    # already-encoded `Arrow::ArrayBase`, and it is unified with the column's
+    # dtype, so `Int64` columns accept `Int32` literals; a set with no common
+    # dtype raises `Prism::DtypeError` before any chunk is read.
+    # ameba:disable Naming/PredicateName
+    def is_in(values : Enumerable(T), *, nulls_equal : Bool = false) : Series forall T
+      is_in(Arrow.array(values.to_a), nulls_equal: nulls_equal)
+    end
+
+    # ameba:disable Naming/PredicateName
+    def is_in(values : Arrow::ArrayBase, *, nulls_equal : Bool = false) : Series
+      # Validate up front: an empty series has no chunk to fail on.
+      Membership.target(@dtype, values.data_type)
+      chunks = @chunks.map do |chunk|
+        Membership.matches(chunk, values, nulls_equal).as(Arrow::ArrayBase)
+      end
+
+      Series.new(@name, chunks, Arrow::DataType.boolean)
+    end
+
     # Converts to `target`, casting each chunk.
     def cast(target : Arrow::DataType) : Series
       return self if target == @dtype

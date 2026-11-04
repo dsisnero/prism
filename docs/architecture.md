@@ -187,6 +187,12 @@ size. The node reads only its operand's columns, so predicate pushdown projects
 them and nothing else; a null cell yields null unless `nulls_equal: true`,
 matching Polars.
 
+`Series#is_in` is the mask form of the same operation and shares
+`Prism::Membership` with the node, so coercion, the null rule and the kernel
+(`ArrayBase#is_in`, a hash probe since `arrow-cr` `78b0cd4`) cannot drift between
+`df.filter(col("x").is_in(set))` and `df.filter(df["x"].is_in(set))`. One kernel
+for one operation is the point: Prism has no membership loop of its own.
+
 Conditionals are one node, `IfElse`, and a chain of them: `Prism.if_else` maps
 straight onto `Arrow.zip`, and `Prism.case_when` folds its branches into nested
 `if_else` calls with the `otherwise` value at the bottom. A null condition

@@ -295,6 +295,62 @@ describe Prism::Series do
     end
   end
 
+  describe "#is_in" do
+    it "tests membership and yields a boolean series" do
+      member = chunked_series.is_in([2_i64, 4_i64])
+
+      member.dtype.should eq(Arrow::DataType.boolean)
+      member.to_a.should eq([false, true, false, true])
+    end
+
+    # The column API and the expression must agree — same kernel, same coercion,
+    # same null rule — or a mask filter and an expression filter would disagree.
+    it "agrees with the expression form" do
+      frame = Prism.from_columns({
+        "region" => Arrow::StringArray.from_nullable(["east", "west", nil, "east"]),
+        "qty"    => Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64]),
+      })
+
+      mask = frame["region"].is_in(["east"])
+      mask.to_a.should eq([true, false, nil, true])
+      frame.with_column("m", Prism.col("region").is_in(["east"]))["m"].to_a
+        .should eq(mask.to_a)
+
+      # Filtering drops the unjudged row either way.
+      frame.filter(mask)["qty"].to_a.should eq([1_i64, 4_i64])
+
+      with_null = frame["region"].is_in(["east", nil], nulls_equal: true)
+      with_null.to_a.should eq([true, false, true, true])
+    end
+
+    it "keeps the chunking" do
+      member = chunked_series.is_in([1_i64])
+
+      chunks = 0
+      member.each_chunk { chunks += 1 }
+      chunks.should eq(2)
+      member.to_a.should eq([true, false, false, false])
+    end
+
+    it "adopts the column's dtype for the set" do
+      # `[1, 3]` infers Int32; the Int64 column decides the common dtype.
+      member = chunked_series.is_in([1, 3])
+
+      member.to_a.should eq([true, false, true, false])
+    end
+
+    it "rejects a set with no common dtype, even for an empty series" do
+      expect_raises(Prism::DtypeError, /cannot combine/) do
+        chunked_series.is_in(["a"])
+      end
+
+      empty = Prism::Series.new("qty", [] of Arrow::ArrayBase, Arrow::DataType.int64)
+      expect_raises(Prism::DtypeError, /cannot combine/) do
+        empty.is_in(Arrow::StringArray.from_values(["a"]).as(Arrow::ArrayBase))
+      end
+    end
+  end
+
   describe "chunk invariants" do
     it "rejects chunks whose dtype does not match" do
       expect_raises(Prism::DtypeError) do
