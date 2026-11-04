@@ -135,13 +135,14 @@ Prism.read_parquet(path, columns: ["title"], predicate: col("title").is_in(title
 
 A null cell yields null, as every comparison does, so `filter` drops it and
 `remove` keeps it; `is_in(values, nulls_equal: true)` treats null as a value
-instead (matching Polars' `nulls_equal`). The predicate pushes into the Parquet
-reader like any other, so a set-membership scan decodes only the rows it keeps,
-and the kernel is a hash probe — on 1e6 rows against 12k titles the kernel alone
-is 34 ms, `Series#is_in` 36 ms and either `filter` form 62 ms, where the same
-probe used to cost 682 ms ([docs/benchmarks.md](docs/benchmarks.md)). Both forms
-share `Prism::Membership`, so a mask filter and an expression filter cannot
-disagree.
+instead (matching Polars' `nulls_equal`). A dictionary-encoded column compares
+through its values, the same way `distinct` and `group_by` key one. The predicate
+pushes into the Parquet reader like any other, so a set-membership scan decodes
+only the rows it keeps, and the kernel is a hash probe — on 1e6 rows against 12k
+titles the kernel alone is 34 ms, `Series#is_in` 36 ms and either `filter` form
+62 ms, where the same probe used to cost 682 ms
+([docs/benchmarks.md](docs/benchmarks.md)). Both forms share
+`Prism::Membership`, so a mask filter and an expression filter cannot disagree.
 
 ### Masks from columns
 
@@ -307,7 +308,7 @@ snippet that stops working fails a spec.
 conditionals (`if_else`/`case_when`), set membership (`is_in`), vectorized
 grouped aggregation, a rewritten sort engine with a bounded window, and a
 [Polars mapping](docs/polars-parity.md). The API in this README is implemented,
-tested (519 specs plus opt-in compile and example suites) and measured.
+tested (527 specs plus opt-in compile and example suites) and measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
 async/object store IO. Every Arrow dtype the library accepts materializes into a

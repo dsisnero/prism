@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(519 examples, ~30 s warm). The table below is the only place that tracks status;
+(527 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -39,8 +39,9 @@ dtype-aware `Prism::SortEngine` that `group_by` shares, the Phase 23 fix for
 single nested keys — which `arrow-cr` now owns, with Prism's workaround
 deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals and
 the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
-downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`). Phases
-0–26 are closed apart from the cosmetic local folder rename.
+downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), and the
+Phase 27 property oracles plus dictionary membership. Phases 0–27 are closed
+apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
@@ -65,10 +66,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **519 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**520**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**523**, ~1 min); with both
-set the suite is **524**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **527 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**528**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**531**, ~1 min); with both
+set the suite is **532**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -119,6 +120,7 @@ so a new feature starts from a clean tree.
 | 24 | Row-encoded multi-key sort for two or more variable-length keys | **done** |
 | 25 | Conditional expressions: `if_else` and `case_when` | **done** |
 | 26 | `is_in` set membership, and `read_csv(infer_rows: 0)` as documented | **done** |
+| 27 | Property oracles for the sort engine, and `is_in` on dictionary columns | **done** |
 
 ---
 
@@ -1926,6 +1928,50 @@ coercion and the empty-series dtype check. Suite: 519 examples.
 - **A constant set belongs in the expression, not in a chain.** `is_in` exists
   because 12k values × 2 columns as `|` terms would be 24k expressions compiled,
   type-checked and CSE-scanned per scan; one encoded array is one node.
+
+### Phase 27 — property oracles for the sort engine, and dictionary membership (done)
+
+The plan's next-up was empty, so this phase went looking for a failing case
+instead of picking a fresh feature: oracles for the newest surface, then a probe
+across dtypes the oracles do not reach.
+
+- [x] `property_spec.cr` gains four oracles: multi-key `sort_by` (four key sets
+      that exercise all three `SortEngine` strategies), `top_n` against the prefix
+      of that same reference order, `is_in` against a `Set` probe (both surfaces,
+      nulls and `nulls_equal`), and `if_else` against a per-row choice
+- [x] the sort oracle is a lexicographic reference with the input order as the
+      tie-break, so a strategy that disagrees about direction, null placement or
+      stability fails the same file the optimizer tests live in
+- [x] probing beyond the oracles found a real gap: `is_in` raised on a
+      dictionary-encoded column —
+      `cannot combine Dictionary(Int32, Utf8) and Utf8; cast one side explicitly`
+      — although `sort_by`, `group_by`, `distinct` and joins all accept one, and
+      a set literal has no side to cast. `Prism::Membership.target` now unifies
+      the **decoded** dtypes and the cast decodes each side, so a dictionary
+      column (and a dictionary-encoded set, including one with a different key
+      width) compares through its values
+
+**Acceptance:** the oracles are deterministic (120 rows, six seeds) and fail when
+the engine regresses — the row-encoded, passes and chain strategies are compared
+against one reference order rather than against each other. The dictionary case
+is pinned on both surfaces: the expression returns `[true, false, nil]` for a
+dictionary column under the default null rule (null propagates), the mask form
+agrees row for row, a `Dictionary(Int8)` set against a `Dictionary(Int32)` column
+works, and a dictionary of a different value family still raises `DtypeError`.
+Suite: 527 examples.
+
+**Notes carried forward:**
+
+- **An oracle run that finds nothing is still worth keeping, but the probe is what
+  found the bug.** The four new oracles passed on the first run — the sort engine
+  has been exercised hard — while a five-line script across dtypes nobody had
+  tried (`is_in` on a dictionary) found the gap. Both belong in this phase: the
+  oracle is the standing guard, the probe is the method.
+- **Compare through values, like every other keyed verb.** `distinct`,
+  `group_by`, joins and `n_unique` all go through `Prism::RowKeys`, which encodes
+  a dictionary's values; membership doing something different was the whole bug.
+  The rule now lives in one place (`Membership.target`) so a third surface cannot
+  invent its own.
 
 ## 13. Testing strategy
 

@@ -20,8 +20,22 @@ module Prism
     # common dtype with the column raises `Prism::DtypeError`. Callers use this
     # to reject a bad set before any data is read — including for an empty
     # column, where `#matches` would never run.
+    #
+    # A dictionary compares **through its values**, which is what every other
+    # keyed verb does (`Prism::RowKeys` encodes a dictionary's values, so
+    # `distinct`, `group_by` and joins accept one). Without that,
+    # `col("cat").is_in(["a"])` would fail on `Dictionary(Int32, Utf8)` vs `Utf8`
+    # and tell the caller to "cast one side explicitly" — for a set literal,
+    # there is no side to cast.
     def target(operand : Arrow::DataType, values : Arrow::DataType) : Arrow::DataType
-      Coerce.unify(operand, values)
+      Coerce.unify(decoded(operand), decoded(values))
+    end
+
+    # The values dtype of a dictionary, or the dtype itself.
+    private def decoded(dtype : Arrow::DataType) : Arrow::DataType
+      return dtype unless dtype.kind.dictionary?
+
+      dtype.value || dtype
     end
 
     # `operand.is_in(values)` per row, as a boolean array.
@@ -36,6 +50,8 @@ module Prism
       nulls_equal : Bool,
     ) : Arrow::BooleanArray
       target = target(operand.data_type, values.data_type)
+      # `Arrow.cast` decodes a dictionary into its values dtype and encodes
+      # back into a dictionary, so this branch also handles a dictionary set.
       operand = cast(operand, target)
       set = cast(values, target)
 

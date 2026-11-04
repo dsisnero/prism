@@ -154,9 +154,18 @@ reference over seeded random frames (120 rows, six seeds, under 100 ms):
 | `join` inner/left | nested loop, null keys never match |
 | `semi`/`anti` | membership filter over the inner-join row ids |
 | `sort_by` on a nullable float | stable sort with nulls last |
+| multi-key `sort_by` (2–3 keys, mixed direction and null placement) | lexicographic reference with the input order as the tie-break |
+| `top_n` | the prefix of that same reference sort |
+| `is_in` (expression and `Series`) | `Set` probe, nulls propagating unless `nulls_equal: true` |
+| `if_else` | per-row choice over materialized values |
 | float keys | canonical key (`-0.0`→`0.0`, one NaN) |
 | lazy vs eager | same pipeline both ways, for verbs and for the optimizer |
 | chunked vs single batch | the same rows split into three batches |
+
+The multi-key sort oracle is the one that watches the engine's decision table:
+its four key sets land on the row-encoded path (two variable-length keys), the
+stable passes (one) and the comparator chain (none), all compared against a
+single reference order.
 
 They are oracles, not fuzzers: the seeds are fixed, so a failure is
 reproducible and diffable. Two mutations prove they bite — disabling

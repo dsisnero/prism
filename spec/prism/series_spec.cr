@@ -339,6 +339,22 @@ describe Prism::Series do
       member.to_a.should eq([true, false, true, false])
     end
 
+    # Dictionary columns work everywhere else (`sort_by`, `group_by`, `distinct`),
+    # so the mask has to handle them too.
+    it "compares a dictionary column through its values" do
+      dict = Arrow::DictionaryArray(Int32).from_options(["a", "b", nil, "a"])
+      frame = Prism.from_columns({
+        "d" => dict.as(Arrow::ArrayBase),
+        "q" => Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 4_i64]),
+      })
+
+      mask = frame["d"].is_in(["a"])
+      mask.dtype.should eq(Arrow::DataType.boolean)
+      mask.to_a.should eq([true, false, nil, true])
+      frame.filter(mask)["q"].to_a.should eq([1_i64, 4_i64])
+      frame.with_column("m", Prism.col("d").is_in(["a"]))["m"].to_a.should eq(mask.to_a)
+    end
+
     it "rejects a set with no common dtype, even for an empty series" do
       expect_raises(Prism::DtypeError, /cannot combine/) do
         chunked_series.is_in(["a"])

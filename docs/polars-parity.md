@@ -111,9 +111,10 @@ null a value, matching only when the set contains null. The set is a constant:
 Prism encodes it once, so a 12k-element list does not become a 12k-term `|` chain.
 It exists on both surfaces — `col("x").is_in(...)` as an expression and
 `series.is_in(...)` as a mask — and they run the same helper, so a mask filter and
-an expression filter agree row for row. It pushes into the Parquet reader like any
-other predicate, and the kernel is a hash probe — 1.2x a hand-written `Set` on
-the same input, per [benchmarks](benchmarks.md).
+an expression filter agree row for row. Dictionary-encoded columns (Polars'
+categoricals) compare through their values. It pushes into the Parquet reader
+like any other predicate, and the kernel is a hash probe — 1.2x a hand-written
+`Set` on the same input, per [benchmarks](benchmarks.md).
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and

@@ -11,13 +11,109 @@ private REPEATS =   6
 private REGIONS = ["east", "west", "north", nil]
 
 private def random_frame(rng : Random) : Prism::DataFrame
+  tags = ["alpha", "beta", nil]
   Prism.from_columns({
     id:     Arrow::Int64Array.from_values(Array.new(ROWS, &.to_i64)),
     region: Arrow::StringArray.from_nullable(Array.new(ROWS) { REGIONS[rng.rand(REGIONS.size)] }),
+    # A second variable-length key, so a two-key sort reaches the row-encoded
+    # path (`SortEngine.strategy` -> :row_encoded) as well as the passes and the
+    # comparator chain.
+    tag:    Arrow::StringArray.from_nullable(Array.new(ROWS) { tags[rng.rand(tags.size)] }),
     bucket: Arrow::Int64Array.from_values(Array.new(ROWS) { rng.rand(5).to_i64 }),
     amount: Arrow::Float64Array.from_nullable(Array.new(ROWS) { rng.rand(3).zero? ? nil : (rng.next_float * 10).round(2) }),
     qty:    Arrow::Int64Array.from_values(Array.new(ROWS) { rng.rand(1..9).to_i64 }),
   })
+end
+
+# One sort key in a reference comparator: column name, direction, and where the
+# nulls go — the three things `Prism::SortKey` carries.
+private alias RefKey = NamedTuple(column: String, descending: Bool, nulls_first: Bool)
+
+# Compares two materialized values the way a `SortKey` would. Only the dtypes the
+# random frame carries are supported; anything else is a test bug.
+private def compare_values(left : Prism::Value, right : Prism::Value) : Int32
+  case {left, right}
+  when {String, String}   then (left <=> right) || 0
+  when {Int64, Int64}     then (left <=> right) || 0
+  when {Float64, Float64} then (left <=> right) || 0
+  else                         0
+  end
+end
+
+# One key's contribution, including null placement (which is absolute: a
+# `nulls_first` key puts nulls first whichever way the values go).
+private def compare_key(
+  left : Prism::Value,
+  right : Prism::Value,
+  descending : Bool,
+  nulls_first : Bool,
+) : Int32
+  left_nil = left.nil?
+  right_nil = right.nil?
+  if left_nil || right_nil
+    return 0 if left_nil && right_nil
+
+    return left_nil ? (nulls_first ? -1 : 1) : (nulls_first ? 1 : -1)
+  end
+
+  result = compare_values(left, right)
+  descending ? -result : result
+end
+
+# The `id`s a multi-key sort must produce: a lexicographic comparison over the
+# requested keys, with ties broken by input order, which is what Prism promises.
+private def reference_order(frame : Prism::DataFrame, keys : Array(RefKey)) : Array(Prism::Value)
+  columns = keys.map { |key| frame[key[:column]].to_a }
+  ids = frame["id"].to_a
+  order = (0...frame.row_count.to_i).to_a
+  order.sort! do |left, right|
+    result = 0
+    keys.each_with_index do |key, position|
+      result = compare_key(
+        columns[position][left],
+        columns[position][right],
+        key[:descending],
+        key[:nulls_first],
+      )
+      break unless result == 0
+    end
+    result == 0 ? left <=> right : result
+  end
+  order.map { |index| ids[index] }
+end
+
+# One reference key as a `Prism::SortKey`.
+private def sort_key(key : RefKey) : Prism::SortKey
+  expr = Prism.col(key[:column])
+  nulls = key[:nulls_first] ? :first : :last
+  key[:descending] ? expr.desc(nulls: nulls) : expr.asc(nulls: nulls)
+end
+
+# `sort_by` takes a splat, so the arity has to be static; the oracles use at most
+# three keys. Returns the frame's `id` column in sorted order.
+private def sorted_ids(frame : Prism::DataFrame, keys : Array(RefKey)) : Array(Prism::Value)
+  case keys.size
+  when 1 then frame.sort_by(sort_key(keys[0]))["id"].to_a
+  when 2 then frame.sort_by(sort_key(keys[0]), sort_key(keys[1]))["id"].to_a
+  when 3 then frame.sort_by(sort_key(keys[0]), sort_key(keys[1]), sort_key(keys[2]))["id"].to_a
+  else        raise ArgumentError.new("oracle supports 1..3 keys, got #{keys.size}")
+  end
+end
+
+# The first `count` rows of that sort, through the eager bounded verb.
+private def top_ids(
+  frame : Prism::DataFrame,
+  count : Int32,
+  keys : Array(RefKey),
+) : Array(Prism::Value)
+  case keys.size
+  when 1 then frame.top_n(count, sort_key(keys[0]))["id"].to_a
+  when 2 then frame.top_n(count, sort_key(keys[0]), sort_key(keys[1]))["id"].to_a
+  when 3
+    frame.top_n(count, sort_key(keys[0]), sort_key(keys[1]), sort_key(keys[2]))["id"].to_a
+  else
+    raise ArgumentError.new("oracle supports 1..3 keys, got #{keys.size}")
+  end
 end
 
 # Which right rows each bucket has, in right order.
@@ -377,6 +473,82 @@ describe "property checks" do
 
       rows_of(chunked.group_by("region").aggregate(total: col("qty").sum), ["region", "total"])
         .should eq(rows_of(frame.group_by("region").aggregate(total: col("qty").sum), ["region", "total"]))
+    end
+  end
+
+  # The three multi-key shapes `Prism::SortEngine.strategy` can pick: row-encoded
+  # (two variable-length keys), stable passes (one), and the comparator chain
+  # (none). Each is compared against one reference order, so a strategy that
+  # disagrees about direction, null placement or tie order fails here.
+  it "multi-key sorts match a reference order in every strategy" do
+    key_sets = [
+      [{column: "region", descending: false, nulls_first: false},
+       {column: "tag", descending: true, nulls_first: true}],
+      [{column: "region", descending: true, nulls_first: true},
+       {column: "bucket", descending: false, nulls_first: false}],
+      [{column: "bucket", descending: true, nulls_first: false},
+       {column: "qty", descending: false, nulls_first: false}],
+      [{column: "region", descending: false, nulls_first: false},
+       {column: "tag", descending: false, nulls_first: false},
+       {column: "amount", descending: true, nulls_first: true}],
+    ]
+
+    REPEATS.times do |seed|
+      frame = random_frame(Random.new(seed))
+      key_sets.each do |keys|
+        sorted_ids(frame, keys).should eq(reference_order(frame, keys))
+      end
+    end
+  end
+
+  it "top_n keeps the prefix of the same sort" do
+    REPEATS.times do |seed|
+      frame = random_frame(Random.new(seed))
+      keys = [{column: "region", descending: true, nulls_first: false},
+              {column: "tag", descending: false, nulls_first: true}] of RefKey
+      expected = reference_order(frame, keys)
+
+      [0, 1, 7].each do |count|
+        top_ids(frame, count, keys).should eq(expected[0, count])
+        top_ids(frame, count, keys)
+          .should eq(sorted_ids(frame, keys)[0, count])
+      end
+    end
+  end
+
+  it "is_in matches a Set probe, with and without nulls_equal" do
+    REPEATS.times do |seed|
+      frame = random_frame(Random.new(seed))
+      regions = ["east", "north"]
+
+      expected = frame["region"].to_a.map do |value|
+        value.nil? ? nil : regions.includes?(value.as(String))
+      end
+
+      frame["region"].is_in(regions).to_a.should eq(expected)
+      frame.with_column("m", col("region").is_in(regions))["m"].to_a.should eq(expected)
+
+      with_null = frame["region"].to_a.map do |value|
+        value.nil? || regions.includes?(value.as(String))
+      end
+      frame["region"].is_in(regions + [nil], nulls_equal: true).to_a
+        .should eq(with_null)
+    end
+  end
+
+  it "if_else matches a per-row choice" do
+    REPEATS.times do |seed|
+      frame = random_frame(Random.new(seed))
+      rows = rows_of(frame, ["qty", "amount"])
+
+      expected = rows.map do |row|
+        row[0].as(Int64) > 4 ? row[1] : -1.0
+      end
+
+      frame.with_column(
+        "chosen",
+        Prism.if_else(col("qty") > 4, col("amount"), lit(-1.0)),
+      )["chosen"].to_a.should eq(expected)
     end
   end
 

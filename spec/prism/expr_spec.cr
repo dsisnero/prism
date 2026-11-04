@@ -11,6 +11,8 @@ private def expr_batch : Arrow::RecordBatch
     price: Arrow::Float64Array.from_nullable([1.5, nil, 3.0]),
     flag:  Arrow::BooleanArray.from_nullable([true, false, nil]),
     name:  Arrow::StringArray.from_nullable(["x", "y", nil]),
+    # A dictionary-encoded column: membership has to compare through its values.
+    d: Arrow::DictionaryArray(Int32).from_options(["a", "b", nil]),
   })
 end
 
@@ -285,6 +287,33 @@ describe Prism::Expr do
         .should be_false
       col("name").is_in(["a"], nulls_equal: true).same_as?(col("name").is_in(["a"]))
         .should be_false
+    end
+
+    # A dictionary column is a supported dtype everywhere else (`sort_by`,
+    # `group_by`, `distinct`), so membership has to compare through its values
+    # rather than failing on `Dictionary(Int32, Utf8)` vs `Utf8`.
+    it "compares a dictionary column through its values" do
+      values(col("d").is_in(["a"])).should eq([true, false, nil])
+      values(col("d").is_in(["a", nil], nulls_equal: true)).should eq([true, false, true])
+    end
+
+    it "accepts a dictionary-encoded set, including one with different key widths" do
+      narrow = Arrow::DictionaryArray(Int8).from_values(["a", "c"]).as(Arrow::ArrayBase)
+      wide = Arrow::DictionaryArray(Int32).from_values(["c"]).as(Arrow::ArrayBase)
+
+      values(col("d").is_in(narrow)).should eq([true, false, nil])
+      values(col("d").is_in(wide)).should eq([false, false, nil])
+    end
+
+    it "rejects a dictionary of a different value family" do
+      dict = Arrow::DictionaryArray(Int32).from_options(["a"])
+      schema = Arrow::Schema.new(Arrow::Fields.from([
+        Arrow::Field.new("d", dict.data_type, true),
+      ]))
+
+      expect_raises(Prism::DtypeError, /cannot combine/) do
+        col("d").is_in([1, 2]).dtype(schema)
+      end
     end
 
     it "rejects a set that has no common dtype with the column" do

@@ -193,6 +193,12 @@ matching Polars.
 `df.filter(col("x").is_in(set))` and `df.filter(df["x"].is_in(set))`. One kernel
 for one operation is the point: Prism has no membership loop of its own.
 
+A dictionary column compares through its **values**: `Membership.target` unifies
+the decoded dtypes and the cast decodes each side, which is the same rule the
+keyed verbs follow (`Prism::RowKeys` encodes a dictionary's values). Without it,
+`col("cat").is_in(["a"])` would report `Dictionary(Int32, Utf8)` vs `Utf8` and
+tell the caller to cast one side — advice a set literal cannot take.
+
 Conditionals are one node, `IfElse`, and a chain of them: `Prism.if_else` maps
 straight onto `Arrow.zip`, and `Prism.case_when` folds its branches into nested
 `if_else` calls with the `otherwise` value at the bottom. A null condition

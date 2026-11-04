@@ -130,6 +130,11 @@ documented): the only deferred item left is the owner-gated repository rename.
   `can_sort_to_indices` guard on the fast path), so those keys reach the
   comparator chain; `top_n` on such a key selects a bounded prefix instead of
   sorting every row. Reported in `shard_issues/arrow-cr.2.md`.
+- `is_in` and `Series#is_in` accept a dictionary-encoded column (and a
+  dictionary-encoded set), comparing through the dictionary's values as
+  `distinct` and `group_by` already do. They used to raise `cannot combine
+  Dictionary(Int32, Utf8) and Utf8; cast one side explicitly`, which a set
+  literal cannot act on.
 - `Prism::Coalesce#to_s` prints its canonical key instead of an object address,
   so every expression node is inspectable.
 - `read_csv(infer_rows: 0)` now reads every column as a string, as documented
