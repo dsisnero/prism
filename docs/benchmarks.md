@@ -61,9 +61,10 @@ evaluation.
 
 **Sorting is the expensive verb, and it is amortized.** One key is 229 ms and two
 keys 402 ms (the second key is `Utf8`, so it compares variable-length bytes; the
-multi-key path got 2.4x faster in Phase 21 — see the A/B below). `group_by` at 4
-groups costs 238 ms, at 1e5 keys 205 ms, and at two keys 558 ms — one sort either
-way, and the aggregates are nearly free in all of them.
+multi-key path got 2.4x faster in Phase 21 and row encoding took the two-string
+case another 1.4x in Phase 24 — see the A/Bs below). `group_by` at 4 groups costs
+238 ms, at 1e5 keys 205 ms, and at two keys 558 ms — one sort either way, and the
+aggregates are nearly free in all of them.
 
 **A pinned window selects and gathers only its rows.** `sort_by + head(10)`
 costs 8.7 ms through the plan and 8.8 ms through the eager `top_n(10)` verb,
@@ -147,6 +148,32 @@ which costs a full pass (~110 ms) against ~80 ms for the whole bounded lexsort.
 Keys the per-key sort cannot express — struct, map, decimal, interval, run-end,
 union — because `make_comparator` supports more dtypes than `sort_to_indices`.
 And all-fixed-width keys, per the table above.
+
+**A sort with two string keys encodes rows instead of gathering them (Phase 24).**
+The pass path re-sorts by each key and gathers that key through the current order,
+and a gather of a string column copies the strings — so with two variable-length
+keys the passes pay twice for what the output pays once. Encoding the keys into
+`arrow-row` bytes and sorting those (`arrow-row` already backs `Prism::RowKeys`)
+avoids the intermediate gathers, and it is what Polars does by default
+(`arg_sort_multiple` -> `_get_rows_encoded` -> `argsort_multiple_row_fmt`), with
+per-key direction and null placement baked into the bytes by `SortField` options.
+
+Paired, two prebuilt binaries interleaved over three rounds, best of five each,
+1e6 rows:
+
+| scenario | Phase 22 paths | row encoded | speedup |
+| --- | ---: | ---: | ---: |
+| `sort_by(region, city)` (2 × `Utf8`) | 519.4 | 377.9 | 1.37× |
+| `group_by(region, city)` (2 × `Utf8`) | 615.7 | 485.1 | 1.26× |
+| `sort_by(region, user_id)` (1 × `Utf8`) | 451.4 | 441.0 | unchanged |
+| `sort_by(user_id, qty)` (fixed width) | 416.8 | 419.8 | unchanged |
+| `top_n(10, region, city)` (bounded) | 154.3 | 154.4 | unchanged |
+
+The rule is two or more variable-length keys, and each side of it is in the table:
+with one variable key the encoding buys nothing (the output gathers that column
+anyway), and with none it is pure overhead. Bounded windows keep the bounded
+lexsort, which selects a prefix that a full row sort cannot. `Prism::SortEngine`
+holds the decision table and its spec pins it.
 
 **Row keys made `distinct` and `n_unique` ~3x faster.** `Prism::RowKeys` encodes
 the key columns with `Arrow::RowConverter` and walks a byte seen-set, so the sort

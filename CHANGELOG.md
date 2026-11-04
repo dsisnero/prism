@@ -6,6 +6,15 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Performance
+
+- A multi-key sort with two or more variable-length keys now encodes the keys into
+  `arrow-row` bytes once and sorts those, instead of re-sorting by each key and
+  gathering it: two `Utf8` keys go from 519 ms to 378 ms and a `group_by` on two
+  of them from 616 ms to 485 ms on 1e6 rows. One variable-length key still uses
+  the stable passes, fixed-width keys still use the comparator chain, and bounded
+  windows (`sort_by_slice`, `top_n`) still use the bounded lexsort.
+
 ### Fixed
 
 - `group_by` (and `sort_by` / `top_n`) on a single unsortable key — struct, map,

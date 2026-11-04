@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(477 examples, ~30 s warm). The table below is the only place that tracks status;
+(482 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is prepared on `main` — version, changelog and README are
@@ -33,9 +33,10 @@ Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage
 work, the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning,
 the Phase 17 nested-key canonicalization, the Phase 18 bounded sort, the Phase 20
 `top_n`, the Phase 21 multi-key passes, the Phase 22 dtype-aware
-`Prism::SortEngine` that `group_by` shares, and the Phase 23 fix for single
-nested keys — which `arrow-cr` now owns, with Prism's workaround deleted. Phases
-0–18 are closed apart from the cosmetic local folder rename.
+`Prism::SortEngine` that `group_by` shares, the Phase 23 fix for single nested
+keys — which `arrow-cr` now owns, with Prism's workaround deleted — and the Phase
+24 row-encoded multi-key sort. Phases 0–18 are closed apart from the cosmetic
+local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `3023eac` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23) and `parquet-cr`
@@ -44,14 +45,11 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Row-encoded multi-key sort (Polars' default) is the next measurement.** Every
-   multi-key sort here still compares values, and the dtype table in §14 shows
-   what that costs: 293–367 ms for two string keys. Polars avoids the comparison
-   entirely — `arg_sort_multiple` encodes the keys once with `_get_rows_encoded`
-   and sorts the bytes (`argsort_multiple_row_fmt`). `Arrow::RowConverter` already
-   backs `Prism::RowKeys`, so the pieces exist. Measure it on the same 1e6-row
-   frame against the current path before choosing it; the pass path stays if the
-   encoded sort does not win.
+1. **Nothing is queued.** Phase 24 closed the last measured item on the sort path;
+   what is left there is the floor, not a missing strategy: a multi-key sort pays
+   one gather of the output columns plus one pass over the keys, and Phase 20
+   already bounded the window cases. A new item needs a measurement or a failing
+   case.
 2. **Release is the owner's call.** `0.2.0` is prepared on `main` and untagged:
    on the word, push `main`, tag `v0.2.0`, then check that a consumer resolves
    `prism: github: dsisnero/prism` at `0.2.0`.
@@ -63,10 +61,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **477 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**478**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**481**, ~1 min); with both
-set the suite is **482**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **482 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**483**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**486**, ~1 min); with both
+set the suite is **487**. Run both before a release.
 
 **Last commits:** `66d11a8` is the `0.2.0` release prep (version, changelog,
 README) and is **untagged** — the tag is the owner's call, and the local `v0.2.0`
@@ -113,6 +111,7 @@ with nothing pending.
 | 21 | Multi-key sort as stable single-key passes | **done** |
 | 22 | Sort strategy by dtype, shared by `group_by` (`Prism::SortEngine`) | **done** |
 | 23 | Single nested keys sort, so `group_by` accepts them (fix landed in `arrow-cr`) | **done** |
+| 24 | Row-encoded multi-key sort for two or more variable-length keys | **done** |
 
 ---
 
@@ -2025,6 +2024,43 @@ Two deliberate limits:
 
 Phase 22 kept both limits and added a third (all-fixed-width keys), after
 measuring that the passes only win where a comparison itself is expensive.
+
+### Two variable-length keys encode rows instead of gathering (Phase 24)
+
+The Phase 21/22 pass path re-sorts by each key and gathers that key through the
+current order (`Arrow.take`), and a gather of a string column copies the strings.
+With two variable-length keys that means paying twice for the copy the output
+already pays once — the aggregate table in §14 shows it as 293–367 ms where one
+key alone is ~110 ms.
+
+`SortEngine` now encodes the keys into `arrow-row` bytes once and sorts those
+(`row_encoded_indices`), which is exactly what Polars does by default
+(`arg_sort_multiple` → `_get_rows_encoded` → `argsort_multiple_row_fmt`), so the
+decision has an upstream precedent rather than an invention behind it. The format
+is not new to Prism either: `Arrow::RowConverter` already backs `Prism::RowKeys`
+for joins, `distinct` and `group_by` keys. Per-key direction and null placement
+are encoded into the bytes by `Arrow::SortField` options, so `memcmp` order is the
+requested order; equal bytes mean equal keys and the index breaks the tie, which
+keeps Prism's "ties keep input order" contract.
+
+`strategy` is the decision table and is public so the spec can pin it — `:single`,
+`:bounded`, `:row_encoded`, `:passes`, `:chain` — because each branch is a
+measurement rather than a preference. The rule is two or more variable-length keys,
+and both sides of it are in the paired table (two prebuilt binaries interleaved
+over three rounds, best of five, 1e6 rows):
+
+| scenario | Phase 22 paths | row encoded | speedup |
+| --- | ---: | ---: | ---: |
+| `sort_by(Utf8, Utf8)` | 519.4 ms | 377.9 ms | 1.37× |
+| `group_by(Utf8, Utf8)` | 615.7 ms | 485.1 ms | 1.26× |
+| `sort_by(Utf8, Int64)` (one variable key) | 451.4 ms | 441.0 ms | unchanged |
+| `sort_by(Int64, Int64)` (fixed width) | 416.8 ms | 419.8 ms | unchanged |
+| `top_n(10, Utf8, Utf8)` (bounded) | 154.3 ms | 154.4 ms | unchanged |
+
+One measurement trap worth recording: a first pass at this comparison ran the two
+builds once each, in sequence, and showed row encoding *losing* by 20% on scenarios
+its code path never touches. Two prebuilt binaries interleaved over rounds is the
+only shape that survives machine drift here.
 
 ### A single nested key sorts; the dependency owns that path (Phase 23)
 

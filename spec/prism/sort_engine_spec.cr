@@ -15,6 +15,10 @@ private def reference_order(*arrays : Arrow::ArrayBase) : Array(UInt32)
   Arrow.lexsort_to_indices(columns).to_a.compact
 end
 
+private def sort_columns(*arrays : Arrow::ArrayBase) : Array(Arrow::SortColumn)
+  arrays.map { |values| Arrow::SortColumn.new(values) }.to_a
+end
+
 describe Prism::SortEngine do
   describe ".indices" do
     it "matches the reference order for variable-length keys" do
@@ -106,6 +110,93 @@ describe Prism::SortEngine do
       Arrow.can_sort_to_indices?(structs.data_type).should be_false
       order_of(structs.as(Arrow::ArrayBase), numbers)
         .should eq(reference_order(structs.as(Arrow::ArrayBase), numbers))
+    end
+  end
+
+  # The decision table, pinned so a change of strategy is a visible edit rather
+  # than a benchmark footnote.
+  describe ".strategy" do
+    it "reads the key dtypes and the bound" do
+      words = Arrow::StringArray.from_values(["b", "a", "c", "a"])
+      cities = Arrow::StringArray.from_values(["x", "y", "x", "y"])
+      ints = Arrow::Int64Array.from_values([3_i64, 1_i64, 2_i64, 1_i64])
+      floats = Arrow::Float64Array.from_values([1.0, 2.0, 3.0, 4.0])
+
+      Prism::SortEngine.strategy(sort_columns(words)).should eq(:single)
+      # Two variable-length keys: the passes would gather them twice, which is
+      # what row encoding avoids.
+      Prism::SortEngine.strategy(sort_columns(words, cities)).should eq(:row_encoded)
+      # One variable-length key: the comparison is what costs, so passes win.
+      Prism::SortEngine.strategy(sort_columns(words, ints)).should eq(:passes)
+      # Fixed width: the chain exits on one comparison, so the passes are waste.
+      Prism::SortEngine.strategy(sort_columns(ints, floats)).should eq(:chain)
+      # A bounded window always keeps the bounded lexsort.
+      Prism::SortEngine.strategy(sort_columns(words, cities), 2).should eq(:bounded)
+      # A bound at the row count is no bound.
+      Prism::SortEngine.strategy(sort_columns(words, cities), 4).should eq(:row_encoded)
+    end
+
+    it "keeps the chain when a key is not sortable per column" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64]).as(Arrow::ArrayBase)},
+      ])
+      words = Arrow::StringArray.from_values(["b", "a", "c", "a"])
+
+      # One string key plus a struct: not enough variable-length keys for row
+      # encoding, and the struct cannot feed a stable pass loop.
+      Prism::SortEngine.strategy(sort_columns(structs.as(Arrow::ArrayBase), words))
+        .should eq(:chain)
+    end
+  end
+
+  describe ".indices with row encoding" do
+    it "matches the reference order across directions, nulls and ties" do
+      words = Arrow::StringArray.from_nullable(["west", nil, "east", "west", nil])
+      cities = Arrow::StringArray.from_nullable(["b", "a", nil, nil, "a"])
+
+      [{false, false}, {false, true}, {true, false}, {true, true}].each do |(descending, nulls_first)|
+        columns = [
+          Arrow::SortColumn.new(words, Arrow::SortOptions.new(descending, nulls_first)),
+          Arrow::SortColumn.new(cities, Arrow::SortOptions.new(false, false)),
+        ]
+        Prism::SortEngine.indices(columns).to_a.compact
+          .should eq(Arrow.lexsort_to_indices(columns).to_a.compact)
+      end
+    end
+
+    it "matches the reference order for three keys and a bounded window" do
+      words = Arrow::StringArray.from_values(["b", "a", "c", "a", "c", "b"])
+      cities = Arrow::StringArray.from_values(["y", "x", "y", "x", "x", "y"])
+      ints = Arrow::Int64Array.from_values([1_i64, 2_i64, 3_i64, 1_i64, 2_i64, 0_i64])
+      columns = [
+        Arrow::SortColumn.new(words.as(Arrow::ArrayBase)),
+        Arrow::SortColumn.new(cities.as(Arrow::ArrayBase)),
+        Arrow::SortColumn.new(ints.as(Arrow::ArrayBase)),
+      ]
+
+      full = Prism::SortEngine.indices(columns).to_a.compact
+      full.should eq(Arrow.lexsort_to_indices(columns).to_a.compact)
+      Prism::SortEngine.indices(columns, 4).to_a.compact.should eq(full[0, 4])
+    end
+
+    it "encodes a nested key alongside two string keys" do
+      structs = Arrow::StructArray.from_pairs([
+        {Arrow::Field.new("x", Arrow::DataType.int64, true),
+         Arrow::Int64Array.from_values([2_i64, 1_i64, 2_i64, 1_i64]).as(Arrow::ArrayBase)},
+      ])
+      words = Arrow::StringArray.from_values(["b", "a", "b", "a"])
+      cities = Arrow::StringArray.from_values(["y", "x", "x", "y"])
+      columns = [
+        Arrow::SortColumn.new(words),
+        Arrow::SortColumn.new(cities),
+        Arrow::SortColumn.new(structs.as(Arrow::ArrayBase)),
+      ]
+
+      order = Prism::SortEngine.indices(columns).to_a.compact
+      order.should eq(Arrow.lexsort_to_indices(columns).to_a.compact)
+      # a/x (1), a/y (3), b/x (2), b/y (0)
+      order.should eq([1_u32, 3_u32, 2_u32, 0_u32])
     end
   end
 
