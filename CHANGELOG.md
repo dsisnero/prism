@@ -10,13 +10,12 @@ All notable changes to this project are documented here. This project adheres to
 
 - `group_by` (and `sort_by` / `top_n`) on a single unsortable key — struct, map,
   decimal, interval, union — no longer raises `Sort not supported for data type
-  ...`. This dependency's `lexsort_to_indices` forwards a one-column sort to
-  `sort_to_indices` unconditionally (upstream `arrow-rs` guards that path with
-  `can_sort_to_indices` and otherwise compares), so `Prism::SortEngine` does the
-  comparison itself with `Arrow.make_comparator`, tie-breaking by position so the
-  order stays stable. A struct key grouped by `group_by` returns the same groups
-  `distinct` reports for that key. Filed upstream as
-  `shard_issues/arrow-cr.2.md`.
+  ...`. `arrow-cr` now sorts one column the same way it sorts several: upstream's
+  `can_sort_to_indices` guard on the fast path, so those keys reach the comparator
+  chain (fix `3023eac`, reported in `shard_issues/arrow-cr.2.md`). A struct key
+  grouped by `group_by` returns the same groups `distinct` reports for that key,
+  and `top_n` on such a key selects a bounded prefix instead of sorting every row.
+  A temporary fallback in `Prism::SortEngine` was removed once the fix landed.
 
 ### Performance
 
@@ -28,8 +27,7 @@ All notable changes to this project are documented here. This project adheres to
   variable-length (or nested) key makes the chain 2.5–3x slower than the passes,
   while all-fixed-width keys stay within ~15% either way and keep the chain.
   Bounded windows (`sort_by_slice`, `top_n`) also keep the bounded lexsort, and
-  keys only `make_comparator` can order (struct, map, decimal, interval) keep the
-  chain too.
+  keys only `make_comparator` can order (struct, map) keep the chain too.
 - `group_by`'s key sort goes through the same dispatch (`Prism::SortEngine`), so
   a multi-key group-by is 2.2x faster with a `Utf8` first key (1.18 s → 0.53 s)
   and 1.8x faster with three keys (1.49 s → 0.84 s) on 1e6 rows, with identical

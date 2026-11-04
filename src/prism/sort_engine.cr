@@ -9,22 +9,20 @@ module Prism
   # `GroupBy` is where the difference shows up most, since its key sort is most
   # of a multi-key group-by's cost.
   #
-  # Four strategies, chosen by what the sort has to produce:
+  # The dependency owns the per-key cases: one column, and a column whose dtype
+  # `sort_to_indices` cannot express (struct, map) which `Arrow.lexsort_to_indices`
+  # reaches through its comparator chain via `Arrow.can_sort_to_indices?`. What
+  # this module adds is only the choice between two multi-key shapes:
   #
-  # - **One sortable key** goes straight to `Arrow.lexsort_to_indices`, which
-  #   hands a single column to the dtype-specialized `sort_to_indices` anyway.
-  # - **One unsortable key** (struct, map, decimal, interval, union) takes
-  #   `comparator_sort`, because with one column there is no lexicographic chain
-  #   to fall back on in this dependency (`shard_issues/arrow-cr.2.md`).
   # - **A bounded window** keeps the bounded lexsort: it selects the prefix in
   #   one pass (`partial_sort`), while the pass sequence below must order every
   #   row to build its least-significant ordering first — a full pass (~110 ms on
   #   1e6 rows) against ~80 ms for the whole bounded lexsort of two keys.
-  # - **Multi-key** sorts split on how expensive a comparison is, which the
-  #   measurements below justify: variable-length (or nested) keys compose stable
-  #   single-key passes, fixed-width keys keep the comparator chain. A key's dtype
-  #   that only `make_comparator` can order (`per_key_sortable?`) also keeps the
-  #   chain.
+  # - **Unbounded, multi-key, every key sortable**: variable-length (or nested)
+  #   keys compose stable single-key passes, fixed-width keys keep the comparator
+  #   chain. `expensive_to_compare?` documents the measurements behind that split;
+  #   a key the per-key sort cannot express keeps the chain, which is the only
+  #   path that can compare it.
   module SortEngine
     extend self
 
@@ -41,14 +39,9 @@ module Prism
       # different lengths; let it, so both callers see Arrow's own error.
       return Arrow.lexsort_to_indices(columns, limit) if columns.empty?
 
-      sortable = columns.all? { |column| per_key_sortable?(column.values) }
-      # One key the per-key sort cannot express has no chain to fall back on in
-      # this dependency: `lexsort_to_indices` forwards a single column to
-      # `sort_to_indices` unconditionally, where upstream guards that fast path
-      # with `can_sort_to_indices` and falls through to its comparator chain
-      # (`shard_issues/arrow-cr.2.md`). So compare the values here (Phase 23).
-      return comparator_sort(columns.first, limit) if columns.size == 1 && !sortable
-      # A single sortable key already is one dtype-specialized sort.
+      # One key needs no composition: a sortable dtype goes to the specialized
+      # `sort_to_indices`, and an unsortable one falls back to the comparator
+      # chain, both inside `lexsort_to_indices` (arrow-cr `3023eac`).
       return Arrow.lexsort_to_indices(columns, limit) if columns.size == 1
 
       # A bounded window, a dtype only the chain can order, and all-fixed-width
@@ -58,87 +51,14 @@ module Prism
       row_count = columns.first.values.len
       unbounded = limit.nil? || limit >= row_count
       return Arrow.lexsort_to_indices(columns, limit) unless unbounded
-      return Arrow.lexsort_to_indices(columns, limit) unless sortable
+      unless columns.all? { |column| Arrow.can_sort_to_indices?(column.values.data_type) }
+        return Arrow.lexsort_to_indices(columns, limit)
+      end
       unless columns.any? { |column| expensive_to_compare?(column.values.data_type) }
         return Arrow.lexsort_to_indices(columns, limit)
       end
 
       stable_lexsort(columns)
-    end
-
-    # Sorts one column with the comparator `Arrow.make_comparator` builds, for the
-    # dtypes `Arrow.sort_to_indices` has no case for: struct, map, decimal,
-    # interval and union keys are comparable but not sortable on their own. That
-    # also unblocks `group_by` on such a key, which is legal everywhere else in
-    # Arrow — `Arrow.partition` falls back to the same comparator.
-    #
-    # This is the fallback upstream `lexsort_to_indices` already reaches: it
-    # guards its single-column fast path with `can_sort_to_indices` and otherwise
-    # uses a `LexicographicalComparator`. The port drops that guard, so the same
-    # call raises (`shard_issues/arrow-cr.2.md`); doing it here keeps the fix out
-    # of `lib/` and makes the tie-break explicit instead of inherited.
-    #
-    # `limit` truncates after the full order rather than bounding the sort: this
-    # is the rare path, and a bounded selection through `make_comparator` would
-    # mean reimplementing `sort_bounded` for a comparison this module does not
-    # own. The prefix it returns is the same one a bounded sort would.
-    private def comparator_sort(
-      column : Arrow::SortColumn,
-      limit : Int32?,
-    ) : Arrow::PrimitiveArray(UInt32)
-      values = column.values
-      compare = Arrow.make_comparator(values, values, column.options || Arrow::SortOptions.default)
-      indices = Array(UInt32).new(values.len, &.to_u32)
-      indices.sort! do |left, right|
-        result = compare.call(left.to_i32, right.to_i32)
-        # Tie-break by position, which makes this a stable order and therefore
-        # the same order a stable sort of the same values would return.
-        result == 0 ? left.to_i32 <=> right.to_i32 : result
-      end
-
-      length = limit ? Math.min(limit, indices.size) : indices.size
-      Arrow::PrimitiveArray(UInt32).from_values(indices[0, length])
-    end
-
-    # `Arrow.sort_to_indices` dispatches on the array class and covers fewer
-    # dtypes than `Arrow.make_comparator`, which the multi-key chain uses: a
-    # struct, map, decimal128/256, interval or union key is comparable but not
-    # sortable on its own; a run-end key is sorted by `sort_to_indices`' own
-    # `RunArray` arms, which this predicate deliberately does not claim (Prism has
-    # no run-end column type, and multi-key run-end keys stay on the chain where
-    # `make_comparator` checks the run-ends types match). Mirroring that dispatch
-    # keeps those keys on the comparator path instead of raising "Sort not
-    # supported".
-    #
-    # It is deliberately narrower than upstream's `can_sort_to_indices`, which
-    # also admits decimal and interval primitives (upstream `DataType::is_numeric`
-    # includes `Decimal32/64/128/256`, `is_temporal` includes `Interval`) and
-    # recurses into list children with `can_rank`. Conservative is the right side
-    # to err on here: a `false` costs a comparator sort, a wrong `true` raises.
-    def per_key_sortable?(values : Arrow::ArrayBase) : Bool
-      case values
-      when Arrow::PrimitiveArray(Int8), Arrow::PrimitiveArray(Int16),
-           Arrow::PrimitiveArray(Int32), Arrow::PrimitiveArray(Int64),
-           Arrow::PrimitiveArray(UInt8), Arrow::PrimitiveArray(UInt16),
-           Arrow::PrimitiveArray(UInt32), Arrow::PrimitiveArray(UInt64),
-           Arrow::PrimitiveArray(Arrow::Float16), Arrow::PrimitiveArray(Float32),
-           Arrow::PrimitiveArray(Float64),
-           Arrow::BooleanArray,
-           Arrow::GenericStringArray(Int32), Arrow::GenericStringArray(Int64),
-           Arrow::GenericBinaryArray(Int32), Arrow::GenericBinaryArray(Int64),
-           Arrow::FixedSizeBinaryArray,
-           Arrow::StringViewArray, Arrow::BinaryViewArray,
-           Arrow::GenericListArray(Int32), Arrow::GenericListArray(Int64),
-           Arrow::GenericListViewArray(Int32), Arrow::GenericListViewArray(Int64),
-           Arrow::FixedSizeListArray,
-           Arrow::DictionaryArray(Int8), Arrow::DictionaryArray(Int16),
-           Arrow::DictionaryArray(Int32), Arrow::DictionaryArray(Int64),
-           Arrow::DictionaryArray(UInt8), Arrow::DictionaryArray(UInt16),
-           Arrow::DictionaryArray(UInt32), Arrow::DictionaryArray(UInt64)
-        true
-      else
-        false
-      end
     end
 
     # Whether comparing two values of `type` costs more than a fixed-width
@@ -202,8 +122,8 @@ module Prism
     # Upstream `sort_to_indices` compares values only and sorts unstably, so the
     # same assumption would not hold against arrow-rs — and Polars makes the same
     # choice dynamic (`maintain_order`: stable sort when true, unstable otherwise).
-    # Prism's contract is "ties keep input order", which this dependency satisfies
-    # and `comparator_sort` re-establishes explicitly for the dtypes it handles.
+    # Prism's contract is "ties keep input order", which this dependency satisfies;
+    # `spec/prism/verbs_spec.cr` pins it from the outside.
     #
     # `Arrow.sort_to_indices` sorts an array's own positions, so a refinement pass
     # first gathers the key through the current order (`Arrow.take`) and then

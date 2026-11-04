@@ -1,9 +1,36 @@
 # `arrow-cr`: a single-column `lexsort_to_indices` raises for struct/map keys
 
-## Status: open, worked around in Prism (2026-11-03)
+## Status: fixed upstream, consumer simplified (2026-11-03)
 
-Verified against `arrow-cr` `728ce51` (what `shard.lock` resolves) and against
-upstream `arrow-rs` `60.0.0`, which the port pins.
+Fixed in `arrow-cr` commit `3023eac` ("port: gate the single-column lexsort fast
+path with `can_sort_to_indices`"), merged to `main`. `Arrow.can_sort_to_indices?`
+now exists (`sort.cr`, with the `can_rank?` recursion in `rank.cr`),
+`lexsort_to_indices` uses its single-column fast path only for the dtypes
+`sort_to_indices` can express, and the dispatch behind it grew the decimal and
+interval primitives. Prism was updated to that commit and dropped its workaround;
+no `lib/` changes were ever made.
+
+Re-verified from Prism against `arrow-cr` `3023eac` (Apple M4, Crystal 1.22.2):
+
+```text
+struct:   can_sort_to_indices?=false
+  sort_to_indices   raises (as upstream)
+  lexsort single    [1, 3, 0, 2]     ascending x, ties in input order
+  lexsort limit 2   [1, 3]           bounded selection
+decimal:  can_sort_to_indices?=true
+  sort_to_indices   [2, 1, 3, 0]     nulls first under default SortOptions
+  lexsort single    [2, 1, 3, 0]
+interval: can_sort_to_indices?=true
+  sort_to_indices   [2, 1, 3, 0]
+```
+
+The bounded case is worth keeping: a single struct key over 1e6 rows costs
+405.1 ms for the full order and 18.5 ms for `limit: 10`, so `top_n(10)` on such
+a key now selects instead of sorting everything (Prism's former workaround
+sorted in full and then truncated).
+
+Originally verified against `arrow-cr` `728ce51` and upstream `arrow-rs`
+`60.0.0`, which the port pins.
 
 Upstream `arrow-ord/src/sort.rs` guards the single-column fast path:
 
@@ -92,23 +119,27 @@ heap top-k path and the `nulls_last` bound), not this one.
 a two-key `group_by` with a struct key worked. `DataFrame#sort_by` and `top_n` hit
 the same wall for a single struct/map/decimal/interval key.
 
-Workaround (Prism Phase 23): `Prism::SortEngine.comparator_sort` sorts the index
-array with `Arrow.make_comparator` and tie-breaks by position whenever
-`per_key_sortable?` says the per-key sort cannot express the dtype — the same
-fallback upstream reaches through its guard, with the tie-break made explicit
-rather than inherited. No `lib/` changes; `Prism::SortEngine.per_key_sortable?`
-stays conservative (it mirrors the port's dispatch, not upstream's wider
-`can_sort_to_indices`).
+Prism carried a temporary workaround between Phase 23 and the fix:
+`Prism::SortEngine.comparator_sort` compared the index array directly and
+`per_key_sortable?` mirrored the old dispatch. Both are now deleted —
+`SortEngine` defers a single column to `Arrow.lexsort_to_indices` (which reaches
+the chain through `can_sort_to_indices?`) and asks `Arrow.can_sort_to_indices?`
+when choosing the multi-key shape, so there is no parallel dtype dialect left in
+Prism.
 
-## Suggested fix direction (not a patch)
+The specs written for the workaround stay: they assert Order/`limit` behaviour
+through `Prism::SortEngine` and `DataFrame#sort_by`/`top_n`/`group_by`, and now
+pin the dependency's comparator path instead of Prism's copy.
 
-1. Port `can_sort_to_indices` (primitive-or-listed-or-dictionary-or-run-end, with
-   the `can_rank` recursion for list children).
-2. Gate the single-column fast path in `lexsort_to_indices` on it, so the
+## What landed upstream
+
+1. `can_sort_to_indices?` ported, with `can_rank?` handling the primitive,
+   boolean, byte-array and byte-view families and the list/dictionary/run-end
+   recursion.
+2. The single-column fast path in `lexsort_to_indices` gated on it, so the
    comparator path below is reachable for one column as well.
-3. Extend `sorted_valid_indices` (or the `sort_to_indices` dispatch above it) with
-   the decimal and interval primitives and the run-end arm, matching upstream;
-   then `can_sort_to_indices` and the dispatch agree.
+3. The dispatch extended with the decimal and interval primitives, so
+   `can_sort_to_indices?` and what `sort_to_indices` can actually sort agree.
 
 ## Acceptance
 

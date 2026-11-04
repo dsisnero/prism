@@ -32,14 +32,15 @@ owner-gated, so the last published release is still `v0.1.1`. `main` carries the
 Phase 12 ergonomics work, the Phase 13 row layer, the Phase 14 value-coverage
 work, the Phase 15 vectorized aggregation, the Phase 16 eager-grouping pruning,
 the Phase 17 nested-key canonicalization, the Phase 18 bounded sort, the Phase 20
-`top_n`, the Phase 21 multi-key passes and the Phase 22 dtype-aware
-`Prism::SortEngine` that `group_by` shares. Phases 0–18 are closed apart from the
-cosmetic local folder rename.
+`top_n`, the Phase 21 multi-key passes, the Phase 22 dtype-aware
+`Prism::SortEngine` that `group_by` shares, and the Phase 23 fix for single
+nested keys — which `arrow-cr` now owns, with Prism's workaround deleted. Phases
+0–18 are closed apart from the cosmetic local folder rename.
 
-**Dependencies verified against:** `arrow-cr` `728ce51` (includes the bounded
-sort, `5b4b958`) and `parquet-cr` `25a889e` (both `branch: main`, resolved from
-GitHub). `shard.lock` and `lib/` are gitignored, so this line is the record of
-what the suite below was run against.
+**Dependencies verified against:** `arrow-cr` `3023eac` (bounded sort `5b4b958`,
+the single-column `can_sort_to_indices?` guard in Phase 23) and `parquet-cr`
+`25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
+gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
@@ -111,7 +112,7 @@ with nothing pending.
 | 20 | Eager `top_n`: the fast spelling of `sort_by(...).head(n)` | **done** |
 | 21 | Multi-key sort as stable single-key passes | **done** |
 | 22 | Sort strategy by dtype, shared by `group_by` (`Prism::SortEngine`) | **done** |
-| 23 | Single nested keys sort by comparison, so `group_by` accepts them | **done** |
+| 23 | Single nested keys sort, so `group_by` accepts them (fix landed in `arrow-cr`) | **done** |
 
 ---
 
@@ -2016,57 +2017,58 @@ Two deliberate limits:
   build its least-significant ordering, which costs a full pass (~110 ms) against
   ~80 ms for the whole bounded lexsort.
 - **Dtypes the per-key sort cannot express keep the chain.** `make_comparator`
-  supports more dtypes than `sort_to_indices` (struct, map, decimal, interval,
-  run-end, union), and `per_key_sortable?` mirrors that dispatch. A struct key
-  sorted next to a scalar key regressed to `Sort not supported` during this phase
-  — caught by a spec written for exactly that — and now falls back.
+  supports more dtypes than `sort_to_indices` (struct, map), so a key's dtype is
+  checked with `Arrow.can_sort_to_indices?` before a pass path is chosen — as of
+  Phase 23 that predicate is the dependency's, not a mirror. A struct key sorted
+  next to a scalar key regressed to `Sort not supported` during this phase —
+  caught by a spec written for exactly that — and now falls back.
 
 Phase 22 kept both limits and added a third (all-fixed-width keys), after
 measuring that the passes only win where a comparison itself is expensive.
 
-### A single nested key sorts by comparison (Phase 23)
+### A single nested key sorts; the dependency owns that path (Phase 23)
 
 `group_by(col("s"))` on a struct column raised `Sort not supported for data type
 Struct(...)`. The gap was the sort, not the key: `distinct` and `n_unique`
 already key structs through the `arrow-row` encoding, and a *multi-key*
 `group_by` with a struct key worked, because `lexsort_to_indices` builds a
-`make_comparator` chain for two or more columns. One column is different: the
-port forwards it to `sort_to_indices` unconditionally, and that dispatch has no
+`make_comparator` chain for two or more columns. One column is different: the port
+forwarded it to `sort_to_indices` unconditionally, and that dispatch has no
 struct, map, decimal, interval or union arm.
 
 That guard is a port bug, not an Arrow rule. Upstream `arrow-ord` 60.0.0 gates
 the fast path — `if columns.len() == 1 && can_sort_to_indices(dtype)` — and
 otherwise falls through to its `LexicographicalComparator`, so one struct key
-sorts there. It is filed as [`shard_issues/arrow-cr.2.md`](../shard_issues/arrow-cr.2.md)
+sorts there. Filed as [`shard_issues/arrow-cr.2.md`](../shard_issues/arrow-cr.2.md)
 with the reproducer and the wider dispatch gap (upstream's `can_sort_to_indices`
-also admits decimal and interval primitives, which this port's `Int8..Float64`
-arms do not).
+also admits decimal and interval primitives, which the old arms did not).
 
-`SortEngine.indices` now routes that shape to `comparator_sort`, which sorts the
-index array with the comparator `Arrow.make_comparator` builds and breaks ties by
-position, so the order is the stable one a `sort_to_indices` dtype would have
-produced — the same fallback upstream reaches through its guard, with the
-tie-break explicit instead of inherited. Nothing under `lib/` changed.
-`Arrow.partition` already falls back to the same comparator for struct keys (as
-upstream `find_boundaries` does), so `group_by` works end to end on it; the emitted
-keys are the original values, and grouping still canonicalizes float key columns
-first (§14, Phase 17).
+Two steps, in this order:
 
-`limit` truncates after the full order rather than bounding the sort. That is the
-rare path (a struct/interval/decimal key), and a bounded comparator selection
-would mean reimplementing `sort_bounded` against a comparison this module does not
-own; the prefix is still the prefix a bounded sort returns, which is what
-`sort_by_slice` and `top_n` need.
+1. **Prism worked around it** (`2125335`) with `SortEngine.comparator_sort`, which
+   sorted the index array itself and tie-broke by position. Nothing under `lib/`
+   changed.
+2. **`arrow-cr` `3023eac` fixed it** — `can_sort_to_indices?` ported,
+   `lexsort_to_indices` gated on it, decimal and interval primitives added to the
+   dispatch — so the workaround and `per_key_sortable?` are both deleted and
+   `SortEngine` now asks `Arrow.can_sort_to_indices?` when choosing the multi-key
+   shape. There is no parallel dtype dialect left in Prism, which is the point:
+   `arrow-cr` owns Arrow semantics (§1).
 
-Specs pin the shape at three levels: `SortEngine` (the comparator path, with and
-without a bound), `DataFrame#sort_by`/`top_n` on a single struct key in both
-directions, and `group_by` on a single struct key where the group count must equal
-what `distinct` reports for the same key. Two more specs cover the second real
-dtype family, decimal: `SortEngine` sorts a decimal key under both null
-placements, and `group_by` groups one (nulls first under `maintain_order: false`,
-then the values). A decimal column is a `PrimitiveArray(Int128)` here, which is
-why it falls through the port's `Int8..Float64` arms; interval keys take the same
-branch and are not separately spec'd.
+Deleting the workaround also improved the bounded path, because the dependency
+bounds where the workaround did not: one struct key over 1e6 rows costs 405.1 ms
+for the full order and 18.5 ms for `limit: 10`, so `top_n(10)` on such a key now
+selects instead of sorting everything. `Arrow.partition` already falls back to the
+same comparator for struct keys (as upstream `find_boundaries` does), so
+`group_by` works end to end; the emitted keys are the original values, and
+grouping still canonicalizes float key columns first (Phase 17).
+
+The specs written against the workaround stay, now pinning the dependency's path
+from outside: `SortEngine` for a single unsortable key with and without a bound,
+`DataFrame#sort_by`/`top_n` on a single struct key in both directions,
+`group_by` on a single struct key where the group count must equal what `distinct`
+reports, and a decimal pair (`SortEngine` under both null placements, `group_by`
+on the key) for the second dtype family.
 
 ### The sort strategy is chosen by dtype, and `group_by` shares it (Phase 22)
 

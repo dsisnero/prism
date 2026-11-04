@@ -57,8 +57,9 @@ describe Prism::SortEngine do
       Prism::SortEngine.indices(columns, rows + 5).to_a.compact.should eq(full)
     end
 
-    # One unsortable key has no chain to fall back on: a single column goes
-    # straight to `sort_to_indices`, which has no struct case (Phase 23).
+    # One unsortable key is the dependency's call: `lexsort_to_indices` skips its
+    # fast path (`can_sort_to_indices?` is false) and compares with its chain.
+    # This pins the order `SortEngine` hands back, including the bounded prefix.
     it "sorts a single key the per-key sort cannot order" do
       structs = Arrow::StructArray.from_pairs([
         {Arrow::Field.new("x", Arrow::DataType.int64, true),
@@ -73,11 +74,10 @@ describe Prism::SortEngine do
         .should eq([1_u32, 3_u32])
     end
 
-    # Same branch, different unsortable dtype: a decimal column is a
-    # `PrimitiveArray(Int128)` in arrow-cr, so `sort_to_indices` falls through its
-    # `Int8..Float64` arms and raises. Null placement and tie order come from the
-    # `SortOptions` the caller passes plus the index tie-break, as for any other
-    # dtype.
+    # A decimal column is a `PrimitiveArray(Int128)` with a decimal data type;
+    # since arrow-cr `3023eac` it is sortable per column, so this goes through the
+    # specialized path. Null placement and tie order come from the `SortOptions`
+    # the caller passes plus the index tie-break, as for any other dtype.
     it "sorts a single decimal key" do
       amounts = Arrow::PrimitiveArray(Int128)
         .from_nullable([250_i128, 125_i128, nil, 125_i128])
@@ -103,7 +103,7 @@ describe Prism::SortEngine do
 
       # A struct key next to a variable-length key would otherwise take the pass
       # path and raise "Sort not supported".
-      Prism::SortEngine.per_key_sortable?(structs).should be_false
+      Arrow.can_sort_to_indices?(structs.data_type).should be_false
       order_of(structs.as(Arrow::ArrayBase), numbers)
         .should eq(reference_order(structs.as(Arrow::ArrayBase), numbers))
     end
