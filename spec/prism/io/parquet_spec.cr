@@ -68,6 +68,23 @@ describe "Parquet IO" do
     read["qty"].to_a.should eq([1_i64, 3_i64])
   end
 
+  # The downstream shape (amazon_data's Open Library scan): one title set tested
+  # against two columns, OR'd, pushed into the reader.
+  it "pushes a set-membership predicate over two columns" do
+    titles = ["east", "west"]
+    predicate = col("region").is_in(titles) | col("region").is_in(["west"])
+
+    read = Prism.read_parquet(
+      parquet_io(SpecFrames.sales),
+      columns: ["qty"],
+      predicate: predicate,
+    )
+
+    # Rows 1, 2, 3 and 5 match; row 4's region is null, so Kleene `or` leaves the
+    # row unjudged and it is dropped, exactly as the eager `filter` drops it.
+    read["qty"].to_a.should eq([1_i64, 2_i64, 3_i64, 5_i64])
+  end
+
   it "keeps a null key when the predicate treats null as a value" do
     read = Prism.read_parquet(
       parquet_io(SpecFrames.sales),

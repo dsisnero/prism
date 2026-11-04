@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(513 examples, ~30 s warm). The table below is the only place that tracks status;
+(514 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -65,10 +65,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **513 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**514**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**517**, ~1 min); with both
-set the suite is **518**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **514 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**515**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**518**, ~1 min); with both
+set the suite is **519**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -1877,11 +1877,13 @@ all-`utf8` schema when reading a CSV.
 nulls are pinned in both modes, `is_in([] of String)` is all-false, a 5,000-value
 set keeps a key under 80 characters, and a set with no common dtype with the
 column raises `DtypeError` from `dtype(schema)`. The Parquet specs read a real
-file with a set predicate (dropping the null-key row) and with
-`nulls_equal: true` (keeping it); the lazy specs pin the pushdown in `explain`
-and compare the collected rows against the eager reader. CSV specs cover the
-all-string schema, a value round-tripping as its source text, an explicit schema
-winning over `infer_rows: 0`, and the negative argument. Suite: 513 examples.
+file with a set predicate (dropping the null-key row), with `nulls_equal: true`
+(keeping it), and with the downstream shape — one set tested against two columns
+and OR'd — since that is what the consumer's scan actually writes; the lazy specs
+pin the pushdown in `explain` and compare the collected rows against the eager
+reader. CSV specs cover the all-string schema, a value round-tripping as its
+source text, an explicit schema winning over `infer_rows: 0`, and the negative
+argument. Suite: 514 examples.
 
 **Notes carried forward:**
 
