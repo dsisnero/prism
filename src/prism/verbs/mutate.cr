@@ -98,6 +98,9 @@ module Prism
         # source frame's schema would change too.
         replacement ? field.copy.with_name(replacement) : field
       end
+      # A swap (`a -> b`, `b -> a`) is legal because it is checked on the result;
+      # renaming onto a name that survives is not.
+      Prism.ensure_unique_names!(fields.map(&.name), "rename")
       schema = Arrow::Schema.new(fields)
 
       # `RecordBatch#with_schema` requires the new schema to be a *superset*, so

@@ -46,7 +46,20 @@ module Prism
     def select(exprs : Enumerable(Expr)) : LazyFrame
       # `Enumerable(Expr)` accepts `Array(Col)` here, so widen explicitly.
       list = exprs.map(&.as(Expr)).to_a
+      # The plan's schema is the contract, so a duplicate output name has to fail
+      # here rather than when `collect` builds a frame with an unreachable column.
+      names = list.map { |expr| Prism::LazyFrame.output_name(expr) }
+      Prism.ensure_unique_names!(names, "select")
       LazyFrame.new(Plan::Select.new(@plan, list))
+    end
+
+    # The name a selected expression will carry.
+    def self.output_name(expr : Expr) : String
+      case expr
+      when Alias then expr.name
+      when Col   then expr.name
+      else            raise MissingAlias.new(expr.key)
+      end
     end
 
     def with_column(name : String | Symbol, expr : Expr) : LazyFrame
@@ -214,6 +227,12 @@ module Prism
       keys.each do |key|
         expressions << (key.is_a?(Expr) ? key : Prism.col(key))
       end
+      # The plan's schema is the contract: two keys with one name would emit two
+      # columns of that name, and the second would be unreachable.
+      Prism.ensure_unique_names!(
+        expressions.map { |key| Prism::GroupBy.key_name(key) },
+        "the group_by keys",
+      )
 
       LazyGroupBy.new(@plan, expressions, null_keys, maintain_order)
     end
@@ -291,6 +310,17 @@ module Prism
     end
 
     def aggregate(columns : Hash(String, Expr)) : LazyFrame
+      # An aggregate reusing a key's name would produce two columns of that name.
+      key_names = @keys.map { |key| Prism::GroupBy.key_name(key) }
+      columns.each_key do |name|
+        next unless key_names.includes?(name)
+
+        raise DuplicateColumn.new(
+          name,
+          "column #{name.inspect} is a grouping key; an aggregate cannot reuse the name",
+        )
+      end
+
       LazyFrame.new(
         Plan::GroupBy.new(@input, @keys, columns, @null_keys, @maintain_order)
       )

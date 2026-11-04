@@ -137,6 +137,23 @@ describe Prism::DataFrame do
   end
 
   describe "#select" do
+    it "rejects the same column twice" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        verbs_frame.select("region", "region")
+      end
+    end
+
+    it "rejects an alias that collides with a selected column" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        verbs_frame.select(col("region"), col("price").alias("region"))
+      end
+    end
+
+    it "still allows the same column under two aliases" do
+      verbs_frame.select(col("qty").alias("left"), col("qty").alias("right")).column_names
+        .should eq(["left", "right"])
+    end
+
     it "selects columns by name" do
       selected = verbs_frame.select("region", "price")
 
@@ -233,6 +250,28 @@ describe Prism::DataFrame do
   end
 
   describe "#rename" do
+    # A frame with two columns of one name loses one of them to `df[name]`, and
+    # nothing else complains: `to_s`, `to_arrow` and a Parquet write all succeed.
+    # Renaming onto a taken name has to fail instead.
+    it "rejects a rename onto an existing column name" do
+      expect_raises(Prism::DuplicateColumn, /"region".*(rename|exists)/) do
+        verbs_frame.rename("price", "region")
+      end
+    end
+
+    it "rejects two renames onto the same name" do
+      expect_raises(Prism::DuplicateColumn, /"cost"/) do
+        verbs_frame.rename({"price" => "cost", "qty" => "cost"})
+      end
+    end
+
+    it "still allows a swap, and renaming a column to itself" do
+      verbs_frame.rename({"region" => "price", "price" => "region"}).column_names
+        .should eq(["price", "region", "qty", "status"])
+      verbs_frame.rename("qty", "qty").column_names
+        .should eq(["region", "price", "qty", "status"])
+    end
+
     it "renames columns without copying data" do
       batch = verbs_batch
       frame = Prism.from_arrow(batch)

@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(530 examples, ~30 s warm). The table below is the only place that tracks status;
+(544 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -40,8 +40,9 @@ single nested keys — which `arrow-cr` now owns, with Prism's workaround
 deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals and
 the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
 downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phase
-27 property oracles plus dictionary membership, and the Phase 28 `concat`
-diagnostics. Phases 0–28 are closed apart from the cosmetic local folder rename.
+27 property oracles plus dictionary membership, the Phase 28 `concat` diagnostics
+and the Phase 29 unique-name checks. Phases 0–29 are closed apart from the
+cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
@@ -66,10 +67,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **530 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**531**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**534**, ~1 min); with both
-set the suite is **535**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **544 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**545**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**548**, ~1 min); with both
+set the suite is **549**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -122,6 +123,7 @@ so a new feature starts from a clean tree.
 | 26 | `is_in` set membership, and `read_csv(infer_rows: 0)` as documented | **done** |
 | 27 | Property oracles for the sort engine, and `is_in` on dictionary columns | **done** |
 | 28 | `concat` diagnostics, and zero-row frames in a schema check | **done** |
+| 29 | Unique output names in `rename`, `select` and `group_by` | **done** |
 
 ---
 
@@ -2020,6 +2022,56 @@ zero-row frame with a different dtype still raising, and the three message shape
   frame is non-nullable whether or not its author meant it to be; treating it as
   part of the concat contract made the accumulator pattern depend on an accident.
   Dtypes stay strict because they *are* the data contract.
+
+### Phase 29 — one column, one name (done)
+
+Probing verbs rather than dtypes again, per Phase 27/28's note. Three verbs built
+a schema by name and never checked the result:
+
+```text
+rename({"b" => "a"})                     -> ["a", "a", "c"]
+select("a", "a")                         -> ["a", "a"]
+select(col("a"), col("b").alias("a"))    -> ["a", "a"]
+group_by("g", "g")                       -> ["g", "g", "s"]
+aggregate(g: col("q").sum)               -> ["g", "g"]
+```
+
+Every one of those frames looks fine: `to_s` renders, `to_arrow` carries the
+duplicate field, a Parquet write succeeds, and `df["a"]` silently returns the
+**first** column — the other is unreachable. `hstack`, join suffixing and
+`with_row_index` already raised, so the invariant existed; these paths leaked.
+
+- [x] `Prism.ensure_unique_names!(names, context)` — one check, naming the column
+      and the verb
+- [x] eager `rename` checks the **result** names, so a swap
+      (`{"a" => "b", "b" => "a"}`) stays legal and renaming a column to itself is
+      a no-op; `select` checks its output names, so a repeated name and a
+      colliding alias both fail while two aliases of one column still work
+- [x] eager and lazy `group_by` reject the same key twice (at `group_by`) and an
+      aggregate named after a key (at `aggregate`), with a message that says which
+      rule was broken; `LazyFrame#select` checks the plan's schema contract, which
+      also covers `LazyFrame#rename` (it delegates to `select`)
+- [x] `GroupBy.key_name` became a class method so the lazy builder uses the same
+      naming rule instead of re-deriving it
+
+**Acceptance:** every collision above raises `Prism::DuplicateColumn` naming the
+column, eagerly and through the plan, and the legal neighbours are pinned too —
+the rename swap, `rename("qty", "qty")`, `select(col("qty").alias("left"),
+col("qty").alias("right"))`, distinct aggregate names. Suite: 544 examples.
+
+**Notes carried forward:**
+
+- **The invariant is only worth having if every path enforces it.** `hstack` and
+  join suffixing raised from the start; `rename`, `select` and `group_by` did not,
+  and the failure mode was the worst kind — a frame that renders, serializes and
+  answers lookups with the wrong column. One helper, called from every verb that
+  builds a schema by name, is what makes it an invariant rather than a convention.
+- **Check the result, not the operation.** Validating `rename` pair by pair would
+  reject a legitimate swap; validating the output names accepts the swap and
+  rejects two renames onto one name. The same shape applies to `select`.
+- **Two of the three were found by listing the constructors of a schema**, not by
+  reading the verbs' docs: `Arrow::Schema.new` call sites are the places a
+  duplicate can be born.
 
 ## 13. Testing strategy
 

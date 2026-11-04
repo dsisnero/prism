@@ -231,6 +231,31 @@ describe Prism::GroupBy do
     end
   end
 
+  describe "output names" do
+    # Same failure mode as `rename`/`select`: two columns of one name, where
+    # `df[name]` silently returns the first and nothing else complains.
+    it "rejects the same key twice" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        group_frame.group_by("region", "region")
+      end
+    end
+
+    it "rejects an aggregate that reuses a key name" do
+      expect_raises(Prism::DuplicateColumn, /grouping key/) do
+        group_frame.group_by("region").aggregate(region: col("price").sum)
+      end
+    end
+
+    it "still allows distinct aggregate names" do
+      grouped = group_frame.group_by("region").aggregate(
+        total: col("price").sum,
+        rows: col("qty").count_all,
+      )
+
+      grouped.column_names.should eq(["region", "total", "rows"])
+    end
+  end
+
   describe "null keys" do
     it "keeps null keys as one group, in discovery order by default" do
       grouped = null_key_frame.group_by("region").aggregate(

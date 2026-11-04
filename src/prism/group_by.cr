@@ -58,6 +58,10 @@ module Prism
           "null_keys must be :first, :last, or :drop (got #{@null_keys})"
         )
       end
+
+      # Two keys with one name would emit two columns of that name, and the
+      # second would be unreachable by name.
+      Prism.ensure_unique_names!(@keys.map { |key| key_name(key) }, "the group_by keys")
     end
 
     # Columns an aggregation reads: the keys' columns plus the aggregates'
@@ -442,6 +446,16 @@ module Prism
         Arrow::Field.new(name, types.dtype(expr), true)
       end
 
+      key_names = key_fields.map(&.name)
+      aggregate_fields.each do |field|
+        next unless key_names.includes?(field.name)
+
+        raise DuplicateColumn.new(
+          field.name,
+          "column #{field.name.inspect} is a grouping key; an aggregate cannot reuse the name",
+        )
+      end
+
       Arrow::Schema.new((key_fields + aggregate_fields).to_a)
     end
 
@@ -465,12 +479,18 @@ module Prism
       )
     end
 
-    private def key_name(key : Expr) : String
+    # The output name of a grouping key: its column name, or its alias. Shared
+    # with `LazyFrame#group_by`, which validates the same names before planning.
+    def self.key_name(key : Expr) : String
       case key
       when Col   then key.name
       when Alias then key.name
       else            raise MissingAlias.new(key.key)
       end
+    end
+
+    private def key_name(key : Expr) : String
+      GroupBy.key_name(key)
     end
   end
 end

@@ -29,6 +29,10 @@ module Prism
       types = TypeCache.new(@schema)
       duplicates = Cse.duplicate_keys(list)
       names = list.map { |expr| output_name(expr) }
+      # `select("a", "a")` and an alias that collides with another selected column
+      # both produced a frame with two columns of one name, where the second is
+      # unreachable by name.
+      Prism.ensure_unique_names!(names, "select")
       fields = list.map_with_index { |expr, index| select_field(expr, names[index], types) }
       schema = Arrow::Schema.new(fields)
 

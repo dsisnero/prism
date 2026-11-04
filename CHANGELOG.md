@@ -130,6 +130,15 @@ documented): the only deferred item left is the owner-gated repository rename.
   `can_sort_to_indices` guard on the fast path), so those keys reach the
   comparator chain; `top_n` on such a key selects a bounded prefix instead of
   sorting every row. Reported in `shard_issues/arrow-cr.2.md`.
+- `rename`, `select` and `group_by` reject output names that would collide,
+  raising `Prism::DuplicateColumn` with the offending column: `rename("a", "b")`
+  when `b` still exists, two renames onto one name, `select("a", "a")`, an alias
+  that collides with another selected column, the same grouping key twice, and an
+  aggregate named after a grouping key (eager and lazy). A frame with two columns
+  of one name silently loses one to `df[name]` while `to_s`, `to_arrow` and a
+  Parquet write all succeed; a key swap (`{"a" => "b", "b" => "a"}`) and two
+  aliases of one column remain legal. **Behaviour change**: these used to return
+  the duplicate frame.
 - `Prism.concat` accepts a zero-row frame whose columns differ only in
   nullability (an empty seed is non-nullable by construction, a frame with nulls
   is nullable), and its `SchemaError` now names the column and the difference —

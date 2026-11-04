@@ -290,6 +290,14 @@ Eager verbs split into two groups by cost:
 | Element-wise | `select`, `filter`, `with_column(s)`, `drop`, `rename`, `cast`, `fill_null`, `drop_nulls`, `with_row_index` | map over chunks, preserve chunking, reuse untouched arrays |
 | Row-reordering | `sort_by`, `sort_by_slice`, `distinct` | collapse to one batch, since the output row set differs |
 
+A frame's column names are unique, and every verb that builds a schema by name
+enforces it: `select` (a repeated name or a colliding alias), `rename` (on the
+result, so a swap stays legal), `group_by` (the same key twice, or an aggregate
+named after a key), `hstack` and join suffixing. Each raises
+`Prism::DuplicateColumn` naming the column, because a frame with two columns of
+one name loses one of them to `df[name]` while `to_s`, `to_arrow` and a Parquet
+write all succeed.
+
 `select` projects a bare column without copying it; only computed expressions
 produce new arrays. `rename` changes only the schema and re-wraps the same
 arrays — Arrow's `RecordBatch#with_schema` cannot express a rename (it demands a

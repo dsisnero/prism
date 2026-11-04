@@ -101,6 +101,43 @@ describe Prism::LazyFrame do
     end
   end
 
+  describe "name collisions" do
+    # The lazy verbs build a plan whose schema is the contract; a duplicate name
+    # has to fail when the plan is built, not when a frame with two `region`
+    # columns reaches `collect`.
+    it "rejects a lazy select that names a column twice" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        SpecFrames.sales.lazy.select("region", "region")
+      end
+    end
+
+    it "rejects a lazy alias that collides with a selected column" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        SpecFrames.sales.lazy.select(col("region"), col("qty").alias("region"))
+      end
+    end
+
+    it "rejects a lazy rename onto an existing column name" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        SpecFrames.sales.lazy.rename("qty", "region")
+      end
+    end
+  end
+
+  describe "group_by output names" do
+    it "rejects an aggregate that reuses a key name" do
+      expect_raises(Prism::DuplicateColumn, /grouping key/) do
+        SpecFrames.sales.lazy.group_by("region").aggregate(region: col("qty").sum)
+      end
+    end
+
+    it "rejects the same key twice" do
+      expect_raises(Prism::DuplicateColumn, /"region"/) do
+        SpecFrames.sales.lazy.group_by("region", "region")
+      end
+    end
+  end
+
   describe "#explain" do
     it "shows the unoptimized plan" do
       plan = SpecFrames.sales.lazy

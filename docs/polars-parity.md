@@ -82,6 +82,12 @@ largest / smallest) but their output order is unspecified in Polars; Prism's is
 unless `null_keys: :last`; `null_keys: :drop` removes null-key rows. The
 `null_keys:` option is Prism's own.
 
+**Duplicate column names are rejected.** `rename`, `select` and `group_by` raise
+`Prism::DuplicateColumn` where Polars raises its own `DuplicateError` — a frame
+with two columns of one name silently loses one to `df[name]`. A key swap in
+`rename` and two aliases of one column are still fine, because the *result* has
+unique names.
+
 **`concat` is exact.** Names and dtypes must match field for field; there is no
 `vertical_relaxed` that coerces to a supertype. Nullability is the one
 exception, and only for a frame with no rows — an empty seed cannot violate a
