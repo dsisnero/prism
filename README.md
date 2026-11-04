@@ -135,9 +135,9 @@ Prism.read_parquet(path, columns: ["title"], predicate: col("title").is_in(title
 A null cell yields null, as every comparison does, so `filter` drops it and
 `remove` keeps it; `is_in(values, nulls_equal: true)` treats null as a value
 instead (matching Polars' `nulls_equal`). The predicate pushes into the Parquet
-reader like any other, so a set-membership scan decodes only the rows it keeps —
-though the kernel is a sort-then-binary-search today, which
-[docs/benchmarks.md](docs/benchmarks.md) measures against a hash probe.
+reader like any other, so a set-membership scan decodes only the rows it keeps,
+and the kernel is a hash probe — [docs/benchmarks.md](docs/benchmarks.md) has the
+measured cost against a hand-written `Set`.
 
 ### Masks from columns
 

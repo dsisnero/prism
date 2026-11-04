@@ -39,24 +39,21 @@ the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
 downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`). Phases
 0–26 are closed apart from the cosmetic local folder rename.
 
-**Dependencies verified against:** `arrow-cr` `744f9ae` (bounded sort `5b4b958`,
-the single-column `can_sort_to_indices?` guard in Phase 23) and `parquet-cr`
-`25a889e` (both `branch: main`, resolved from GitHub). `shard.lock` and `lib/` are
+**Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
+the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
+reported in `arrow-cr.3`) and `parquet-cr` `25a889e` (both `branch: main`,
+resolved from GitHub). `shard.lock` and `lib/` are
 gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **`is_in` needs a hash path, and it is upstream.** The expression is expressible
-   and pushes down (Phase 26), but `arrow-cr`'s kernel sorts the set and binary
-   searches per row: 673 ms for 1e6 rows against a 12k string set, where a
-   `Set(String)` probe is 29.6 ms (23x). Filed as
-   [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md) with the
-   reproducer and acceptance criteria. When the kernel has a hash path, Prism
-   needs nothing but a version bump and a re-measurement; a Prism-side fast path
-   is the fallback only if upstream declines, because it would duplicate a kernel.
-2. **The next release waits for a new item.** `0.2.0` is out and the only
-   unreleased work is Phase 26; `0.2.1` ships when this phase plus a measured fix
-   are ready, not on a schedule.
+1. **Nothing is queued.** The `is_in` hash path landed in `arrow-cr` `78b0cd4`
+   and was re-measured here (53.5 ms end-to-end against 682 ms, kernel at 1.2x a
+   hand-written `Set`), so the last measured item closed without Prism changing.
+   A new item needs a measurement or a failing case.
+2. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is the
+   Phase 26 pair (`is_in`, `read_csv(infer_rows: 0)`), both reported
+   downstream. The tag goes on when a consumer needs it, not on a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -1887,15 +1884,20 @@ argument. Suite: 514 examples.
 
 **Notes carried forward:**
 
-- **The kernel is the cost, not the expression.** `filter(is_in)` is 682 ms for
-  1e6 rows against a 12k string set, of which 673 ms is `ArrayBase#is_in`: it
-  sorts the set and binary searches per row (`O(n log m)` comparator calls),
-  where a hash set is `O(n)`. A plain `Set(String)` probe over the same data is
-  29.6 ms, so a consumer holding a set should keep its own row filter until this
-  is fixed — the expression buys expressibility and pushdown, not throughput.
-  Filed as [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md); the fix
-  belongs in the dependency, because a Prism-side hash path would be a second
-  kernel for the same operation.
+- **The kernel is the cost, not the expression — and it moved in a day.** At this
+  phase's first measurement `filter(is_in)` was 682 ms for 1e6 rows against a 12k
+  string set, of which 673 ms was `ArrayBase#is_in` sorting the set and binary
+  searching per row (`O(n log m)` comparator calls), against 29.6 ms for a plain
+  `Set(String)` probe. Filed as
+  [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md) rather than
+  duplicating a kernel in Prism, and fixed upstream in `78b0cd4` (hash probe for
+  the leaf dtypes, comparator fallback for nested/dictionary/run-end/interval/
+  null, float keys by bit pattern, zero-copy byte slices). Re-measured from Prism
+  on the same input: kernel 673.2 → 33.7 ms, `filter(is_in)` 682.0 → 53.5 ms,
+  against a 27.7 ms `Set` baseline — 1.2x the hand-written probe, so switching
+  the downstream scan to the expression is now a simplicity call, not a trade.
+  The lesson is the one §14 keeps teaching: report the kernel gap with numbers
+  instead of growing a second one.
 - **Arrow has no `is_in` to be faithful to.** `arrow-rs` 60.0.0 has no such
   kernel, so the algorithm is `arrow-cr`'s own choice — which is why "port the
   upstream behaviour" is not the answer here, and the report asks for a hash fast

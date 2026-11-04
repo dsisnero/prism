@@ -108,9 +108,9 @@ parentheses or the precedence-safe `.and(...)`/`.or(...)` forms.
 null cell yields null rather than false; `is_in(values, nulls_equal: true)` makes
 null a value, matching only when the set contains null. The set is a constant:
 Prism encodes it once, so a 12k-element list does not become a 12k-term `|` chain.
-It pushes into the Parquet reader like any other predicate, though the kernel is
-a sort-then-binary-search (see [benchmarks](benchmarks.md) for the measured cost
-against a hash probe).
+It pushes into the Parquet reader like any other predicate, and the kernel is a
+hash probe — 1.2x a hand-written `Set` on the same input, per
+[benchmarks](benchmarks.md).
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and

@@ -4,9 +4,9 @@
 
 Fixed in `arrow-cr` commit `78b0cd4` ("perf: probe a hash set in `is_in`
 instead of binary-searching the sorted set"), on `main`. `ArrayBase#is_in` now
-builds a hash set of the member values and probes each row; the comparator sort +
-binary search survives only as the fallback for the types whose equality is not a
-hash-key equality (nested, dictionary, run-end, interval, null).
+builds a hash set of the member values and probes each row; the comparator sort
+and binary search survive only as the fallback for the types whose equality is
+not a hash-key equality (nested, dictionary, run-end, interval, null).
 
 Re-measured with the reproducer below on this machine (Crystal 1.22.2,
 `--release`, best of five, same 1e6 rows / 12k members):

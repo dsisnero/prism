@@ -17,6 +17,15 @@ All notable changes to this project are documented here. This project adheres to
   pushes into the Parquet reader like any other, so a set-membership scan decodes
   only the rows it keeps.
 
+### Performance
+
+- `is_in` is a hash probe rather than a sorted-set binary search, after the gap
+  was reported upstream (`arrow-cr` `78b0cd4`): on 1e6 rows against a 12k-title
+  string set, `filter(col("title").is_in(titles))` went from 682 ms to 53.5 ms and
+  the kernel alone from 673 ms to 33.7 ms, against 27.7 ms for a hand-written
+  `Set(String)` probe — so the expression is 1.2x a hand-rolled filter instead of
+  23x slower than one.
+
 ### Fixed
 
 - `read_csv(infer_rows: 0)` now reads every column as a string, as documented and

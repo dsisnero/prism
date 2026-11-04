@@ -175,16 +175,23 @@ anyway), and with none it is pure overhead. Bounded windows keep the bounded
 lexsort, which selects a prefix that a full row sort cannot. `Prism::SortEngine`
 holds the decision table and its spec pins it.
 
-**`is_in` is expressible and pushable, but its kernel is a binary search
-(Phase 26).** `col("title").is_in(titles)` encodes the 12k-title set once and
-sort-then-probes it per row, and it pushes into the Parquet reader like any other
-predicate. The cost is `O(n log m)` comparator calls: 673 ms for 1e6 rows against
-a 12k string set, where a `Set(String)` probe over the same data is 29.6 ms (23x).
-So a consumer holding a `Set` should keep its own `Arrow::BooleanArray` row filter
-for that scan until `arrow-cr` adds a hash path
-([`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md)); the expression
-buys expressibility — no materialization, no 24k-term `|` chain — not throughput
-yet.
+**`is_in` is expressible, pushable and hash-probed (Phase 26).**
+`col("title").is_in(titles)` encodes the 12k-title set once and probes it per row,
+and it pushes into the Parquet reader like any other predicate. When the phase
+landed the kernel sorted the set and binary-searched each row (`O(n log m)`
+comparator calls); `arrow-cr` `78b0cd4` replaced that with a hash probe. Paired
+on the same 1e6 rows / 12k members:
+
+| path | before | after |
+| --- | ---: | ---: |
+| `ArrayBase#is_in` (kernel only) | 673.2 ms | 33.7 ms |
+| `filter(col.is_in(titles))` end to end | 682.0 ms | 53.5 ms |
+| `Set(String)#includes?` baseline | 29.6 ms | 27.7 ms |
+
+So the kernel is 1.2x a hand-written `Set` probe and the expression is the right
+path for a large scan — no materialization, no 24k-term `|` chain, real
+pushdown. [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md) has the
+report, what landed and the acceptance criteria it was measured against.
 
 **Row keys made `distinct` and `n_unique` ~3x faster.** `Prism::RowKeys` encodes
 the key columns with `Arrow::RowConverter` and walks a byte seen-set, so the sort
