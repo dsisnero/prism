@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-03.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(498 examples, ~30 s warm). The table below is the only place that tracks status;
+(513 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -35,8 +35,9 @@ bounded sort, the Phase 20 `top_n`, the Phase 21 multi-key passes, the Phase 22
 dtype-aware `Prism::SortEngine` that `group_by` shares, the Phase 23 fix for
 single nested keys — which `arrow-cr` now owns, with Prism's workaround
 deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals and
-[`docs/polars-parity.md`](../docs/polars-parity.md). Phases 0–25 are closed apart
-from the cosmetic local folder rename.
+the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
+downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`). Phases
+0–26 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `744f9ae` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23) and `parquet-cr`
@@ -45,14 +46,17 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Nothing is queued.** Phase 24 closed the last measured item on the sort path;
-   what is left there is the floor, not a missing strategy: a multi-key sort pays
-   one gather of the output columns plus one pass over the keys, and Phase 20
-   already bounded the window cases. A new item needs a measurement or a failing
-   case.
-2. **The next release waits for a new item.** `0.2.0` is out and nothing is
-   unreleased, so `0.2.1` starts from the first measured fix or feature rather
-   than from a schedule.
+1. **`is_in` needs a hash path, and it is upstream.** The expression is expressible
+   and pushes down (Phase 26), but `arrow-cr`'s kernel sorts the set and binary
+   searches per row: 673 ms for 1e6 rows against a 12k string set, where a
+   `Set(String)` probe is 29.6 ms (23x). Filed as
+   [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md) with the
+   reproducer and acceptance criteria. When the kernel has a hash path, Prism
+   needs nothing but a version bump and a re-measurement; a Prism-side fast path
+   is the fallback only if upstream declines, because it would duplicate a kernel.
+2. **The next release waits for a new item.** `0.2.0` is out and the only
+   unreleased work is Phase 26; `0.2.1` ships when this phase plus a measured fix
+   are ready, not on a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -61,10 +65,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **498 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**499**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**502**, ~1 min); with both
-set the suite is **503**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **513 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**514**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**517**, ~1 min); with both
+set the suite is **518**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -114,6 +118,7 @@ so a new feature starts from a clean tree.
 | 23 | Single nested keys sort, so `group_by` accepts them (fix landed in `arrow-cr`) | **done** |
 | 24 | Row-encoded multi-key sort for two or more variable-length keys | **done** |
 | 25 | Conditional expressions: `if_else` and `case_when` | **done** |
+| 26 | `is_in` set membership, and `read_csv(infer_rows: 0)` as documented | **done** |
 
 ---
 
@@ -1841,6 +1846,61 @@ examples.
 - **`filter` needs no null special case.** `if_else(...) > 5` on a row whose
   selected branch is null yields a null comparison, and `filter` already drops
   those — the same rule as any other expression.
+
+### Phase 26 — `is_in`, and a CSV contract that holds (done)
+
+Both gaps came from a downstream consumer's issue tracker (`prism.1.md` for set
+membership, `prism.2.md` for `read_csv`), where each had forced a workaround:
+a hand-written `Arrow::BooleanArray` row filter for a 9.2 GB scan, and an explicit
+all-`utf8` schema when reading a CSV.
+
+- [x] `Expr#is_in(values, nulls_equal: false)` and `Expr#is_in(array)`: one
+      `IsIn` node holding a **constant** set encoded once, evaluated with
+      `arrow-cr`'s `ArrayBase#is_in`
+- [x] nulls follow comparisons (a null cell yields null) unless
+      `nulls_equal: true`, which is Polars' `nulls_equal` flag and Arrow's
+      kernel rule — so `filter` and `remove` behave exactly as for any predicate
+- [x] the set is a constant, so `key` carries its length and a digest of its
+      values instead of the values: plans and CSE keys stay short, and two
+      different sets of the same size still differ
+- [x] predicate pushdown needed no new code: the Parquet row filter evaluates
+      the expression over the projection, so `read_parquet(path, columns: [...],
+      predicate: col("title").is_in(titles))` decodes only matching rows, and the
+      lazy optimizer pushes it into `ScanParquet` like any conjunct
+- [x] `read_csv(infer_rows: 0)` builds an all-`utf8` schema from the header
+      instead of forwarding `0` to `infer_schema`, which infers nothing and
+      returns every field as `Null` — the documented contract actually holds now,
+      and a negative `infer_rows` is an `ArgumentError` instead of nonsense
+
+**Acceptance:** membership matches the column dtype after `Coerce.unify`, so
+`col("b").is_in([10, 30])` works against an `Int64` column with `Int32` literals;
+nulls are pinned in both modes, `is_in([] of String)` is all-false, a 5,000-value
+set keeps a key under 80 characters, and a set with no common dtype with the
+column raises `DtypeError` from `dtype(schema)`. The Parquet specs read a real
+file with a set predicate (dropping the null-key row) and with
+`nulls_equal: true` (keeping it); the lazy specs pin the pushdown in `explain`
+and compare the collected rows against the eager reader. CSV specs cover the
+all-string schema, a value round-tripping as its source text, an explicit schema
+winning over `infer_rows: 0`, and the negative argument. Suite: 513 examples.
+
+**Notes carried forward:**
+
+- **The kernel is the cost, not the expression.** `filter(is_in)` is 682 ms for
+  1e6 rows against a 12k string set, of which 673 ms is `ArrayBase#is_in`: it
+  sorts the set and binary searches per row (`O(n log m)` comparator calls),
+  where a hash set is `O(n)`. A plain `Set(String)` probe over the same data is
+  29.6 ms, so a consumer holding a set should keep its own row filter until this
+  is fixed — the expression buys expressibility and pushdown, not throughput.
+  Filed as [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md); the fix
+  belongs in the dependency, because a Prism-side hash path would be a second
+  kernel for the same operation.
+- **Arrow has no `is_in` to be faithful to.** `arrow-rs` 60.0.0 has no such
+  kernel, so the algorithm is `arrow-cr`'s own choice — which is why "port the
+  upstream behaviour" is not the answer here, and the report asks for a hash fast
+  path rather than a parity fix.
+- **A constant set belongs in the expression, not in a chain.** `is_in` exists
+  because 12k values × 2 columns as `|` terms would be 24k expressions compiled,
+  type-checked and CSE-scanned per scan; one encoded array is one node.
 
 ## 13. Testing strategy
 

@@ -44,6 +44,7 @@ that is only Polars'.
 | Write Parquet | `df.write_parquet(path)` | `df.write_parquet(path)` |
 | Conditional | `pl.when(c).then(x).otherwise(y)` | `Prism.if_else(c, x, y)` |
 | Chained conditional | `.when(c1).then(x1).when(c2).then(x2).otherwise(y)` | `Prism.case_when([{c1, x1}, {c2, x2}], y)` |
+| Set membership | `pl.col("x").is_in(["a", "b"])` | `col("x").is_in(["a", "b"])` |
 | First non-null | `pl.coalesce(a, b)` | `a.coalesce(b)` |
 | Fill nulls | `pl.col("x").fill_null(0)` | `col("x").fill_null(0)` (or the `df.fill_null(0)` verb) |
 | Null mask | `pl.col("x").is_null()` | `col("x").is_null` |
@@ -102,6 +103,14 @@ fit — `col("i32") > 2^40` — folds to a constant rather than nulling every ro
 **Boolean nulls are SQL/Polars Kleene logic.** `and`/`or` propagate only when the
 result is genuinely unknown, so `true & null` is `false`. Use `&`/`|` with
 parentheses or the precedence-safe `.and(...)`/`.or(...)` forms.
+
+**`is_in` follows Polars on nulls.** Both default to `nulls_equal: false`, so a
+null cell yields null rather than false; `is_in(values, nulls_equal: true)` makes
+null a value, matching only when the set contains null. The set is a constant:
+Prism encodes it once, so a 12k-element list does not become a 12k-term `|` chain.
+It pushes into the Parquet reader like any other predicate, though the kernel is
+a sort-then-binary-search (see [benchmarks](benchmarks.md) for the measured cost
+against a hash probe).
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and

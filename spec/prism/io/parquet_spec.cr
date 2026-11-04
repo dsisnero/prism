@@ -53,6 +53,30 @@ describe "Parquet IO" do
   # Regression guard for shard_issues/parquet-cr.2.md (fixed upstream in
   # 5883ff1): a row filter used to shift columns containing nulls by one row per
   # null, so price returned [30.0, 40.0, 10.0] for rows 2,3,4.
+  # The consumer's case: a set-membership predicate over a large file must reach
+  # the reader, not materialize the file and filter afterwards.
+  it "pushes a set-membership predicate into the reader" do
+    read = Prism.read_parquet(
+      parquet_io(SpecFrames.sales),
+      columns: ["qty"],
+      predicate: col("region").is_in(["east"]),
+    )
+
+    read.column_names.should eq(["qty"])
+    # Rows 1 and 3 are "east"; row 4's region is null, so a null predicate row
+    # is dropped exactly as `filter` would drop it.
+    read["qty"].to_a.should eq([1_i64, 3_i64])
+  end
+
+  it "keeps a null key when the predicate treats null as a value" do
+    read = Prism.read_parquet(
+      parquet_io(SpecFrames.sales),
+      predicate: col("region").is_in(["east", nil], nulls_equal: true),
+    )
+
+    read["qty"].to_a.should eq([1_i64, 3_i64, 4_i64])
+  end
+
   it "keeps every column consistent when a predicate is applied" do
     read = Prism.read_parquet(
       parquet_io(SpecFrames.sales),

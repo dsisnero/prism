@@ -231,6 +231,69 @@ describe Prism::Expr do
     end
   end
 
+  describe "set membership" do
+    it "tests a column against a value set" do
+      member = checked(col("b").is_in([10_i64, 30_i64]))
+
+      member.dtype(expr_schema).should eq(Arrow::DataType.boolean)
+      values(member).should eq([true, false, true])
+    end
+
+    it "propagates nulls, like every other comparison" do
+      # Null is not "false": a caller that materializes the column should see the
+      # same null it would get from `col("name") == "x"`.
+      member = checked(col("name").is_in(["x"]))
+
+      values(member).should eq([true, false, nil])
+    end
+
+    it "can treat null as a value when asked" do
+      member = checked(col("name").is_in(["x", nil], nulls_equal: true))
+
+      values(member).should eq([true, false, true])
+      values(col("name").is_in(["x"], nulls_equal: true))
+        .should eq([true, false, false])
+    end
+
+    it "widens the value set to the column's dtype" do
+      # `[10, 30]` infers Int32; the Int64 column decides the common dtype.
+      wide = checked(col("b").is_in([10, 30]))
+
+      wide.dtype(expr_schema).should eq(Arrow::DataType.boolean)
+      values(wide).should eq([true, false, true])
+    end
+
+    it "accepts a prebuilt Arrow array as the set" do
+      set = Arrow::StringArray.from_values(["y"]).as(Arrow::ArrayBase)
+
+      values(col("name").is_in(set)).should eq([false, true, nil])
+    end
+
+    it "is empty-safe" do
+      values(col("name").is_in([] of String)).should eq([false, false, nil])
+    end
+
+    it "keeps the key short and set-sensitive" do
+      key = col("name").is_in(Array.new(5_000) { |index| "v#{index}" }).key
+
+      # The values are a constant set, so the key digests them instead of
+      # embedding them: plans and CSE keys stay printable.
+      key.size.should be < 80
+      col("name").is_in(["a", "b"]).same_as?(col("name").is_in(["a", "c"]))
+        .should be_false
+      col("name").is_in(["a", "b"]).same_as?(col("name").is_in(["b", "a"]))
+        .should be_false
+      col("name").is_in(["a"], nulls_equal: true).same_as?(col("name").is_in(["a"]))
+        .should be_false
+    end
+
+    it "rejects a set that has no common dtype with the column" do
+      expect_raises(Prism::DtypeError, /cannot combine/) do
+        col("b").is_in(["a"]).dtype(expr_schema)
+      end
+    end
+  end
+
   describe "errors" do
     it "raises ColumnNotFound from dtype inference" do
       expect_raises(Prism::ColumnNotFound, /salry/) do

@@ -648,4 +648,75 @@ module Prism
       )
     end
   end
+
+  # Set membership: whether each row's value is in a constant set.
+  #
+  # The set is encoded once, when the expression is built, so a 12k-title set is
+  # not rebuilt per chunk and does not have to be written as a 12k-term `|` chain
+  # of equalities. `Prism::RowKeys`' rule applies: the set array is the constant,
+  # only the operand reads data.
+  #
+  # Nulls follow comparisons: a null cell yields null, so `filter` and `remove`
+  # behave exactly as they do for `col("x") == "y"`. `nulls_equal: true` treats
+  # null as a value instead — null then matches only when the set itself contains
+  # null, which is what Arrow's kernel does and what a boolean mask usually wants.
+  class IsIn < Expr
+    # A length-1 null boolean, broadcast by `Arrow.zip` to propagate nulls.
+    NULL_MATCH = Arrow::Scalar(Arrow::ArrayBase).new(
+      Arrow::BooleanArray.from_nullable([nil] of Bool?)
+    )
+
+    getter operand : Expr
+    getter values : Arrow::ArrayBase
+    getter? nulls_equal : Bool
+    getter digest : String
+
+    def initialize(
+      @operand : Expr,
+      @values : Arrow::ArrayBase,
+      @nulls_equal : Bool = false,
+    )
+      # The set is a constant, so its key is a digest rather than its contents:
+      # plans, `explain` and CSE keys stay short and printable, and two different
+      # sets of the same size still get different keys. `Prism::Values` is the
+      # one materialization point, so this works for any dtype the set can hold.
+      @digest = Prism::Values.extract(@values).hash.to_s(16)
+    end
+
+    def key : String
+      suffix = @nulls_equal ? ",nulls_equal" : ""
+      "is_in(#{@operand.key},#{@values.len},#{@digest}#{suffix})"
+    end
+
+    def children : Array(Expr)
+      [@operand]
+    end
+
+    def columns : Array(String)
+      @operand.columns
+    end
+
+    def to_s(io : IO) : Nil
+      io << key
+    end
+
+    def dtype(schema : Arrow::Schema) : Arrow::DataType
+      # Raising here is what rejects `col("i").is_in(["a"])` before any data is
+      # read; the result of the coercion itself is only needed by `eval`.
+      Coerce.unify(@operand.dtype(schema), @values.data_type)
+      Arrow::DataType.boolean
+    end
+
+    def eval(ctx : EvalContext) : Datum
+      array = Datums.array(ctx.evaluate(@operand), ctx)
+      target = Coerce.unify(array.data_type, @values.data_type)
+      operand = Coerce.cast(array, target).as(Arrow::ArrayBase)
+      set = Coerce.cast(@values, target).as(Arrow::ArrayBase)
+
+      matches = operand.is_in(set)
+      return matches if @nulls_equal || operand.logical_null_count == 0
+
+      Arrow.zip(Arrow.is_not_null(operand), matches, NULL_MATCH)
+    end
+  end
 end

@@ -163,7 +163,7 @@ end
 ```
 
 Nodes: `Col`, `Lit`, `Binary`, `Neg`, `Not`, `IsNull`, `IsNotNull`, `Cast`,
-`Alias`, `FillNull`, `Coalesce`, `Agg` and `IfElse`.
+`Alias`, `FillNull`, `Coalesce`, `IsIn`, `Agg` and `IfElse`.
 
 - `dtype(schema)` is total and cheap. It is what makes coercion, typed schemas,
   and plan-time schema propagation possible without reading any data.
@@ -177,6 +177,15 @@ Numeric coercion lives in `expression/coerce.cr` and is applied before kernels
 are called, because Arrow's kernels require matching dtypes. When one side is a
 literal, the literal is cast to the column's dtype (matching Polars) instead of
 widening the column, so a narrow column is never copied into a wider buffer.
+
+Set membership is one node, `IsIn`, holding a **constant** set encoded once at
+construction (`Arrow.array(values)`), so a 12k-element list is one array in the
+expression rather than a 12k-term `|` chain. `key` carries the set's length and
+a hash of its values instead of the values themselves, which keeps plans,
+`explain` and CSE keys short while still distinguishing two sets of the same
+size. The node reads only its operand's columns, so predicate pushdown projects
+them and nothing else; a null cell yields null unless `nulls_equal: true`,
+matching Polars.
 
 Conditionals are one node, `IfElse`, and a chain of them: `Prism.if_else` maps
 straight onto `Arrow.zip`, and `Prism.case_when` folds its branches into nested
@@ -452,8 +461,12 @@ path only; a failed write leaves a file without a footer rather than a
 misleading valid one. IPC writers use `ScopedWriter#open`, which finishes on
 normal block completion.
 
-CSV inference mirrors Polars' `infer_schema_length` (`infer_rows`), and `0`
-types every column as string.
+CSV inference mirrors Polars' `infer_schema_length` (`infer_rows`). `0` types
+every column as string, and Prism builds that schema itself from the header:
+`arrow-cr`'s `infer_schema(bytes, 0)` is upstream-faithful and infers *no* types,
+so it returns every field as `Null`, and passing that through read the right
+number of rows with every value null (reported downstream as
+`shard_issues/prism.2.md`, fixed in Phase 26).
 
 ## Joins
 

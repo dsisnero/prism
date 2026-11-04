@@ -121,6 +121,24 @@ orders.each_row { |row| ... }  # one hash per row, one chunk at a time
 A declared schema gives the same rows nominal fields instead of string keys
 (see [Compile-time typed columns](#compile-time-typed-columns)).
 
+### Set membership
+
+`is_in` tests a column against a constant set, and the set is encoded once — so
+a large list is an array in the expression, not an OR-chain of literals:
+
+```crystal
+titles = ["the dispossessed", "parable of the sower"]
+sales.filter(col("title").is_in(titles))
+Prism.read_parquet(path, columns: ["title"], predicate: col("title").is_in(titles))
+```
+
+A null cell yields null, as every comparison does, so `filter` drops it and
+`remove` keeps it; `is_in(values, nulls_equal: true)` treats null as a value
+instead (matching Polars' `nulls_equal`). The predicate pushes into the Parquet
+reader like any other, so a set-membership scan decodes only the rows it keeps —
+though the kernel is a sort-then-binary-search today, which
+[docs/benchmarks.md](docs/benchmarks.md) measures against a hash probe.
+
 ### Masks from columns
 
 `Series` comparison operators build a boolean column, and `filter` takes one
@@ -282,10 +300,10 @@ snippet that stops working fails a spec.
 
 `0.2.0` is the current release (`v0.2.0`). It adds row materialization
 (`DataFrame#rows` and a generated typed row per schema), interval columns,
-conditionals (`if_else`/`case_when`), vectorized grouped aggregation, a rewritten
-sort engine with a bounded window, and a [Polars mapping](docs/polars-parity.md).
-The API in this README is implemented, tested (498 specs plus opt-in compile and
-example suites) and measured.
+conditionals (`if_else`/`case_when`), set membership (`is_in`), vectorized
+grouped aggregation, a rewritten sort engine with a bounded window, and a
+[Polars mapping](docs/polars-parity.md). The API in this README is implemented,
+tested (513 specs plus opt-in compile and example suites) and measured.
 Deliberately out of scope: no index/row labels, no pivot/melt, no window
 functions, no SQL or string-expression parser, no multi-threaded engine, and no
 async/object store IO. Every Arrow dtype the library accepts materializes into a

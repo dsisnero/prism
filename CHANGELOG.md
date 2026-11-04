@@ -6,6 +6,24 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `col("x").is_in(values)` — set membership as an expression, with the set encoded
+  once when the expression is built, so a large list is one array rather than an
+  OR-chain of literals. Nulls follow comparisons (a null cell yields null, so
+  `filter` drops it and `remove` keeps it); `is_in(values, nulls_equal: true)`
+  treats null as a value instead, matching Polars' `nulls_equal`. Accepts an
+  `Enumerable` of Crystal values or a prebuilt `Arrow::ArrayBase`. The predicate
+  pushes into the Parquet reader like any other, so a set-membership scan decodes
+  only the rows it keeps.
+
+### Fixed
+
+- `read_csv(infer_rows: 0)` now reads every column as a string, as documented and
+  as Polars' `infer_schema_length=0` does. It used to forward `0` to Arrow's
+  inferer, which infers nothing and returns every field as `Null`, producing a
+  quiet all-null frame. A negative `infer_rows` is now an `ArgumentError`.
+
 ## [0.2.0] - 2026-11-03
 
 Rows and typed rows, intervals, conditionals, a rewritten sort engine, vectorized

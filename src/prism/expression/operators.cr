@@ -147,6 +147,30 @@ module Prism
       IsNotNull.new(self)
     end
 
+    # Whether each row's value is in `values`, a constant set.
+    #
+    # The set is encoded once (`Arrow.array(values.to_a)`), so the argument can be
+    # a large collection without becoming a huge expression tree:
+    #
+    # ```
+    # df.filter(col("title").is_in(["the dispossessed", "parable of the sower"]))
+    # ```
+    #
+    # A null cell yields null, like every other comparison, so `filter` drops it
+    # and `remove` keeps it. Pass `nulls_equal: true` to treat null as a value
+    # instead: null then matches only when the set contains null.
+    # ameba:disable Naming/PredicateName
+    def is_in(values : Enumerable(T), *, nulls_equal : Bool = false) : Expr forall T
+      IsIn.new(self, Arrow.array(values.to_a), nulls_equal)
+    end
+
+    # The same test against an Arrow array, for a set that is already encoded
+    # (a `Series#to_arrow`, a dictionary, or a set carrying nulls).
+    # ameba:disable Naming/PredicateName
+    def is_in(values : Arrow::ArrayBase, *, nulls_equal : Bool = false) : Expr
+      IsIn.new(self, values, nulls_equal)
+    end
+
     def fill_null(value : Number | String | Bool | Time | Nil) : Expr
       FillNull.new(self, Prism.lit(value))
     end

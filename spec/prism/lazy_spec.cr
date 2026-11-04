@@ -123,6 +123,32 @@ describe Prism::LazyFrame do
       plan.should contain("projection: [region, qty]")
     end
 
+    # A set-membership filter has to reach the reader for the same reason a
+    # comparison does: the consumer's 9.2 GB scan must not materialize the file.
+    it "pushes a set-membership filter into the scan" do
+      plan = Prism.scan_parquet(lazy_parquet_path)
+        .filter(col("region").is_in(["east"]))
+        .select("qty")
+        .explain
+
+      plan.should contain("ScanParquet")
+      plan.should contain("predicate: is_in(col:region,1,")
+      plan.should contain("projection: [region, qty]")
+    end
+
+    it "collects a set-membership scan with the same rows as the eager reader" do
+      lazy = Prism.scan_parquet(lazy_parquet_path)
+        .filter(col("region").is_in(["east"]))
+        .select("qty")
+        .collect
+      eager = Prism.read_parquet(lazy_parquet_path)
+        .filter(col("region").is_in(["east"]))
+        .select("qty")
+
+      lazy.should eq(eager)
+      lazy["qty"].to_a.should eq([1_i64, 3_i64])
+    end
+
     it "pushes a limit into the scan" do
       plan = Prism.scan_parquet(lazy_parquet_path).head(3).explain
 
