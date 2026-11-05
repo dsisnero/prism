@@ -487,12 +487,16 @@ module Prism
   class Cast < Expr
     getter operand : Expr
     getter target : Arrow::DataType
+    getter? strict : Bool
 
-    def initialize(@operand : Expr, @target : Arrow::DataType)
+    def initialize(@operand : Expr, @target : Arrow::DataType, @strict : Bool = true)
     end
 
     def key : String
-      "cast(#{@operand.key},#{@target})"
+      # Strictness changes what the node can produce, so it has to be part of
+      # the identity: CSE must not merge a strict cast with a nulling one.
+      suffix = @strict ? "" : ",non_strict"
+      "cast(#{@operand.key},#{@target}#{suffix})"
     end
 
     def children : Array(Expr)
@@ -508,15 +512,23 @@ module Prism
       @target
     end
 
-    # A cast does not change which rows are null: `Coerce.cast_exact` raises
-    # rather than turn a value that does not fit into a null, so the operand's
-    # flag is the result's flag.
+    # A strict cast does not change which rows are null — `Coerce.cast_exact`
+    # raises rather than turn a value that does not fit into a null — so the
+    # operand's flag is the result's flag. A non-strict cast cannot make that
+    # claim: it is exactly the mode that invents nulls (Polars' `strict=False`),
+    # so its column is nullable whatever the operand is.
     def nullable?(schema : Arrow::Schema) : Bool
+      return true unless @strict
+
       @operand.nullable?(schema)
     end
 
     def eval(ctx : EvalContext) : Datum
-      Coerce.cast_exact(ctx.evaluate(@operand), @target, cast_subject(@operand))
+      if @strict
+        Coerce.cast_exact(ctx.evaluate(@operand), @target, cast_subject(@operand))
+      else
+        Coerce.cast(ctx.evaluate(@operand), @target)
+      end
     end
 
     private def cast_subject(operand : Expr) : String

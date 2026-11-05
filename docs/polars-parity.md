@@ -49,7 +49,7 @@ that is only Polars'.
 | First non-null | `pl.coalesce(a, b)` | `a.coalesce(b)` |
 | Fill nulls | `pl.col("x").fill_null(0)` | `col("x").fill_null(0)` (or the `df.fill_null(0)` verb) |
 | Null mask | `pl.col("x").is_null()` | `col("x").is_null` |
-| Cast | `pl.col("x").cast(pl.Int64)` | `col("x").cast(Arrow::DataType.int64)` (strict: a lossy cast raises, `strict=False` has no spelling) |
+| Cast | `pl.col("x").cast(pl.Int64)` | `col("x").cast(Arrow::DataType.int64)` (strict by default; `strict: false` nulls instead of raising) |
 | Negate | `~expr` / `.not()` | `.not` (Crystal's `!` cannot be overloaded) |
 
 ## Differences that bite
@@ -156,9 +156,10 @@ the cast (`check_nulls` is set for `CastOptions::Strict`) and calls
 `handle_array_casting_failures`, which raises even when the column was already
 nullable, reporting "conversion from `Utf8` to `Int64` failed for 1 out of 3
 values: [\"abc\"]". Prism counts the same difference (`Coerce.cast_exact`), so a
-strict cast behaves identically here. `strict=False` — Polars' null-producing
-opt-out, `CastOptions::NonStrict` — has no Prism spelling yet (§17); cast a
-cleaned column, or the values you mean. `Arrow.cast` is a *safe* cast, so
+strict cast behaves identically here, and `strict: false` is the same opt-out as
+Polars' `CastOptions::NonStrict`: the value becomes null and the column is
+declared nullable, because a non-strict cast is exactly the mode that invents
+nulls. Prism's default is strict, so a lossy cast cannot pass silently. `Arrow.cast` is a *safe* cast, so
 without this check a lossy cast silently rewrote data on a nullable column and
 blew up inside `Arrow::RecordBatch` on a non-null one.
 

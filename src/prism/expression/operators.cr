@@ -182,8 +182,15 @@ module Prism
       Coalesce.new([self.as(Expr)] + others.to_a)
     end
 
-    def cast(target : Arrow::DataType) : Expr
-      Cast.new(self, target)
+    # Explicit dtype conversion.
+    #
+    # `strict: false` is Polars' `strict=False`: a value the target dtype cannot
+    # represent becomes null instead of raising (`"abc"` to `Int64`, `300` to
+    # `Int8`). The column is then nullable even when every value in this chunk
+    # happens to fit, because nullability describes what the expression can
+    # produce (`Prism::Cast#nullable?`).
+    def cast(target : Arrow::DataType, *, strict : Bool = true) : Expr
+      Cast.new(self, target, strict)
     end
 
     def alias(name : String | Symbol) : Expr

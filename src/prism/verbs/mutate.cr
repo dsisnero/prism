@@ -118,21 +118,31 @@ module Prism
     end
 
     # Casts every column.
-    def cast(target : Arrow::DataType) : DataFrame
+    def cast(target : Arrow::DataType, *, strict : Bool = true) : DataFrame
       rename_targets = column_names.each_with_object({} of String => Arrow::DataType) do |name, memo|
         memo[name] = target
       end
 
-      cast(rename_targets)
+      cast(rename_targets, strict: strict)
     end
 
     # Casts the named columns, leaving the rest untouched.
     #
-    # The output field keeps the input field's nullability, which is only honest
-    # because the cast itself refuses to invent nulls: a value the target dtype
-    # cannot represent raises `Prism::DtypeError` naming the column rather than
-    # becoming null (`Coerce.cast_exact`).
-    def cast(targets : Hash(String | Symbol, Arrow::DataType)) : DataFrame
+    # With `strict: true` (the default, and the only behaviour until Phase 35)
+    # the output field keeps the input field's nullability, which is honest
+    # because the cast refuses to invent nulls: a value the target dtype cannot
+    # represent raises `Prism::DtypeError` naming the column rather than becoming
+    # null (`Coerce.cast_exact`).
+    #
+    # `strict: false` is Polars' `strict=False`: an unrepresentable value becomes
+    # null, and the column is declared nullable because the cast can now produce
+    # nulls. It is the escape hatch for cleaning a dirty column, and it is
+    # deliberately not the default.
+    def cast(
+      targets : Hash(String | Symbol, Arrow::DataType),
+      *,
+      strict : Bool = true,
+    ) : DataFrame
       targets.each_key { |key| require_column!(key.to_s) }
 
       fields = @schema.fields.to_a.map do |field|
@@ -140,7 +150,8 @@ module Prism
         next field unless target
         next field if field.data_type == target
 
-        Prism.output_field(Cast.new(Prism.col(field.name), target), field.name, @schema)
+        expr = Cast.new(Prism.col(field.name), target, strict)
+        Prism.output_field(expr, field.name, @schema)
       end
       schema = Arrow::Schema.new(fields)
 
@@ -150,7 +161,12 @@ module Prism
           target = targets[name]?
           next column unless target && target != column.data_type
 
-          Coerce.cast_exact(column, target, "column #{name.inspect}").as(Arrow::ArrayBase)
+          casted = if strict
+                     Coerce.cast_exact(column, target, "column #{name.inspect}")
+                   else
+                     Coerce.cast(column, target)
+                   end
+          casted.as(Arrow::ArrayBase)
         end
 
         Arrow::RecordBatch.try_new(schema, columns)

@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(605 examples, ~30 s warm). The table below is the only place that tracks status;
+(616 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -44,8 +44,9 @@ downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phas
 the Phase 29 unique-name checks, the Phase 30 `fill_null` family rule and the
 Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
 nulls), the Phase 32 IO round-trip oracle plus the two CSV losses it found, and the
-Phase 33 CSV schema-by-name fix and the Phase 34 lazy call-shape parity.
-Phases 0–34 are closed apart from the cosmetic local folder rename.
+Phase 33 CSV schema-by-name fix, the Phase 34 lazy call-shape parity and the
+Phase 35 `cast(strict: false)` opt-out. Phases 0–35 are closed apart from the
+cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
 `78b0cd4`: 44 commits of `arrow-buffer`/`arrow-cast` reconciliation; no semantics
@@ -71,8 +72,6 @@ gitignored, so this line is the record of what the suite below was run against.
      `parquet-cr.done.2` are fixed and renamed with the `.done` marker, their
      reproducers kept because they are what re-proves each fix after a
      `shards update`.
-   - **`strict: false` on `cast`** (§17): the recorded escape hatch for a caller
-     that wants Polars' null-on-failure instead of the raise.
    - **`group_by` nullability** (§17): its key and aggregate fields stay nullable;
      tightening them is only worth doing when a caller needs the flag (a Parquet
      schema or a `concat` with a non-null source).
@@ -87,10 +86,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **605 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**606**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**609**, ~1 min); with both
-set the suite is **610**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **616 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**617**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**620**, ~1 min); with both
+set the suite is **621**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -153,6 +152,7 @@ so a new feature starts from a clean tree.
 | 32 | IO round-trip oracle, and CSV stops losing values | **done** |
 | 33 | A CSV `schema:` names columns (by name, not by position) | **done** |
 | 34 | The lazy verbs take every call shape the eager ones do | **done** |
+| 35 | `cast(strict: false)`: the nulling opt-out, on all four surfaces | **done** |
 
 ---
 
@@ -2252,8 +2252,9 @@ examples (586 with the compile and example specs).
   `conversion from Utf8 to Int64 failed for 1 out of 3 values: ["abc"]`. So
   counting added nulls is Polars' rule, not an invention; Prism adds the sample
   values for the same reason. `CastOptions::NonStrict` (`strict=False`) is the
-  nulling opt-out, and `CastOptions::Overflowing` (`wrap_numerical`) wraps
-  overflow; neither is exposed here (§17).
+  nulling opt-out and is exposed as `strict: false` (Phase 35);
+  `CastOptions::Overflowing` (`wrap_numerical`) wraps overflow instead and is
+  still not exposed (§17).
 - Polars does **not** track per-column nullability: `Field` is a name plus a
   `DataType`, and nulls live in the `ChunkedArray` validity bitmap, so
   `fill_null` cannot "drop a flag" there. `Expr#nullable?` is therefore a Prism
@@ -2498,6 +2499,55 @@ examples (610 with the compile and example specs).
 - **The key-list overload keeps one meaning for `Enumerable`.** It forwards to the
   same `Plan::Sort`, so `sort_by(keys)` and `sort_by(*keys)` cannot resolve
   directions or null placement differently.
+
+### Phase 35 — `cast(strict: false)`, the nulling opt-out (done)
+
+The queued §17 item, and the one behaviour Phase 31 deliberately left out when it
+made casts strict. Red state: the keyword did not exist, so the spec file failed
+to build with `no parameter named 'strict'`.
+
+- [x] `strict: false` on all four spellings — `DataFrame#cast` (both forms),
+      `LazyFrame#cast` (both forms), `Series#cast` and `Expr#cast` — routes to
+      `Coerce.cast` (Arrow's safe cast) instead of `Coerce.cast_exact`, so
+      `"abc"` to `Int64` and `300` to `Int8` become null instead of raising.
+      Polars' `CastOptions::NonStrict`
+- [x] `Cast#nullable?` returns `true` when non-strict whatever the operand is:
+      nullability is a claim about what the expression *can* produce, and this is
+      the mode that invents nulls. The frame and the plan therefore agree on a
+      nullable field even when every value in this chunk happens to fit
+- [x] `Cast#key` carries a `,non_strict` suffix, so `Prism::Cse` cannot merge a
+      strict and a non-strict cast of the same column (same operand, same target,
+      different results)
+- [x] the default is unchanged and still strict, so nothing that used to raise
+      starts nulling silently; `Series` has no nullability flag, so there the
+      nulls simply appear
+
+**Acceptance:** `spec/prism/cast_strict_spec.cr` pins the nulling on the dirty
+column, the narrowing case, the nullable field whether or not the chunk contains a
+failure, the frame-wide form on a mixed frame, the expression/plan/lazy/`Series`
+spellings, the both-modes schema difference, and the CSE identity. Suite: 616
+examples (621 with the compile and example specs).
+
+**Verified against upstream (DeepWiki):** Polars' `strict=False` maps to
+`CastOptions::NonStrict`, which replaces an unrepresentable value with null;
+`CastOptions::Overflowing` (`wrap_numerical`) is the third mode and wraps instead.
+Prism exposes strict and non-strict; wrapping stays deferred (§17).
+
+**Notes carried forward:**
+
+- **An opt-out has to change the schema, not just the values.** The whole point of
+  Phase 31's rule is that a field's flag is a promise; a cast that can invent
+  nulls cannot keep a non-null promise, so `nullable?` is true for it and the
+  frame, the plan and `concat` all see that. Had it kept the operand's flag, the
+  first failed value would have reproduced Phase 31's original crash from the
+  other direction.
+- **The mode belongs in the key.** Two casts that differ only in strictness are
+  different computations; without the suffix, `Cse` would have shared one result
+  for both.
+- **One keyword, four surfaces, one code path.** Each verb forwards to the same
+  `Cast` node or the same two `Coerce` calls, so there is no per-surface
+  behaviour to keep aligned — which is also why the red state was a single
+  compile error repeated in four files.
 
 ## 13. Testing strategy
 
@@ -3184,7 +3234,6 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Dictionary-encoded float keys were compared by value but not canonicalized | the values are what gets encoded, so canonicalizing them in place keeps the dictionary dtype and makes keying agree with plain float columns | 14 (done) |
 | `concat` nullability union | nullability is checked per frame today (a zero-row frame is exempt); unioning the flags would be lossless since `concat_batches` takes the caller's schema, but no caller has needed the looser rule | when a caller hits it |
 | Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
-| `cast(strict: false)` (null on a value that does not fit) | Polars has the opt-out (`CastOptions::NonStrict`, and `Overflowing` for wrapping); Prism's strict cast is the default and the only spelling, and no caller has needed the escape hatch yet. It is a keyword on three surfaces (`DataFrame#cast`, `Series#cast`, `Expr#cast`), so it waits for a caller | when a caller hits it |
 | Crystal's stdlib `CSV` as the lexer for `read_csv` | measured (Phase 32): stdlib lex + builders is 1.4–2.2x faster than `arrow-cr`'s reader on 1e6×4, and writes no faster, but the typed half is arrow-cast's parsers (dates, times, timestamps, durations, intervals, decimals) and `CSV.parse` materialises every cell where `arrow-cr` streams batches. `batch_size` was ruled out as the cause. Filed as `shard_issues/arrow-cr.4.md` (open); a second reader inside Prism is declined | when the upstream reader is fixed, or a consumer's CSV scan is hot |
 | Polars' `extra_columns='ignore'` / `missing_columns='insert'` for `read_csv(schema:)` | both silently accept a schema that does not match the file (ignore a column, or invent one full of nulls). Prism raises instead; a caller who wants either behaviour has not appeared | when a caller hits it |
 | Integer division by zero raises instead of yielding null | Polars' `floordiv`/`mod` return null; `arrow-cr`'s checked kernels raise `Arrow::ArrowError: Divide by zero error`, and `Binary#nullable?` relies on that to claim a non-null operand pair gives a non-null result. Aligning would mean an upstream kernel change (or a Prism-level null-on-zero), not a local patch | if a caller wants Polars' null, or if `arrow-cr` changes it |

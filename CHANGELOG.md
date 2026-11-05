@@ -8,6 +8,13 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Added
 
+- `cast(strict: false)` on `DataFrame#cast`, `LazyFrame#cast`, `Series#cast` and
+  `col("x").cast(...)`: a value the target dtype cannot represent becomes null
+  instead of raising (Polars' `CastOptions::NonStrict`), for cleaning a dirty
+  column. The column is declared nullable even when every value in the chunk
+  happens to fit, because nullability describes what the expression can produce,
+  and the node's `key` carries a `,non_strict` suffix so CSE cannot merge it with
+  a strict cast. The default is unchanged and still strict.
 - `LazyFrame#distinct` and `#drop_nulls` accept no arguments, meaning every
   column, matching the eager verbs; `LazyFrame#sort_by(keys :
   Enumerable(SortKey))` takes the key list the eager verb already accepted. All

@@ -176,11 +176,20 @@ module Prism
     # target cannot represent raises `Prism::DtypeError` instead of becoming
     # null (`Coerce.cast_exact`, the same path `DataFrame#cast` and the `cast`
     # expression use).
-    def cast(target : Arrow::DataType) : Series
+    #
+    # `strict: false` is Polars' `strict=False`: such a value becomes null. A
+    # `Series` carries no nullability flag, so unlike the frame and expression
+    # forms there is nothing to widen — the nulls simply appear.
+    def cast(target : Arrow::DataType, *, strict : Bool = true) : Series
       return self if target == @dtype
 
       chunks = @chunks.map do |chunk|
-        Coerce.cast_exact(chunk, target, "series #{@name.inspect}").as(Arrow::ArrayBase)
+        casted = if strict
+                   Coerce.cast_exact(chunk, target, "series #{@name.inspect}")
+                 else
+                   Coerce.cast(chunk, target)
+                 end
+        casted.as(Arrow::ArrayBase)
       end
 
       Series.new(@name, chunks, target)

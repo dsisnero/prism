@@ -276,6 +276,7 @@ Lit                     -> nil only
 arith / compare / neg   -> null where an operand is null, never of its own
 is_null / is_not_null   -> false (a predicate answers every row)
 cast                    -> the operand's flag (see below)
+cast(strict: false)     -> true: this is the mode that invents nulls
 fill_null               -> the replacement's flag
 coalesce                -> false as soon as one operand cannot be null
 if_else                 -> nullable if either branch is
@@ -288,8 +289,8 @@ may hold no nulls, so the worst case is a schema that is looser than the data. T
 opposite mistake is fatal — a field declared non-null that holds a null makes
 `Arrow::RecordBatch.try_new` raise from inside Arrow, naming no verb.
 
-That is why **a cast never invents nulls**. `Arrow.cast` is a safe cast: `"abc"`
-to `Int64`, `300` to `Int8` and `NaN` to `Int64` all become null.
+That is why **a cast never invents nulls** unless asked. `Arrow.cast` is a safe
+cast: `"abc"` to `Int64`, `300` to `Int8` and `NaN` to `Int64` all become null.
 `Prism::Coerce.cast_exact` counts the nulls the kernel added and raises
 `Prism::DtypeError` naming the column, the count and a sample value instead, on
 every surface that spells "cast" (`DataFrame#cast`, `Series#cast`, the `cast`
@@ -298,6 +299,14 @@ null-ness exactly, `cast` can honestly claim its operand's flag, and a lossy cas
 fails loudly instead of publishing a lie. This is Polars' rule too: its
 `cast_chunks` compares the null count before and after under
 `CastOptions::Strict`.
+
+`strict: false` is the one spelling of "cast" that is allowed to invent nulls
+(Polars' `CastOptions::NonStrict`), for cleaning a dirty column. It is opt-in on
+all four surfaces (`DataFrame#cast`, `LazyFrame#cast`, `Series#cast` and the
+`cast` expression), its output field is declared nullable **even when every value
+in the chunk happens to fit** — nullability describes what the expression can
+produce — and its `key` carries a `,non_strict` suffix so CSE cannot merge it with
+a strict cast of the same column.
 
 The arithmetic half of the table leans on the kernel: `arrow-cr`'s integer
 division and remainder **raise** on a zero divisor, so a non-null operand pair

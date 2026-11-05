@@ -135,20 +135,26 @@ module Prism
     end
 
     # Casts every column.
-    def cast(target : Arrow::DataType) : LazyFrame
+    def cast(target : Arrow::DataType, *, strict : Bool = true) : LazyFrame
       rename_targets = {} of String => Arrow::DataType
       columns.each { |name| rename_targets[name] = target }
 
-      cast(rename_targets)
+      cast(rename_targets, strict: strict)
     end
 
-    # Casts the named columns.
-    def cast(targets : Hash(String | Symbol, Arrow::DataType)) : LazyFrame
+    # Casts the named columns. `strict: false` nulls a value that does not fit
+    # instead of raising (Polars' `strict=False`), which also makes the column
+    # nullable — see `Prism::Cast#nullable?`.
+    def cast(
+      targets : Hash(String | Symbol, Arrow::DataType),
+      *,
+      strict : Bool = true,
+    ) : LazyFrame
       targets.reduce(self) do |frame, (name, target)|
         column = name.to_s
         raise ColumnNotFound.new(column, columns) unless columns.includes?(column)
 
-        frame.with_column(column, Prism.col(column).cast(target))
+        frame.with_column(column, Prism.col(column).cast(target, strict: strict))
       end
     end
 
