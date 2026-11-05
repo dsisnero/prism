@@ -87,6 +87,18 @@ module Prism
       LazyFrame.new(Plan::Sort.new(@plan, resolved))
     end
 
+    # Key-list form, mirroring `DataFrame#sort_by(keys : Enumerable(SortKey))`,
+    # so a key list built elsewhere can be handed over without splatting.
+    def sort_by(keys : Enumerable(SortKey)) : LazyFrame
+      LazyFrame.new(Plan::Sort.new(@plan, keys.to_a))
+    end
+
+    # Drops duplicate rows across every column, mirroring `DataFrame#distinct`.
+    def distinct : LazyFrame
+      LazyFrame.new(Plan::Distinct.new(@plan, columns))
+    end
+
+    # Drops duplicate rows considering only the named columns.
     def distinct(*names : String | Symbol) : LazyFrame
       LazyFrame.new(Plan::Distinct.new(@plan, names.map(&.to_s).to_a))
     end
@@ -168,10 +180,17 @@ module Prism
       fill_replacements(targets)
     end
 
-    # Drops rows with a null in any of the named columns (all columns by
-    # default).
+    # Drops rows with a null in any column, mirroring `DataFrame#drop_nulls`.
+    def drop_nulls : LazyFrame
+      drop_nulls_on(columns)
+    end
+
+    # Drops rows with a null in any of the named columns.
     def drop_nulls(*names : String | Symbol) : LazyFrame
-      targets = names.empty? ? columns : names.map(&.to_s)
+      drop_nulls_on(names.map(&.to_s).to_a)
+    end
+
+    private def drop_nulls_on(targets : Array(String)) : LazyFrame
       targets.each do |name|
         raise ColumnNotFound.new(name, columns) unless columns.includes?(name)
       end

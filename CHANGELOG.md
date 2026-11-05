@@ -6,6 +6,18 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `LazyFrame#distinct` and `#drop_nulls` accept no arguments, meaning every
+  column, matching the eager verbs; `LazyFrame#sort_by(keys :
+  Enumerable(SortKey))` takes the key list the eager verb already accepted. All
+  three used to be compile errors, because a Crystal typed splat cannot be called
+  with zero arguments and the lazy surface had no separate no-argument overload.
+- `spec/prism/parity_spec.cr` pins the lazy surface against the eager one with a
+  24-row call-shape table (zero-argument forms, key lists, names/exprs,
+  expr/block, both `cast` and `fill_null` forms, …), comparing schema and frame
+  for each, so a verb that gains a shape eagerly cannot silently lack it lazily.
+
 ### Changed
 
 - `cast` never invents nulls: a value the target dtype cannot represent (`"abc"`

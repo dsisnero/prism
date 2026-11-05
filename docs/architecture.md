@@ -407,6 +407,14 @@ schema, which is what makes pruning possible before any data is read. Execution
 `GroupBy`/`Join` derive their schema by running the eager verb against zero-row
 frames — one implementation of the layout rules.
 
+The lazy verbs take **the same call shapes as the eager ones**, including the
+ones with no arguments: `distinct` and `drop_nulls` default to every column, and
+`sort_by` accepts a key list as well as a splat. That is not free — a Crystal
+typed splat cannot be empty, so a zero-argument form needs its own overload —
+and it is pinned by a table in `spec/prism/parity_spec.cr` that calls every
+shared verb both ways and compares the frames, so a verb that gains a shape
+eagerly cannot silently lack it lazily.
+
 Pass order, mirroring Polars:
 
 1. **Constant folding** — `filter(lit(true))` disappears, `filter(lit(false))`

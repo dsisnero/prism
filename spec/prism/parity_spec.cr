@@ -75,6 +75,52 @@ describe "lazy verb parity" do
       parity_frame.lazy.drop("nope")
     end
   end
+
+  # The eager verbs accept every one of these call shapes; the lazy ones used to
+  # require an argument because a Crystal typed splat cannot be empty, so
+  # `df.lazy.distinct` was a compile error while `df.distinct` was not. The table
+  # is the guard: both spellings must compile *and* produce the same frame.
+  describe "call shapes" do
+    it "answers every shape the eager verb answers" do
+      frame = parity_frame
+      # `cast` without a column list needs every column to fit the target.
+      numeric = frame.select(col("price"), col("qty"))
+      keys = [Prism::SortKey.new(col("region"), descending: true, nulls_first: true)]
+
+      cases = {
+        "distinct (all columns)"   => {frame.distinct, frame.lazy.distinct},
+        "distinct (names)"         => {frame.distinct("region"), frame.lazy.distinct("region")},
+        "drop_nulls (all columns)" => {frame.drop_nulls, frame.lazy.drop_nulls},
+        "drop_nulls (names)"       => {frame.drop_nulls("region"), frame.lazy.drop_nulls("region")},
+        "sort_by (splat)"          => {frame.sort_by("price", order: :desc), frame.lazy.sort_by("price", order: :desc)},
+        "sort_by (key list)"       => {frame.sort_by(keys), frame.lazy.sort_by(keys)},
+        "select (names)"           => {frame.select("region", "qty"), frame.lazy.select("region", "qty")},
+        "select (exprs)"           => {frame.select(col("region"), col("qty").alias("q")), frame.lazy.select(col("region"), col("qty").alias("q"))},
+        "filter (expr)"            => {frame.filter(col("qty") > lit(2_i64)), frame.lazy.filter(col("qty") > lit(2_i64))},
+        "filter (block)"           => {frame.filter { col("qty") > lit(2_i64) }, frame.lazy.filter { col("qty") > lit(2_i64) }},
+        "remove (expr)"            => {frame.remove(col("qty") > lit(2_i64)), frame.lazy.remove(col("qty") > lit(2_i64))},
+        "with_column"              => {frame.with_column("double", col("qty") * lit(2_i64)), frame.lazy.with_column("double", col("qty") * lit(2_i64))},
+        "with_columns"             => {frame.with_columns(double: col("qty") * lit(2_i64)), frame.lazy.with_columns(double: col("qty") * lit(2_i64))},
+        "rename (hash)"            => {frame.rename({"qty" => "count"}), frame.lazy.rename({"qty" => "count"})},
+        "rename (pair)"            => {frame.rename("qty", "count"), frame.lazy.rename("qty", "count")},
+        "drop"                     => {frame.drop("price"), frame.lazy.drop("price")},
+        "cast (every column)"      => {numeric.cast(Arrow::DataType.float64), numeric.lazy.cast(Arrow::DataType.float64)},
+        "cast (named)"             => {frame.cast({"qty" => Arrow::DataType.float64}), frame.lazy.cast({"qty" => Arrow::DataType.float64})},
+        "fill_null (value)"        => {frame.fill_null(0), frame.lazy.fill_null(0)},
+        "fill_null (hash)"         => {frame.fill_null({"price" => 0.0}), frame.lazy.fill_null({"price" => 0.0})},
+        "head"                     => {frame.head(2), frame.lazy.head(2)},
+        "tail"                     => {frame.tail(2), frame.lazy.tail(2)},
+        "slice"                    => {frame.slice(1, 2), frame.lazy.slice(1, 2)},
+        "group_by + aggregate"     => {frame.group_by("region").aggregate(n: col("qty").sum), frame.lazy.group_by("region").aggregate(n: col("qty").sum)},
+      }
+
+      cases.each do |label, (eager, lazy)|
+        collected = lazy.collect
+        collected.schema.should eq(eager.schema), "#{label}: schema"
+        collected.should eq(eager), "#{label}: frame"
+      end
+    end
+  end
 end
 
 private def price_series : Prism::Series

@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(604 examples, ~30 s warm). The table below is the only place that tracks status;
+(605 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -44,8 +44,8 @@ downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phas
 the Phase 29 unique-name checks, the Phase 30 `fill_null` family rule and the
 Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
 nulls), the Phase 32 IO round-trip oracle plus the two CSV losses it found, and the
-Phase 33 CSV schema-by-name fix. Phases 0–33 are closed apart from the cosmetic
-local folder rename.
+Phase 33 CSV schema-by-name fix and the Phase 34 lazy call-shape parity.
+Phases 0–34 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
 `78b0cd4`: 44 commits of `arrow-buffer`/`arrow-cast` reconciliation; no semantics
@@ -61,10 +61,6 @@ gitignored, so this line is the record of what the suite below was run against.
    wrongness the IO probes found (a reordered `schema:` swapping same-typed
    columns). A new item still needs a measurement or a failing case; these are the
    ones already scoped, in the order they would pay off:
-   - **lazy zero-arg `distinct`/`drop_nulls`** (§17): eager `df.distinct` and
-     `df.drop_nulls` have a no-argument overload, the lazy spellings cannot take
-     zero arguments because a typed splat requires one — found while probing
-     Phase 33, left out of it because it is a different fix.
    - **`shard_issues/arrow-cr.4.md`** (filed, open): the CSV reader costs 1.4x
      Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
      `batch_size` is not the explanation (§Phase 32). The report names the
@@ -91,10 +87,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **604 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**605**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**608**, ~1 min); with both
-set the suite is **609**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **605 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**606**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**609**, ~1 min); with both
+set the suite is **610**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -156,6 +152,7 @@ so a new feature starts from a clean tree.
 | 31 | One nullability rule: `Expr#nullable?`, and casts that never invent nulls | **done** |
 | 32 | IO round-trip oracle, and CSV stops losing values | **done** |
 | 33 | A CSV `schema:` names columns (by name, not by position) | **done** |
+| 34 | The lazy verbs take every call shape the eager ones do | **done** |
 
 ---
 
@@ -2451,6 +2448,57 @@ compile and example specs).
   swap; the round-trip oracle from Phase 32 could not see it, because it always
   supplies the schema in the frame's own order.
 
+### Phase 34 — the lazy verbs take every call shape the eager ones do (done)
+
+The smallest item on the Phase 33 "next up" list, and the only one the plan had
+already scoped: `df.distinct` and `df.drop_nulls` accept no arguments, but
+`df.lazy.distinct` and `df.lazy.drop_nulls` did not compile at all.
+
+```text
+df.distinct                    -> every column          df.lazy.distinct      -> compile error
+df.drop_nulls                  -> every column          df.lazy.drop_nulls    -> compile error
+df.sort_by(keys : Array(SortKey)) -> sorted              df.lazy.sort_by(keys) -> compile error
+```
+
+A Crystal typed splat (`*keys : String | Symbol`) requires at least one
+argument — it is not the "zero or more" of an untyped splat — so the eager verbs
+carry a separate no-argument overload and the lazy ones had never grown one.
+
+- [x] `LazyFrame#distinct` with no arguments plans `Distinct` over every column of
+      the input schema, exactly as the eager verb dedupes every column
+- [x] `LazyFrame#drop_nulls` with no arguments plans the same all-column
+      `is_not_null` conjunction; the named form goes through one private
+      `drop_nulls_on` so the two cannot diverge
+- [x] `LazyFrame#sort_by(keys : Enumerable(SortKey))`, the key-list form the eager
+      verb already had for the planner, so a list built elsewhere needs no splat
+- [x] `spec/prism/parity_spec.cr` gains a **call-shape table**: 24 spellings
+      (zero-argument forms, splat/list keys, names/exprs `select`, expr/block
+      `filter`, both `cast` and both `fill_null` forms, …) each built eagerly and
+      lazily and compared by schema and frame, so a verb that gains a shape
+      eagerly cannot silently lack it lazily
+
+**Acceptance:** the table compiles (which is the test — the old code could not)
+and all 24 shapes produce the same frame through the plan as eagerly. Suite: 605
+examples (610 with the compile and example specs).
+
+**Notes carried forward:**
+
+- **A compile error is a passing test's prerequisite.** The red state here is not
+  an assertion failure but `wrong number of arguments for
+  'Prism::LazyFrame#distinct' (given 0, expected 1+)`; the spec file itself fails
+  to build, which is exactly the user's experience. The table is what turns that
+  into a permanent guard: one file that calls both surfaces the same way.
+- **The asymmetry came from the type system, not from a decision.** `*keys :
+  String | Symbol` and `*keys` (untyped) differ: only the untyped splat is
+  callable with zero arguments. `DataFrame#distinct` had grown an explicit
+  no-argument overload for that reason years of phases ago; the lazy mirror was
+  written from the splat form and never noticed. Probing call *shapes* — not
+  results — is what surfaces this class, and it belongs in the same file as the
+  result comparisons.
+- **The key-list overload keeps one meaning for `Enumerable`.** It forwards to the
+  same `Plan::Sort`, so `sort_by(keys)` and `sort_by(*keys)` cannot resolve
+  directions or null placement differently.
+
 ## 13. Testing strategy
 
 - Spec layout mirrors `src/prism/`. See
@@ -3138,7 +3186,6 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
 | `cast(strict: false)` (null on a value that does not fit) | Polars has the opt-out (`CastOptions::NonStrict`, and `Overflowing` for wrapping); Prism's strict cast is the default and the only spelling, and no caller has needed the escape hatch yet. It is a keyword on three surfaces (`DataFrame#cast`, `Series#cast`, `Expr#cast`), so it waits for a caller | when a caller hits it |
 | Crystal's stdlib `CSV` as the lexer for `read_csv` | measured (Phase 32): stdlib lex + builders is 1.4–2.2x faster than `arrow-cr`'s reader on 1e6×4, and writes no faster, but the typed half is arrow-cast's parsers (dates, times, timestamps, durations, intervals, decimals) and `CSV.parse` materialises every cell where `arrow-cr` streams batches. `batch_size` was ruled out as the cause. Filed as `shard_issues/arrow-cr.4.md` (open); a second reader inside Prism is declined | when the upstream reader is fixed, or a consumer's CSV scan is hot |
-| Zero-argument `LazyFrame#distinct` / `#drop_nulls` | the eager verbs have a no-argument overload (all columns) but a Crystal typed splat requires one argument, so `df.lazy.distinct` does not compile while `df.distinct` does. Found while probing Phase 33; a separate, tiny fix | next |
 | Polars' `extra_columns='ignore'` / `missing_columns='insert'` for `read_csv(schema:)` | both silently accept a schema that does not match the file (ignore a column, or invent one full of nulls). Prism raises instead; a caller who wants either behaviour has not appeared | when a caller hits it |
 | Integer division by zero raises instead of yielding null | Polars' `floordiv`/`mod` return null; `arrow-cr`'s checked kernels raise `Arrow::ArrowError: Divide by zero error`, and `Binary#nullable?` relies on that to claim a non-null operand pair gives a non-null result. Aligning would mean an upstream kernel change (or a Prism-level null-on-zero), not a local patch | if a caller wants Polars' null, or if `arrow-cr` changes it |
 | `group_by` key and aggregate fields stay nullable even when the operand cannot be null | a nullable field may hold no nulls, so the conservative claim is safe, and the plan runs the eager verb on a zero-row frame so the two cannot disagree; tightening it means teaching the aggregate layer the same rule | when a caller needs the non-null flag downstream (a Parquet schema, a `concat` with a non-null source) |
