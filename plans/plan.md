@@ -58,25 +58,32 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Nothing is queued that needs a design.** Phase 33 closed the last silent
-   wrongness the IO probes found (a reordered `schema:` swapping same-typed
-   columns). A new item still needs a measurement or a failing case; these are the
-   ones already scoped, in the order they would pay off:
-   - **`shard_issues/arrow-cr.4.md`** (filed, open): the CSV reader costs 1.4x
-     Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
-     `batch_size` is not the explanation (§Phase 32). The report names the
-     per-cell `IO::Memory` + two `dup`s + the throwaway `String` in
-     `validate_utf8` as the cost, and the acceptance bar is within 1.25x of
-     stdlib. A Prism-side reader stays declined; the next step is to send it
-     upstream. It is the only open report: `arrow-cr.done.1–3` and
-     `parquet-cr.done.2` are fixed and renamed with the `.done` marker, their
-     reproducers kept because they are what re-proves each fix after a
-     `shards update`.
+1. **The queued work is done.** Phases 34 and 35 closed the two items this block
+   listed (lazy call shapes, `cast(strict: false)`), so nothing is queued that can
+   be started without a new failing case or a caller. What is left:
+   - **`shard_issues/arrow-cr.4.md`** (filed, open, external): the CSV reader costs
+     1.4x Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
+     `batch_size` is not the explanation. The report names the per-cell
+     `IO::Memory` + two `dup`s + the throwaway `String` in `validate_utf8` as the
+     cost, with 1.25x of stdlib as the acceptance bar. Prism does not work around
+     it; the next step is upstream. It is the only open report —
+     `arrow-cr.done.1–3` and `parquet-cr.done.2` are fixed, renamed with the
+     `.done` marker, and keep their reproducers so a `shards update` can re-prove
+     each fix.
    - **`group_by` nullability** (§17): its key and aggregate fields stay nullable;
-     tightening them is only worth doing when a caller needs the flag (a Parquet
-     schema or a `concat` with a non-null source).
-2. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
-   26–33, one of which (`is_in`) came from a downstream report. The tag goes on
+     tightening them only pays when a caller needs the flag (a Parquet schema or a
+     `concat` with a non-null source).
+   - **`CastOptions::Overflowing`** (§17): the third cast mode (wrapping) is the
+     only one Polars has that Prism does not.
+2. **A new phase starts from a probe.** The method that keeps finding real bugs is
+   one screen of calls across a surface the oracles do not reach — Phase 27 probed
+   dtypes, 28–30 verbs, 31 schemas, 32 the reader/writer round-trip, 33 the IO
+   options. Surfaces with the thinnest oracles now: `Series` verbs (arithmetic,
+   `sort`, `head`/`tail`, `unique`), typed frames (`define_schema` round-trips and
+   `S::Row`), and display of the rarer dtypes (interval, map, list-view, decimal
+   scales). Each still needs a *failing* case before it becomes a phase.
+3. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
+   26–35, one of which (`is_in`) came from a downstream report. The tag goes on
    when a consumer needs it, not on a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
