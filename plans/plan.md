@@ -65,13 +65,16 @@ gitignored, so this line is the record of what the suite below was run against.
      `df.drop_nulls` have a no-argument overload, the lazy spellings cannot take
      zero arguments because a typed splat requires one — found while probing
      Phase 33, left out of it because it is a different fix.
-   - **`shard_issues/arrow-cr.4.md`**: the CSV reader is 1.5–2.2x slower than
-     Crystal's stdlib lexer plus the same builders (§Phase 32), and `batch_size`
-     is not the explanation. Report it upstream with the lexer-only comparison,
-     re-measured on an idle machine; a Prism-side reader stays declined. It is
-     the only report still open: `arrow-cr.done.1–3` and `parquet-cr.done.2` are
-     fixed upstream and renamed with the `.done` marker, and their reproducers
-     are kept because they are what re-proves each fix after a `shards update`.
+   - **`shard_issues/arrow-cr.4.md`** (filed, open): the CSV reader costs 1.4x
+     Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
+     `batch_size` is not the explanation (§Phase 32). The report names the
+     per-cell `IO::Memory` + two `dup`s + the throwaway `String` in
+     `validate_utf8` as the cost, and the acceptance bar is within 1.25x of
+     stdlib. A Prism-side reader stays declined; the next step is to send it
+     upstream. It is the only open report: `arrow-cr.done.1–3` and
+     `parquet-cr.done.2` are fixed and renamed with the `.done` marker, their
+     reproducers kept because they are what re-proves each fix after a
+     `shards update`.
    - **`strict: false` on `cast`** (§17): the recorded escape hatch for a caller
      that wants Polars' null-on-failure instead of the raise.
    - **`group_by` nullability** (§17): its key and aggregate fields stay nullable;
@@ -3134,7 +3137,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | `concat` nullability union | nullability is checked per frame today (a zero-row frame is exempt); unioning the flags would be lossless since `concat_batches` takes the caller's schema, but no caller has needed the looser rule | when a caller hits it |
 | Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
 | `cast(strict: false)` (null on a value that does not fit) | Polars has the opt-out (`CastOptions::NonStrict`, and `Overflowing` for wrapping); Prism's strict cast is the default and the only spelling, and no caller has needed the escape hatch yet. It is a keyword on three surfaces (`DataFrame#cast`, `Series#cast`, `Expr#cast`), so it waits for a caller | when a caller hits it |
-| Crystal's stdlib `CSV` as the lexer for `read_csv` | measured (Phase 32): stdlib lex + builders is 1.5–2.2x faster than `arrow-cr`'s reader on 1e6×4, and writes no faster, but the typed half is arrow-cast's parsers (dates, times, timestamps, durations, intervals, decimals) and `CSV.parse` materialises every cell where `arrow-cr` streams batches. `batch_size` was ruled out as the cause. Goes upstream as `shard_issues/arrow-cr.4.md`; a second reader inside Prism is declined | if the upstream reader stays slow and a consumer's CSV scan is hot |
+| Crystal's stdlib `CSV` as the lexer for `read_csv` | measured (Phase 32): stdlib lex + builders is 1.4–2.2x faster than `arrow-cr`'s reader on 1e6×4, and writes no faster, but the typed half is arrow-cast's parsers (dates, times, timestamps, durations, intervals, decimals) and `CSV.parse` materialises every cell where `arrow-cr` streams batches. `batch_size` was ruled out as the cause. Filed as `shard_issues/arrow-cr.4.md` (open); a second reader inside Prism is declined | when the upstream reader is fixed, or a consumer's CSV scan is hot |
 | Zero-argument `LazyFrame#distinct` / `#drop_nulls` | the eager verbs have a no-argument overload (all columns) but a Crystal typed splat requires one argument, so `df.lazy.distinct` does not compile while `df.distinct` does. Found while probing Phase 33; a separate, tiny fix | next |
 | Polars' `extra_columns='ignore'` / `missing_columns='insert'` for `read_csv(schema:)` | both silently accept a schema that does not match the file (ignore a column, or invent one full of nulls). Prism raises instead; a caller who wants either behaviour has not appeared | when a caller hits it |
 | Integer division by zero raises instead of yielding null | Polars' `floordiv`/`mod` return null; `arrow-cr`'s checked kernels raise `Arrow::ArrowError: Divide by zero error`, and `Binary#nullable?` relies on that to claim a non-null operand pair gives a non-null result. Aligning would mean an upstream kernel change (or a Prism-level null-on-zero), not a local patch | if a caller wants Polars' null, or if `arrow-cr` changes it |

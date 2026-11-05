@@ -45,6 +45,7 @@ module Bench
     keys(frame, dimension)
     parquet(frame)
     clustered(frame)
+    csv(frame)
     lazy(frame)
 
     puts
@@ -226,6 +227,30 @@ module Bench
     end
 
     FILES << {path, File.size(path) / 1_048_576.0}
+  end
+
+  # The CSV surface, which `shard_issues/arrow-cr.4.md` reports on: the file is
+  # written once (outside the measurement) and then read with and without a
+  # schema, because inference decodes the file twice — once to infer, once to
+  # read — while a schema read skips that pass.
+  private def csv(frame : Prism::DataFrame) : Nil
+    path = "temp/bench/sales.csv"
+    Prism.write_csv(path, frame) unless File.exists?(path)
+    size = File.size(path)
+
+    timed("write_csv", "1e6 rows, 4 columns") do
+      Prism.write_csv(IO::Memory.new(size + 1_024), frame)
+    end
+
+    timed("read_csv (all columns)", "schema supplied, no inference") do
+      Prism.read_csv(path, schema: frame.schema)
+    end
+
+    timed("read_csv (inferred)", "infer_rows=100, two passes") do
+      Prism.read_csv(path)
+    end
+
+    FILES << {path, size / 1_048_576.0}
   end
 
   private def lazy(frame : Prism::DataFrame) : Nil

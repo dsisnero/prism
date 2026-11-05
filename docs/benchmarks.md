@@ -51,6 +51,24 @@ that background load cannot fake.
 | read clustered predicate + projection | 92.2 | 92.9 | 99999 | row groups pruned |
 | lazy group_by → sort → head | 192.7 | 194.4 | 10 | slice pinned to the sort |
 
+## CSV surface
+
+| scenario | best (ms) | median (ms) | out rows | note |
+| --- | ---: | ---: | ---: | --- |
+| write_csv | 229.8 | 231.8 | 1000000 | 1e6 rows, 4 columns, 31.9 MiB |
+| read_csv (all columns) | 445.1 | 452.1 | 1000000 | schema supplied, no inference |
+| read_csv (inferred) | 797.9 | 813.0 | 1000000 | `infer_rows=100`, two passes |
+
+These rows were added with the Phase 32 round-trip work and come from a run at
+load ~4.5 rather than the quiet run above, so read them against each other (and
+against the stdlib comparison in
+[`shard_issues/arrow-cr.4.md`](../shard_issues/arrow-cr.4.md)) rather than
+against the table above. Writing is a wash with a stdlib builder fed
+pre-formatted cells; reading is the slow side — 1.4x Crystal's `CSV` lexer plus
+the *same* `StringArray` builders for the all-Utf8 case, which is the reader's
+per-cell path, not typed parsing. Inference costs two passes over the file (one
+to infer, one to read), which is why it is ~1.8x the schema-supplied read.
+
 ## What the numbers say
 
 **Element-wise verbs are free.** `select` and `to_arrow` measure 0 ms because
