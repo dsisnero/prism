@@ -95,7 +95,9 @@ plus the `arrow-cr` report, `30f28a9` the bounded sort, `79a035b` `top_n`,
 `297ff04` multi-key passes, `820d447` `SortEngine`, `2125335` single nested keys,
 `8a2cd37` the `arrow-cr` fix, `6e573ae` row-encoded sort, `ab6429c` conditionals,
 `01f63e4` the `fill_null` rule and `d3ca061` the Polars/arrow-rs verification of
-phases 27–30; Phase 31 follows them on `main`.
+phases 27–30; then `5739801` the Phase 31 nullability rule, `5e21632` the
+`arrow-cr` `064ece4` bump (and the C16 correction) and `ff3327d` the Phase 32 IO
+round-trip oracle.
 Everything is on `main`, `v0.2.0` is the current release, and nothing is pending,
 so a new feature starts from a clean tree.
 
