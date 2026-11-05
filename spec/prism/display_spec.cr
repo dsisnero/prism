@@ -140,5 +140,28 @@ describe Prism::Display do
       rendered.should contain("-13 mons")
       rendered.should contain("null")
     end
+
+    it "renders the view, run-end and wide-decimal dtypes" do
+      # These can be built, filtered, sorted, grouped and written, but had no
+      # `Values` case, so a frame holding one could not be printed at all.
+      frame = Prism.from_columns({
+        view:   Arrow::StringViewArray.from_nullable(["a", nil]).as(Arrow::ArrayBase),
+        binary: Arrow::BinaryViewArray.from_nullable([Bytes[1_u8], nil]).as(Arrow::ArrayBase),
+        runs:   Arrow::RunArray(Int32).try_new(
+          Arrow::PrimitiveArray(Int32).from_values([1_i32, 2_i32]),
+          Arrow::PrimitiveArray(Int64).from_nullable([5_i64, nil]),
+        ).as(Arrow::ArrayBase),
+        wide: Arrow::PrimitiveArray(Arrow::I256)
+          .from_nullable([Arrow::I256.from_i128(123_i128), nil])
+          .with_data_type(Arrow::DataType.decimal256(40, 2)).as(Arrow::ArrayBase),
+      })
+
+      rendered = frame.to_s
+
+      rendered.should contain("a")
+      rendered.should contain("1.23")
+      rendered.should contain("5")
+      frame.rows.size.should eq(2)
+    end
   end
 end

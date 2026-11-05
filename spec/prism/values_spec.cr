@@ -123,6 +123,71 @@ describe Prism::Values do
       extract_consistently(Arrow::PrimitiveArray(Arrow::Float16).from_values([half]))
         .should eq([half])
     end
+
+    # These four can be built, stored, filtered, sorted, grouped and written to
+    # Parquet/IPC, but had no `Values` case — so `to_a`, `rows` and `to_s` raised
+    # `UnsupportedOperation` for a frame that was otherwise complete.
+    it "extracts a Utf8View column" do
+      extract_consistently(Arrow::StringViewArray.from_nullable(["b", nil, "a"]))
+        .should eq(["b", nil, "a"])
+    end
+
+    it "extracts a BinaryView column" do
+      extract_consistently(Arrow::BinaryViewArray.from_nullable([Bytes[1_u8, 2_u8], nil]))
+        .should eq([Bytes[1_u8, 2_u8], nil])
+    end
+
+    it "extracts a run-end encoded column as its logical values" do
+      # runs: two 5s, then one null — three logical rows from two runs.
+      array = Arrow::RunArray(Int32).try_new(
+        Arrow::PrimitiveArray(Int32).from_values([2_i32, 3_i32]),
+        Arrow::PrimitiveArray(Int64).from_nullable([5_i64, nil]),
+      )
+
+      extract_consistently(array).should eq([5_i64, 5_i64, nil])
+    end
+
+    it "extracts a Decimal256 column at its scale" do
+      array = Arrow::PrimitiveArray(Arrow::I256)
+        .from_values([Arrow::I256.from_i128(123_i128), Arrow::I256.from_i128(-456_i128)])
+        .with_data_type(Arrow::DataType.decimal256(40, 2))
+
+      extract_consistently(array)
+        .should eq([BigDecimal.new("1.23"), BigDecimal.new("-4.56")])
+    end
+
+    it "extracts them as nested values too, which goes through extract_at" do
+      fields = Arrow::Fields.from([
+        Arrow::Field.new("s", Arrow::DataType.utf8_view, true),
+        Arrow::Field.new("b", Arrow::DataType.binary_view, true),
+        Arrow::Field.new("d", Arrow::DataType.decimal256(40, 2), true),
+        Arrow::Field.new("r", Arrow::DataType.run_end_encoded(
+          Arrow::Field.new("run_ends", Arrow::DataType.int32, false),
+          Arrow::Field.new("values", Arrow::DataType.int64, true),
+        ), true),
+      ])
+      record = Arrow::StructArray.new(
+        fields,
+        [
+          Arrow::StringViewArray.from_values(["a"]).as(Arrow::ArrayBase),
+          Arrow::BinaryViewArray.from_values([Bytes[1_u8]]).as(Arrow::ArrayBase),
+          Arrow::PrimitiveArray(Arrow::I256).from_values([Arrow::I256.from_i128(123_i128)])
+            .with_data_type(Arrow::DataType.decimal256(40, 2)).as(Arrow::ArrayBase),
+          Arrow::RunArray(Int32).try_new(
+            Arrow::PrimitiveArray(Int32).from_values([1_i32]),
+            Arrow::PrimitiveArray(Int64).from_values([5_i64]),
+          ).as(Arrow::ArrayBase),
+        ],
+        nil,
+      )
+
+      extract_consistently(record).should eq([{
+        "s" => "a",
+        "b" => Bytes[1_u8],
+        "d" => BigDecimal.new("1.23"),
+        "r" => 5_i64,
+      }])
+    end
   end
 
   describe ".extract_at" do

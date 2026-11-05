@@ -70,13 +70,17 @@ module Prism
       when .float64?                     then collect_values(source.as(Arrow::PrimitiveArray(Float64)))
       when .utf8?                        then collect_values(source.as(Arrow::StringArray))
       when .large_utf8?                  then collect_values(source.as(Arrow::LargeStringArray))
+      when .utf8_view?                   then collect_values(source.as(Arrow::StringViewArray))
       when .binary?                      then collect_values(source.as(Arrow::BinaryArray))
       when .large_binary?                then collect_values(source.as(Arrow::LargeBinaryArray))
+      when .binary_view?                 then collect_values(source.as(Arrow::BinaryViewArray))
       when .fixed_size_binary?           then collect_values(source.as(Arrow::FixedSizeBinaryArray))
+      when .run_end_encoded?             then collect_run_end(source)
       when .dictionary?                  then extract(decoded_dictionary(source))
       when .decimal32?                   then collect_decimal(source.as(Arrow::PrimitiveArray(Int32)))
       when .decimal64?                   then collect_decimal(source.as(Arrow::PrimitiveArray(Int64)))
       when .decimal128?                  then collect_decimal(source.as(Arrow::PrimitiveArray(Int128)))
+      when .decimal256?                  then collect_decimal256(source)
       when .timestamp?                   then collect_datetime(source.as(Arrow::PrimitiveArray(Int64)))
       when .date32?                      then collect_date(source.as(Arrow::PrimitiveArray(Int32)))
       when .date64?                      then collect_date(source.as(Arrow::PrimitiveArray(Int64)))
@@ -179,9 +183,12 @@ module Prism
       when .float64?                     then source.as(Arrow::PrimitiveArray(Float64))[index]?
       when .utf8?                        then source.as(Arrow::StringArray)[index]?
       when .large_utf8?                  then source.as(Arrow::LargeStringArray)[index]?
+      when .utf8_view?                   then source.as(Arrow::StringViewArray)[index]?
       when .binary?                      then source.as(Arrow::BinaryArray)[index]?
       when .large_binary?                then source.as(Arrow::LargeBinaryArray)[index]?
+      when .binary_view?                 then source.as(Arrow::BinaryViewArray)[index]?
       when .fixed_size_binary?           then source.as(Arrow::FixedSizeBinaryArray)[index]?
+      when .run_end_encoded?             then run_end_at(source, index)
       when .dictionary?
         decoded = decoded_dictionary(source.slice(index, 1))
         extract_at(decoded, 0)
@@ -193,6 +200,7 @@ module Prism
       when .decimal32?  then decimal_at(source.as(Arrow::PrimitiveArray(Int32)), index)
       when .decimal64?  then decimal_at(source.as(Arrow::PrimitiveArray(Int64)), index)
       when .decimal128? then decimal_at(source.as(Arrow::PrimitiveArray(Int128)), index)
+      when .decimal256? then decimal256_at(source, index)
       when .timestamp?  then datetime_at(source.as(Arrow::PrimitiveArray(Int64)), index)
       when .date32?     then date_at(source.as(Arrow::PrimitiveArray(Int32)), index)
       when .date64?     then date_at(source.as(Arrow::PrimitiveArray(Int64)), index)
@@ -252,6 +260,56 @@ module Prism
       return nil if array.null?(index)
 
       BigDecimal.new(array.value(index).to_i128, array.data_type.scale || 0)
+    end
+
+    # `Decimal256` is stored as an `I256`, which does not fit `Int128` in
+    # general, so the value goes through Arrow's decimal formatter (the same one
+    # `to_s` uses) rather than the integer constructor.
+    private def self.collect_decimal256(array : Arrow::ArrayBase) : Array(Value)
+      source = array.as(Arrow::PrimitiveArray(Arrow::I256))
+      scale = (source.data_type.scale || 0).to_i32
+
+      Array(Value).new(source.len) do |index|
+        source.null?(index) ? nil : decimal256_value(source.value(index), scale)
+      end
+    end
+
+    private def self.decimal256_at(array : Arrow::ArrayBase, index : Int) : Value
+      source = array.as(Arrow::PrimitiveArray(Arrow::I256))
+      return nil if source.null?(index)
+
+      decimal256_value(source.value(index), (source.data_type.scale || 0).to_i32)
+    end
+
+    private def self.decimal256_value(value : Arrow::I256, scale : Int32) : Value
+      BigDecimal.new(Arrow.format_decimal_str(value.to_s, 0, scale))
+    end
+
+    # Run-end encoded arrays have three possible run-end widths, so the generic
+    # class is dispatched rather than cast. `RunEndBuffer#len` is the *logical*
+    # (row) length, and `RunArray#value` maps a logical index to its run, so each
+    # row reads the value it belongs to.
+    private def self.collect_run_end(array : Arrow::ArrayBase) : Array(Value)
+      case array
+      when Arrow::RunArray(Int16), Arrow::RunArray(Int32), Arrow::RunArray(Int64)
+        logical = array.run_ends.len.to_i32
+        values = Array(Value).new(logical)
+        logical.times { |index| values << run_end_at(array, index) }
+        values
+      else
+        raise UnsupportedOperation.new("cannot materialize #{array.data_type} values")
+      end
+    end
+
+    private def self.run_end_at(array : Arrow::ArrayBase, index : Int) : Value
+      case array
+      when Arrow::RunArray(Int16),
+           Arrow::RunArray(Int32),
+           Arrow::RunArray(Int64)
+        extract_at(array.value(index), 0)
+      else
+        raise UnsupportedOperation.new("cannot materialize #{array.data_type} values")
+      end
     end
 
     private def self.collect_datetime(array : Arrow::PrimitiveArray(T)) : Array(Value) forall T

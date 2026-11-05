@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(616 examples, ~30 s warm). The table below is the only place that tracks status;
+(622 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -45,8 +45,9 @@ the Phase 29 unique-name checks, the Phase 30 `fill_null` family rule and the
 Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
 nulls), the Phase 32 IO round-trip oracle plus the two CSV losses it found, and the
 Phase 33 CSV schema-by-name fix, the Phase 34 lazy call-shape parity and the
-Phase 35 `cast(strict: false)` opt-out. Phases 0–35 are closed apart from the
-cosmetic local folder rename.
+Phase 35 `cast(strict: false)` opt-out and the Phase 36 value coverage for the view,
+run-end and wide-decimal dtypes. Phases 0–36 are closed apart from the cosmetic
+local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
 `78b0cd4`: 44 commits of `arrow-buffer`/`arrow-cast` reconciliation; no semantics
@@ -78,10 +79,13 @@ gitignored, so this line is the record of what the suite below was run against.
 2. **A new phase starts from a probe.** The method that keeps finding real bugs is
    one screen of calls across a surface the oracles do not reach — Phase 27 probed
    dtypes, 28–30 verbs, 31 schemas, 32 the reader/writer round-trip, 33 the IO
-   options. Surfaces with the thinnest oracles now: `Series` verbs (arithmetic,
-   `sort`, `head`/`tail`, `unique`), typed frames (`define_schema` round-trips and
-   `S::Row`), and display of the rarer dtypes (interval, map, list-view, decimal
-   scales). Each still needs a *failing* case before it becomes a phase.
+   options, 36 the dtypes `arrow-cr` gained later. Surfaces with the thinnest
+   oracles now: `Series` verbs (it has no arithmetic, `sort`, `head`/`tail`,
+   `std`/`var`/`median` — a real gap, but a feature request rather than a failing
+   case), typed frames (`define_schema` round-trips and `S::Row` against
+   `DataFrame#rows`), and nested-key coverage for the view/run-end dtypes in
+   `distinct`/`group_by`/joins. Each still needs a *failing* case before it becomes
+   a phase.
 3. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
    26–35, one of which (`is_in`) came from a downstream report. The tag goes on
    when a consumer needs it, not on a schedule.
@@ -93,10 +97,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **616 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**617**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**620**, ~1 min); with both
-set the suite is **621**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **622 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**623**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**626**, ~1 min); with both
+set the suite is **627**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -160,6 +164,7 @@ so a new feature starts from a clean tree.
 | 33 | A CSV `schema:` names columns (by name, not by position) | **done** |
 | 34 | The lazy verbs take every call shape the eager ones do | **done** |
 | 35 | `cast(strict: false)`: the nulling opt-out, on all four surfaces | **done** |
+| 36 | View, run-end and `Decimal256` columns materialize and print | **done** |
 
 ---
 
@@ -2555,6 +2560,56 @@ Prism exposes strict and non-strict; wrapping stays deferred (§17).
   `Cast` node or the same two `Coerce` calls, so there is no per-surface
   behaviour to keep aligned — which is also why the red state was a single
   compile error repeated in four files.
+
+### Phase 36 — view, run-end and `Decimal256` columns materialize (done)
+
+The probe this time aimed at the surface the plan named as thinnest: dtypes
+`arrow-cr` gained after the value layer was written. Four of them could be built,
+filtered, sorted, grouped, written to Parquet/IPC and read back, but **not
+printed, rowed or materialized**:
+
+```text
+Utf8View, BinaryView, RunEndEncoded, Decimal256(40, 2)
+  Values.extract -> Prism::UnsupportedOperation: cannot materialize ...
+  therefore df["v"].to_a, df.rows and df.to_s all raised on an otherwise complete frame
+```
+
+- [x] `Values.extract` gains `utf8_view` (String), `binary_view` (Bytes),
+      `run_end_encoded` (logical values, runs expanded) and `decimal256`
+      (BigDecimal at its scale); `extract_at` gains the same four, so a nested
+      value inside a struct or list works too
+- [x] `Decimal256` decodes through `Arrow.format_decimal_str` on the `I256`'s
+      decimal digits rather than `BigDecimal.new(Int128, scale)`, because an `I256`
+      does not always fit `Int128`
+- [x] run-end arrays dispatch over their three run-end widths (`Int16`/`Int32`/
+      `Int64`) and read the logical length from `RunEndBuffer#len`, which is rows
+      rather than runs
+- [x] the IO matrix gains `utf8_view`, `binary_view` and `decimal256` (all three
+      round-trip exactly through Parquet and IPC, and through CSV with a schema);
+      run-end is deliberately absent with a comment, because Parquet has no
+      run-end encoding and widens the column to its values dtype
+
+**Acceptance:** `spec/prism/values_spec.cr` materializes each of the four both at
+the top level and *inside a struct* (which is the `extract_at` path), and
+`spec/prism/display_spec.cr` renders a frame holding all four. Suite: 622
+examples (627 with the compile and example specs).
+
+**Notes carried forward:**
+
+- **"It works" has an edge set, and the edges are `to_a`, `rows` and `to_s`.** All
+  four dtypes passed the operations that look hard (filter, sort, group, join,
+  Parquet/IPC round-trip) and failed the one that looks trivial. A dtype is only
+  supported when `Prism::Values` knows it, because that is the single dispatch
+  point every materializing edge goes through — so the guard belongs there, and
+  the oracle belongs in `values_spec.cr`, not in a per-dtype smoke test.
+- **`#len` is not always rows.** `RunArray#len` counts *runs*; the logical length
+  lives on `RunEndBuffer#len`. A first cut iterated `Array(Value).new(array.len)`
+  and produced two rows out of three. Checking the dependency's own vocabulary
+  (`logical_len`, `signed_len`) is cheaper than debugging a silent truncation.
+- **The probe was three lines per dtype.** Construct one column, then ask for
+  `to_a`/`rows`/`to_s`/`distinct`/`sort`/`group_by`. That is twice now (Phase 27
+  and here) that a small matrix over *dtypes nobody had exercised* found a real
+  gap while the property oracles passed.
 
 ## 13. Testing strategy
 

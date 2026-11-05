@@ -245,6 +245,17 @@ rather than Arrow's `1 years 2 mons`; cast the column to `Utf8` when the
 unit-specific Arrow text is needed. Rows and display therefore stay one closed
 type for every frame (§10 of the plan).
 
+The same rule holds for the dtypes `arrow-cr` gained later: a `Utf8View` cell is
+a `String`, a `BinaryView` cell is `Bytes`, a run-end encoded column materializes
+as its **logical** values (runs expanded, one per row), and `Decimal256` is a
+`BigDecimal` at its scale — decoded through Arrow's decimal formatter because an
+`I256` does not always fit `Int128`. `Prism::Values` is the one dispatch point for
+`to_a`, `rows` and `to_s`, so a dtype it does not know is the only reason a frame
+cannot be printed or rowed; the four cases above are the last ones that were
+missing. A run-end column is the one dtype that cannot round-trip *exactly*
+through Parquet — Parquet has no run-end encoding, so a write widens it to its
+values dtype — while IPC carries it.
+
 Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, so
 `col("price") * 2` does not build an n-element array of 2s. Arrow's kernels
 reject a union of array and scalar, so `Prism::Kernels` narrows the union and

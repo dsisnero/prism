@@ -36,7 +36,7 @@ end
 # Labels whose dtype a CSV file cannot carry at all: bytes have no text form
 # (the writer would emit hex, which reads back as a different value) and a
 # nested value has no single text form.
-private CSV_UNWRITABLE = ["binary", "list", "fixed_list", "struct", "map"]
+private CSV_UNWRITABLE = ["binary", "binary_view", "list", "fixed_list", "struct", "map"]
 
 # Labels `arrow-cr`'s CSV reader cannot parse back even with the right schema.
 private CSV_UNREADABLE = ["large_utf8", "binary", "duration", "interval_ym"]
