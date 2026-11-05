@@ -191,6 +191,14 @@ what Polars' CSV serializer does with `datatype {dtype} cannot be written to
 CSV`; Prism's error names the column and points at Parquet or IPC. Parquet and
 IPC carry every dtype exactly, so a round-trip that matters belongs there.
 
+**A CSV schema is matched by name.** Polars matches a supplied schema to the
+file's header by name, keeps the file's column order, and raises `SchemaMismatch`
+for columns on one side only; Prism does the same (`Prism::SchemaError` naming
+the missing and unexpected columns), and rejects two fields of one name with
+`DuplicateColumn`. Two Polars knobs have no Prism spelling yet — `extra_columns`'
+`ignore` and `missing_columns`' `insert` (§17) — because dropping or inventing a
+column silently is the kind of convenience that hides a mismatch.
+
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and
 `len(unique())`, and differing from SQL's `COUNT(DISTINCT x)`.

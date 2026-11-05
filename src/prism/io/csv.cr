@@ -65,7 +65,17 @@ module Prism
     format.with_header(header)
     format.with_delimiter(delimiter)
 
-    resolved = schema || infer_csv_schema(format, bytes, infer_rows)
+    resolved = if supplied = schema
+                 match_csv_schema(format, bytes, supplied, header)
+               else
+                 infer_csv_schema(format, bytes, infer_rows)
+               end
+
+    # A matched schema is in the file's own order, so the reader can check the
+    # header it parses against it; a disagreement means Prism's header reader and
+    # the reader's parted ways, which is a bug rather than a user error.
+    format.with_header_validation(true) if schema && header
+
     reader = Arrow::Csv::ReaderBuilder.new(resolved, format, batch_size).build(bytes)
 
     batches = [] of Arrow::RecordBatch
@@ -114,6 +124,85 @@ module Prism
     File.open(path, "w") do |io|
       write_csv(io, frame, header: header)
     end
+  end
+
+  # Matches a supplied schema to the file by name.
+  #
+  # The reader parses by position, so handing it a schema in another order
+  # silently swaps two same-typed columns, and one whose names the file does not
+  # have silently relabels the columns (a frame that says `x` and holds `a`). A
+  # schema names columns, so it is reordered to the file's header here, a
+  # mismatch raises `Prism::SchemaError` naming the difference, and two fields of
+  # one name are rejected like every other schema Prism builds (Phase 29).
+  #
+  # With `header: false` there are no names to match, so position is the only
+  # meaning a schema can have and only the width is checked.
+  private def self.match_csv_schema(
+    format : Arrow::Csv::Format,
+    bytes : Bytes,
+    schema : Arrow::Schema,
+    header : Bool,
+  ) : Arrow::Schema
+    schema_names = schema.fields.map(&.name)
+    Prism.ensure_unique_names!(schema_names, "the CSV schema")
+
+    first = csv_first_record(format, bytes)
+    unless header
+      return schema if first.empty? || first.size == schema_names.size
+
+      raise SchemaError.new(
+        "CSV has #{first.size} columns but the schema names #{schema_names.size}; " \
+        "without a header a schema is matched by position"
+      )
+    end
+
+    missing = first - schema_names
+    unexpected = schema_names - first
+    unless missing.empty? && unexpected.empty?
+      raise SchemaError.new(
+        "CSV schema does not match the file: " \
+        "#{schema_mismatch(missing, unexpected)} (file columns: #{first.join(", ")})"
+      )
+    end
+
+    # The file's order wins, so the reader parses the order its header describes
+    # and each schema dtype lands on the column it names.
+    Arrow::Schema.new(Arrow::Fields.from(first.map { |name| schema.field_with_name(name) }))
+  end
+
+  private def self.schema_mismatch(missing : Array(String), unexpected : Array(String)) : String
+    parts = [] of String
+    unless missing.empty?
+      parts << "missing #{missing.map { |name| "column #{name.inspect}" }.join(", ")}"
+    end
+    unless unexpected.empty?
+      parts << "the schema names #{unexpected.map { |name| "column #{name.inspect}" }.join(", ")}, " \
+               "which the file does not have"
+    end
+    parts.join("; ")
+  end
+
+  # The first record, with the same decoder the reader uses, so quoting,
+  # delimiters, comments and line endings are handled once. Bounded to one record
+  # rather than decoding the file.
+  private def self.csv_first_record(format : Arrow::Csv::Format, bytes : Bytes) : Array(String)
+    decoder = Arrow::Csv::RecordDecoder.new(
+      delimiter: format.delimiter || 0x2C_u8,
+      quote: format.quote || 0x22_u8,
+      escape: format.escape,
+      terminator: format.terminator,
+      comment: format.comment,
+      num_columns: 0,
+      truncated_rows: format.truncated_rows?,
+      enforce_columns: false,
+    )
+    decoder.feed(bytes)
+    decoder.feed(Bytes.empty)
+
+    rows = [] of Array(Bytes)
+    return [] of String if decoder.decode_into(rows, 1) == 0
+
+    rows[0].map { |field| String.new(field) }
   end
 
   # The schema for a frame read from `bytes`.

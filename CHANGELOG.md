@@ -30,6 +30,18 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Fixed
 
+- `read_csv(schema:)` matches the schema to the file **by name**, not by
+  position. A schema in another order used to swap two same-typed columns
+  silently (`b` holding `a`'s values) and a schema whose names the file did not
+  have quietly relabelled the frame; it is now reordered to the file's header,
+  which is the order the frame keeps. A column on one side only raises
+  `Prism::SchemaError` naming it — `CSV schema does not match the file: missing
+  column "b"; the schema names column "c", which the file does not have (file
+  columns: a, b)` — and two fields of one name raise `Prism::DuplicateColumn`
+  instead of producing a frame with a duplicate column. `header: false` keeps
+  positional meaning (there are no names to match) and checks the width with a
+  Prism error. This matches Polars, which matches a supplied schema by name and
+  raises `SchemaMismatch` for one-sided differences.
 - `write_csv` refuses a column it cannot carry faithfully, before the file is
   opened: bytes (written as hex, a binary column read back as `Int64 [1, 203]`)
   and nested values (which raised `Csv error: Nested type List(Int64) is not

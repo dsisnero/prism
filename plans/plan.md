@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(595 examples, ~30 s warm). The table below is the only place that tracks status;
+(604 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -43,8 +43,9 @@ downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phas
 27 property oracles plus dictionary membership, the Phase 28 `concat` diagnostics,
 the Phase 29 unique-name checks, the Phase 30 `fill_null` family rule and the
 Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
-nulls) and the Phase 32 IO round-trip oracle plus the two CSV losses it found.
-Phases 0–32 are closed apart from the cosmetic local folder rename.
+nulls), the Phase 32 IO round-trip oracle plus the two CSV losses it found, and the
+Phase 33 CSV schema-by-name fix. Phases 0–33 are closed apart from the cosmetic
+local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
 `78b0cd4`: 44 commits of `arrow-buffer`/`arrow-cast` reconciliation; no semantics
@@ -56,11 +57,14 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Nothing is queued.** Phase 32 closed the reader/writer surface: the oracle is
-   in place and its two failures (a binary column that read back as integers, and
-   a `Null` inference that dropped the rows after the window) are fixed. A new
-   item needs a measurement or a failing case. Candidates the last two phases left
-   behind, in the order they would pay off:
+1. **Nothing is queued that needs a design.** Phase 33 closed the last silent
+   wrongness the IO probes found (a reordered `schema:` swapping same-typed
+   columns). A new item still needs a measurement or a failing case; these are the
+   ones already scoped, in the order they would pay off:
+   - **lazy zero-arg `distinct`/`drop_nulls`** (§17): eager `df.distinct` and
+     `df.drop_nulls` have a no-argument overload, the lazy spellings cannot take
+     zero arguments because a typed splat requires one — found while probing
+     Phase 33, left out of it because it is a different fix.
    - **`shard_issues/arrow-cr.4.md`**: the CSV reader is 1.5–2.2x slower than
      Crystal's stdlib lexer plus the same builders (§Phase 32), and `batch_size`
      is not the explanation. Report it upstream with the lexer-only comparison,
@@ -71,7 +75,7 @@ gitignored, so this line is the record of what the suite below was run against.
      tightening them is only worth doing when a caller needs the flag (a Parquet
      schema or a `concat` with a non-null source).
 2. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
-   26–32, one of which (`is_in`) came from a downstream report. The tag goes on
+   26–33, one of which (`is_in`) came from a downstream report. The tag goes on
    when a consumer needs it, not on a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
@@ -81,10 +85,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **595 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**596**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**599**, ~1 min); with both
-set the suite is **600**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **604 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**605**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**608**, ~1 min); with both
+set the suite is **609**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -96,8 +100,8 @@ plus the `arrow-cr` report, `30f28a9` the bounded sort, `79a035b` `top_n`,
 `8a2cd37` the `arrow-cr` fix, `6e573ae` row-encoded sort, `ab6429c` conditionals,
 `01f63e4` the `fill_null` rule and `d3ca061` the Polars/arrow-rs verification of
 phases 27–30; then `5739801` the Phase 31 nullability rule, `5e21632` the
-`arrow-cr` `064ece4` bump (and the C16 correction) and `ff3327d` the Phase 32 IO
-round-trip oracle.
+`arrow-cr` `064ece4` bump (and the C16 correction), `ff3327d` the Phase 32 IO
+round-trip oracle and `2220ccf` the status-block record; Phase 33 follows them.
 Everything is on `main`, `v0.2.0` is the current release, and nothing is pending,
 so a new feature starts from a clean tree.
 
@@ -145,6 +149,7 @@ so a new feature starts from a clean tree.
 | 30 | `fill_null` fills only what the value fits | **done** |
 | 31 | One nullability rule: `Expr#nullable?`, and casts that never invent nulls | **done** |
 | 32 | IO round-trip oracle, and CSV stops losing values | **done** |
+| 33 | A CSV `schema:` names columns (by name, not by position) | **done** |
 
 ---
 
@@ -2375,6 +2380,71 @@ report rather than a second reader inside Prism (§17).
   Prism overrides. Polars reached the same conclusion from the other direction
   (`DataType::String` for an empty window).
 
+### Phase 33 — a CSV schema names columns (done)
+
+Phase 32's note said a text format's bug is a lost value. This one probed the
+*options* of the surface it had just covered, and found the same class one level
+down: `read_csv(schema:)` handed the schema to a positional parser.
+
+```text
+file "a,b\n1,x\n2,y\n", schema {b: Utf8, a: Utf8}
+  -> ["b", "a"]  b="1", a="x"       two same-typed columns swapped, silently
+file "a,b\n1,x\n",     schema {x: Utf8, y: Utf8}
+  -> ["x", "y"]  x="1", y="x"       a frame with names the file never had
+schema {a: Utf8, a: Utf8}           -> a frame with two columns called "a"
+schema with one column too few      -> Arrow: "incorrect number of fields for line 1, expected 1 got 2"
+```
+
+- [x] `Prism.match_csv_schema` — the file's first record, read with the reader's
+      own `RecordDecoder` (one bounded decode, 0.8 ms on 17 MiB), is matched to
+      the schema **by name**; the schema is reordered to the file's header, which
+      is the order the frame keeps. Polars does the same
+- [x] a column on one side only raises `Prism::SchemaError` naming it —
+      `CSV schema does not match the file: missing column "b"; the schema names
+      column "c", which the file does not have (file columns: a, b)` — instead of
+      Arrow's count-only message
+- [x] two fields of one name raise `Prism::DuplicateColumn`, so an I/O boundary
+      enforces the Phase 29 invariant like every other schema Prism builds
+- [x] `header: false` keeps positional meaning (there are no names to match) and
+      checks the width with a Prism error instead of Arrow's;
+      `format.with_header_validation(true)` then asserts that the reader's header
+      parse agrees with Prism's
+
+**Acceptance:** `spec/prism/io/csv_spec.cr` pins the reorder (values land under
+their own names, file order kept, schema dtypes applied), the two one-sided
+mismatches and the both-sided message, the duplicate name, the positional
+`header: false` case and its width error. Suite: 604 examples (609 with the
+compile and example specs).
+
+**Verified against upstream (DeepWiki + vendor sources):**
+
+- Polars matches a user-supplied `schema` to the CSV header **by name** and keeps
+  the file's column order (`infer_schema` in `crates/polars-io/src/csv/read/`),
+  raising `SchemaMismatch` when the file has columns the schema does not name or
+  the schema names columns the file lacks. Prism's contract is the same, its
+  message names the columns rather than only counting them, and the two Polars
+  escape hatches (`extra_columns='ignore'`, `missing_columns='insert'`) have no
+  Prism spelling yet (§17).
+
+**Notes carried forward:**
+
+- **A schema is a mapping from names, not a list of slots.** Every other API in
+  the library treats a schema as `name -> dtype` (`concat`, joins, `cast`), so
+  `read_csv(schema:)` was the one place where position decided meaning — and
+  where being wrong produced a frame that looked right (two same-typed columns
+  exchanged) rather than an error. Matching by name is also what makes the
+  Phase 32 round-trip contract hold (`read_csv(io, schema: frame.schema)` cannot
+  depend on column order).
+- **Validate with the reader's own parser.** The header could have been split on
+  the delimiter with a regex, but quotes, escaped quotes, custom delimiters and
+  comment lines are the reader's problem already. Reusing its `RecordDecoder`
+  bounded to one record costs one buffer copy and no file parse, and then
+  `with_header_validation` makes the two parses check each other.
+- **The probe was cheap and found real corruption.** Three lines per option —
+  schema in order, out of order, foreign names — took minutes and found a silent
+  swap; the round-trip oracle from Phase 32 could not see it, because it always
+  supplies the schema in the frame's own order.
+
 ## 13. Testing strategy
 
 - Spec layout mirrors `src/prism/`. See
@@ -3062,6 +3132,8 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
 | `cast(strict: false)` (null on a value that does not fit) | Polars has the opt-out (`CastOptions::NonStrict`, and `Overflowing` for wrapping); Prism's strict cast is the default and the only spelling, and no caller has needed the escape hatch yet. It is a keyword on three surfaces (`DataFrame#cast`, `Series#cast`, `Expr#cast`), so it waits for a caller | when a caller hits it |
 | Crystal's stdlib `CSV` as the lexer for `read_csv` | measured (Phase 32): stdlib lex + builders is 1.5–2.2x faster than `arrow-cr`'s reader on 1e6×4, and writes no faster, but the typed half is arrow-cast's parsers (dates, times, timestamps, durations, intervals, decimals) and `CSV.parse` materialises every cell where `arrow-cr` streams batches. `batch_size` was ruled out as the cause. Goes upstream as `shard_issues/arrow-cr.4.md`; a second reader inside Prism is declined | if the upstream reader stays slow and a consumer's CSV scan is hot |
+| Zero-argument `LazyFrame#distinct` / `#drop_nulls` | the eager verbs have a no-argument overload (all columns) but a Crystal typed splat requires one argument, so `df.lazy.distinct` does not compile while `df.distinct` does. Found while probing Phase 33; a separate, tiny fix | next |
+| Polars' `extra_columns='ignore'` / `missing_columns='insert'` for `read_csv(schema:)` | both silently accept a schema that does not match the file (ignore a column, or invent one full of nulls). Prism raises instead; a caller who wants either behaviour has not appeared | when a caller hits it |
 | Integer division by zero raises instead of yielding null | Polars' `floordiv`/`mod` return null; `arrow-cr`'s checked kernels raise `Arrow::ArrowError: Divide by zero error`, and `Binary#nullable?` relies on that to claim a non-null operand pair gives a non-null result. Aligning would mean an upstream kernel change (or a Prism-level null-on-zero), not a local patch | if a caller wants Polars' null, or if `arrow-cr` changes it |
 | `group_by` key and aggregate fields stay nullable even when the operand cannot be null | a nullable field may hold no nulls, so the conservative claim is safe, and the plan runs the eager verb on a zero-row frame so the two cannot disagree; tightening it means teaching the aggregate layer the same rule | when a caller needs the non-null flag downstream (a Parquet schema, a `concat` with a non-null source) |
 

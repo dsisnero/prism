@@ -1,5 +1,17 @@
 require "../../spec_helper"
 
+# The reader parses by position, so a supplied schema is only safe if Prism
+# matches it to the header by name first. These two same-typed columns would
+# swap their values silently if the fields were taken in order.
+private def csv_two_text : String
+  "a,b\n1,x\n2,y\n"
+end
+
+private def csv_utf8_schema(*names : String) : Arrow::Schema
+  fields = names.map { |name| Arrow::Field.new(name, Arrow::DataType.utf8, true) }
+  Arrow::Schema.new(Arrow::Fields.from(fields.to_a))
+end
+
 describe "CSV IO" do
   it "round-trips a frame through IO::Memory with an inferred schema" do
     io = IO::Memory.new
@@ -97,5 +109,82 @@ describe "CSV IO" do
     chunks = 0
     restored.each_batch { chunks += 1 }
     chunks.should be > 1
+  end
+
+  describe "a supplied schema" do
+    it "is matched to the file by name, not by position" do
+      read = Prism.read_csv(IO::Memory.new(csv_two_text), schema: csv_utf8_schema("b", "a"))
+
+      read.column_names.should eq(["a", "b"])
+      read.rows.should eq([{"a" => "1", "b" => "x"}, {"a" => "2", "b" => "y"}])
+    end
+
+    it "keeps the file's column order whatever order the schema lists" do
+      read = Prism.read_csv(IO::Memory.new(csv_two_text), schema: csv_utf8_schema("b", "a"))
+
+      read.column_names.should eq(["a", "b"])
+    end
+
+    it "uses the schema's dtypes through the match" do
+      read = Prism.read_csv(
+        IO::Memory.new("a,b\n1,2\n"),
+        schema: Arrow::Schema.new(Arrow::Fields.from([
+          Arrow::Field.new("b", Arrow::DataType.int64, true),
+          Arrow::Field.new("a", Arrow::DataType.int64, true),
+        ])),
+      )
+
+      read.rows.should eq([{"a" => 1_i64, "b" => 2_i64}])
+    end
+
+    it "names a column the file does not have" do
+      error = expect_raises(Prism::SchemaError, /column "y"/) do
+        Prism.read_csv(IO::Memory.new(csv_two_text), schema: csv_utf8_schema("a", "y"))
+      end
+      error.message.to_s.should contain("does not have")
+      error.message.to_s.should contain("a, b")
+    end
+
+    it "names a file column the schema is missing" do
+      error = expect_raises(Prism::SchemaError, /column "b"/) do
+        Prism.read_csv(IO::Memory.new(csv_two_text), schema: csv_utf8_schema("a"))
+      end
+      error.message.to_s.should contain("missing")
+    end
+
+    it "reports both directions at once" do
+      error = expect_raises(Prism::SchemaError) do
+        Prism.read_csv(IO::Memory.new(csv_two_text), schema: csv_utf8_schema("a", "c", "d"))
+      end
+      error.message.to_s.should contain(%(column "b"))
+      error.message.to_s.should contain(%(column "c"))
+    end
+
+    it "rejects a schema with two columns of one name" do
+      expect_raises(Prism::DuplicateColumn, /"a"/) do
+        Prism.read_csv(IO::Memory.new(csv_two_text), schema: csv_utf8_schema("a", "a"))
+      end
+    end
+
+    it "is positional when the file has no header" do
+      read = Prism.read_csv(
+        IO::Memory.new("1,x\n2,y\n"),
+        header: false,
+        schema: csv_utf8_schema("first", "second"),
+      )
+
+      read.column_names.should eq(["first", "second"])
+      read.rows.should eq([{"first" => "1", "second" => "x"}, {"first" => "2", "second" => "y"}])
+    end
+
+    it "rejects a schema whose width does not match a headerless file" do
+      expect_raises(Prism::SchemaError, /2 columns/) do
+        Prism.read_csv(
+          IO::Memory.new("1,x\n"),
+          header: false,
+          schema: csv_utf8_schema("only"),
+        )
+      end
+    end
   end
 end

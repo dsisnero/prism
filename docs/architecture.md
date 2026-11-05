@@ -555,6 +555,19 @@ falls back to `Utf8`, because a `Null` column reads every *later* value as null 
 row 101's `5` would vanish — and Polars infers `String` there for the same
 reason. A header-only file lands on the same path.
 
+A supplied `schema:` is matched **by name**, not by position. `arrow-cr`'s reader
+parses positionally, so a schema in another order used to swap two same-typed
+columns silently, and one whose names the file did not have silently relabelled
+the columns (`x` holding `a`'s data). `Prism.match_csv_schema` reads the file's
+first record with the same `RecordDecoder` the reader uses, reorders the schema
+to the file's header, and raises `Prism::SchemaError` naming the missing and
+unexpected columns when the sets differ; two fields of one name raise
+`Prism::DuplicateColumn`. The file's column order is what the frame keeps, which
+is Polars' rule too. With `header: false` there are no names, so a schema is
+positional and only its width is checked. Reading the header costs one bounded
+decode — 0.8 ms on a 17 MiB file — and the reader is then told to validate the
+header it parses, so the two cannot disagree.
+
 ### What each format promises
 
 `spec/prism/io/roundtrip_spec.cr` runs one column per dtype (`spec/support/dtypes.cr`:
