@@ -176,7 +176,10 @@ module Prism
     end
 
     def coalesce(*others : Expr) : Expr
-      Coalesce.new([self] + others.to_a)
+      # `[self] + others.to_a` infers `Array(Col)` when every operand is a `Col`,
+      # which `Coalesce` cannot take; widening the first element fixes the type
+      # for the common `col("a").coalesce(col("b"))` case.
+      Coalesce.new([self.as(Expr)] + others.to_a)
     end
 
     def cast(target : Arrow::DataType) : Expr

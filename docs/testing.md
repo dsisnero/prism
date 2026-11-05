@@ -158,6 +158,7 @@ reference over seeded random frames (120 rows, six seeds, under 100 ms):
 | `top_n` | the prefix of that same reference sort |
 | `is_in` (expression and `Series`) | `Set` probe, nulls propagating unless `nulls_equal: true` |
 | `if_else` | per-row choice over materialized values |
+| declared nullability | every field a pipeline declares non-null holds no nulls, eagerly and after `collect` |
 | float keys | canonical key (`-0.0`→`0.0`, one NaN) |
 | lazy vs eager | same pipeline both ways, for verbs and for the optimizer |
 | chunked vs single batch | the same rows split into three batches |

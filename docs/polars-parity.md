@@ -49,7 +49,7 @@ that is only Polars'.
 | First non-null | `pl.coalesce(a, b)` | `a.coalesce(b)` |
 | Fill nulls | `pl.col("x").fill_null(0)` | `col("x").fill_null(0)` (or the `df.fill_null(0)` verb) |
 | Null mask | `pl.col("x").is_null()` | `col("x").is_null` |
-| Cast | `pl.col("x").cast(pl.Int64)` | `col("x").cast(Arrow::DataType.int64)` |
+| Cast | `pl.col("x").cast(pl.Int64)` | `col("x").cast(Arrow::DataType.int64)` (strict: a lossy cast raises, `strict=False` has no spelling) |
 | Negate | `~expr` / `.not()` | `.not` (Crystal's `!` cannot be overloaded) |
 
 ## Differences that bite
@@ -146,6 +146,41 @@ encoding-independent answer — `Dictionary(Int32)` `["b","a","c"]` against
 `Dictionary(Int8)` `["a","b"]` gives `[true, true, false]`. It pushes into the
 Parquet reader like any other predicate, and the kernel is a hash probe — 1.2x a
 hand-written `Set` on the same input, per [benchmarks](benchmarks.md).
+
+**A cast never invents nulls.** Polars' cast is strict by default and so is
+Prism's: `"abc"` to `Int64`, `300` to `Int8` and `NaN` to `Int64` raise
+`Prism::DtypeError` naming the column, the count and a sample value instead of
+becoming null. The rule is Polars' own — `cast_chunks` in
+`crates/polars-core/src/utils/series.rs` compares the null count before and after
+the cast (`check_nulls` is set for `CastOptions::Strict`) and calls
+`handle_array_casting_failures`, which raises even when the column was already
+nullable, reporting "conversion from `Utf8` to `Int64` failed for 1 out of 3
+values: [\"abc\"]". Prism counts the same difference (`Coerce.cast_exact`), so a
+strict cast behaves identically here. `strict=False` — Polars' null-producing
+opt-out, `CastOptions::NonStrict` — has no Prism spelling yet (§17); cast a
+cleaned column, or the values you mean. `Arrow.cast` is a *safe* cast, so
+without this check a lossy cast silently rewrote data on a nullable column and
+blew up inside `Arrow::RecordBatch` on a non-null one.
+
+**A column's `nullable` flag is inferred from its expression.** Polars does not
+carry a nullable flag at all — `Field` binds a name to a `DataType` and nulls
+live in the `ChunkedArray` validity bitmap, so there is no Polars rule to port
+here. The closest thing in the codebase is
+`predicate_non_null_column_outputs` (`polars-plan/src/plans/aexpr/properties/`),
+which reasons the same way about which expressions can materialize nulls. Prism's
+version keeps that reasoning at the column level: `cast` keeps its operand's flag,
+`fill_null` drops it (the nulls are gone), a comparison or arithmetic column is
+null only where an operand is, and an aggregate stays nullable. The point is that
+the eager verb and the plan answer it through one function (`Expr#nullable?`), so
+`df.cast(...)` and `df.lazy.cast(...).collect` compose — the same `concat`
+accepts both.
+
+**Integer division by zero raises here, and nulls in Polars.** Polars'
+`floordiv`/`mod` kernels return `null` when the divisor is zero; `arrow-cr`'s
+checked kernels raise `Arrow::ArrowError: Divide by zero error`, and Prism
+inherits that. It is the one place where the "an operand's nulls are the only
+nulls" rule depends on a kernel choice: `Binary#nullable?` is only sound while
+division raises instead of nulling (§17).
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and

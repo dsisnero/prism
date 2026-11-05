@@ -146,6 +146,10 @@ module Prism
   # - `key` is the canonical string form, used for structural comparison,
   #   deduplication, and `explain` output.
   # - `dtype` is total: it reports the output type without reading any data.
+  # - `nullable?` is total too, and answers the same question for nullability:
+  #   can a value this expression produces be null? It is the *only* place that
+  #   question is answered, so an eager verb and the plan node mirroring it
+  #   cannot disagree about a column's schema.
   # - `eval` sees one chunk and never mutates its inputs.
   #
   # Expressions are classes, not structs, because nodes contain other nodes;
@@ -156,6 +160,29 @@ module Prism
     abstract def dtype(schema : Arrow::Schema) : Arrow::DataType
 
     abstract def eval(ctx : EvalContext) : Datum
+
+    # Whether this expression's output can hold a null.
+    #
+    # The default is `true`: unknown nodes are assumed to produce nulls, which
+    # is always a safe claim for an Arrow field. Nodes narrow it when they can
+    # prove otherwise, and the rules are structural — a null can only come from
+    # an operand (or from a node that fills, predicates, or chooses):
+    #
+    # - `Col` reports its field's own flag, `Lit` is null only for `nil`;
+    # - arithmetic, comparison, `neg` and `not` propagate their operands'
+    #   nulls and introduce none (`arrow-cr` raises on overflow and division by
+    #   zero instead of nulling);
+    # - `is_null`/`is_not_null` never null, and `cast` keeps its operand's flag
+    #   because `Prism::Coerce.cast_exact` refuses to invent nulls;
+    # - `fill_null` is as nullable as its replacement, `coalesce` is non-null as
+    #   soon as one operand is, and `if_else` is as nullable as its branches.
+    #
+    # Aggregations keep the default: a group's `sum` or `first` of a nullable
+    # column is null, and the one conservative answer is cheaper than twelve
+    # precise ones (§17).
+    def nullable?(schema : Arrow::Schema) : Bool
+      true
+    end
 
     # Child expressions, in evaluation order. Used by `Prism::Cse`.
     def children : Array(Expr)
@@ -178,5 +205,37 @@ module Prism
     def same_as?(other : Expr) : Bool
       key == other.key
     end
+  end
+
+  # The field an expression produces when it becomes a column.
+  #
+  # One rule, shared by every verb that builds a schema from expressions —
+  # `select`, `with_column`, `cast` and `fill_null` eagerly, and the `Select`
+  # and `WithColumn` plan nodes that mirror them — so the same pipeline cannot
+  # report two schemas. Before this existed, `cast` and the frame-wide
+  # `fill_null` went through `select` and came out nullable while the eager verb
+  # preserved the input field, and `concat` refused to stack the two results.
+  #
+  # A bare column keeps its own field, metadata included, because a projection
+  # is the same column; `name` covers the alias/rename case. Any other
+  # expression takes its dtype and nullability from the expression, and since
+  # `nullable?` is the only nullability rule, an eager verb and its plan node
+  # agree by construction.
+  def self.output_field(expr : Expr, name : String, schema : Arrow::Schema) : Arrow::Field
+    source = case expr
+             when Alias then expr.operand
+             else            expr
+             end
+
+    if source.is_a?(Col)
+      field = schema.fields.find_field(source.name)
+      raise ColumnNotFound.new(source.name, schema.fields.map(&.name)) unless field
+      return field if field.name == name
+
+      # `Field#with_name` mutates, so copy first (C16).
+      return field.copy.with_name(name)
+    end
+
+    Arrow::Field.new(name, expr.dtype(schema), expr.nullable?(schema))
   end
 end

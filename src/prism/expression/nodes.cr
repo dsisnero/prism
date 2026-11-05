@@ -21,6 +21,13 @@ module Prism
       raise ColumnNotFound.new(@name, schema.fields.map(&.name))
     end
 
+    def nullable?(schema : Arrow::Schema) : Bool
+      field = schema.fields.find_field(@name)
+      return field.nullable? if field
+
+      raise ColumnNotFound.new(@name, schema.fields.map(&.name))
+    end
+
     def eval(ctx : EvalContext) : Datum
       ctx.column(@name)
     end
@@ -47,6 +54,10 @@ module Prism
 
     def dtype(schema : Arrow::Schema) : Arrow::DataType
       Literals.dtype_of(@value)
+    end
+
+    def nullable?(schema : Arrow::Schema) : Bool
+      @value.nil?
     end
 
     def eval(ctx : EvalContext) : Datum
@@ -136,6 +147,15 @@ module Prism
 
     def children : Array(Expr)
       [@left, @right]
+    end
+
+    # Null exactly where an operand is null: `arrow-cr`'s arithmetic and
+    # comparison kernels propagate nulls, and the checked numeric ops raise on
+    # overflow and division by zero rather than nulling. Kleene `and`/`or` add no
+    # nulls of their own either, so a known-false conjunct wins without reading
+    # `x`.
+    def nullable?(schema : Arrow::Schema) : Bool
+      @left.nullable?(schema) || @right.nullable?(schema)
     end
 
     def eval(ctx : EvalContext) : Datum
@@ -349,6 +369,10 @@ module Prism
       dtype
     end
 
+    def nullable?(schema : Arrow::Schema) : Bool
+      @operand.nullable?(schema)
+    end
+
     def eval(ctx : EvalContext) : Datum
       Arrow.neg(Datums.array(ctx.evaluate(@operand), ctx))
     end
@@ -382,6 +406,10 @@ module Prism
       Arrow::DataType.boolean
     end
 
+    def nullable?(schema : Arrow::Schema) : Bool
+      @operand.nullable?(schema)
+    end
+
     def eval(ctx : EvalContext) : Datum
       Arrow.not(Datums.boolean_array(ctx.evaluate(@operand), ctx))
     end
@@ -411,6 +439,11 @@ module Prism
       Arrow::DataType.boolean
     end
 
+    # A null predicate answers every row, so it never carries a null itself.
+    def nullable?(schema : Arrow::Schema) : Bool
+      false
+    end
+
     def eval(ctx : EvalContext) : Datum
       Arrow.is_null(Datums.array(ctx.evaluate(@operand), ctx))
     end
@@ -438,6 +471,11 @@ module Prism
     def dtype(schema : Arrow::Schema) : Arrow::DataType
       @operand.dtype(schema)
       Arrow::DataType.boolean
+    end
+
+    # A null predicate answers every row, so it never carries a null itself.
+    def nullable?(schema : Arrow::Schema) : Bool
+      false
     end
 
     def eval(ctx : EvalContext) : Datum
@@ -470,8 +508,19 @@ module Prism
       @target
     end
 
+    # A cast does not change which rows are null: `Coerce.cast_exact` raises
+    # rather than turn a value that does not fit into a null, so the operand's
+    # flag is the result's flag.
+    def nullable?(schema : Arrow::Schema) : Bool
+      @operand.nullable?(schema)
+    end
+
     def eval(ctx : EvalContext) : Datum
-      Coerce.cast(ctx.evaluate(@operand), @target)
+      Coerce.cast_exact(ctx.evaluate(@operand), @target, cast_subject(@operand))
+    end
+
+    private def cast_subject(operand : Expr) : String
+      operand.is_a?(Col) ? "column #{operand.name.inspect}" : operand.key
     end
   end
 
@@ -497,6 +546,10 @@ module Prism
 
     def dtype(schema : Arrow::Schema) : Arrow::DataType
       @operand.dtype(schema)
+    end
+
+    def nullable?(schema : Arrow::Schema) : Bool
+      @operand.nullable?(schema)
     end
 
     def eval(ctx : EvalContext) : Datum
@@ -529,7 +582,7 @@ module Prism
       replacement = @replacement.dtype(schema)
       unless Coerce.fillable?(target, replacement)
         raise DtypeError.new(
-          "cannot fill #{@operand.key} (#{target}) with #{replacement}; " \
+          "cannot fill #{describe(@operand)} (#{target}) with #{replacement}; " \
           "cast the replacement explicitly"
         )
       end
@@ -537,11 +590,21 @@ module Prism
       target
     end
 
+    # Filling removes nulls; the result is only nullable if the replacement can
+    # itself be null.
+    def nullable?(schema : Arrow::Schema) : Bool
+      @replacement.nullable?(schema)
+    end
+
     def eval(ctx : EvalContext) : Datum
       array = Datums.array(ctx.evaluate(@operand), ctx)
       replacement = Coerce.cast(ctx.evaluate(@replacement), array.data_type)
 
       Datums.zip(Arrow.is_not_null(array), array, replacement)
+    end
+
+    private def describe(operand : Expr) : String
+      operand.is_a?(Col) ? "column #{operand.name.inspect}" : operand.key
     end
   end
 
@@ -572,6 +635,12 @@ module Prism
       target = @operands.first.dtype(schema)
       @operands[1..].each { |operand| target = Coerce.unify(target, operand.dtype(schema)) }
       target
+    end
+
+    # A coalesce is nullable only if every operand is: a non-null operand on
+    # either side supplies the row.
+    def nullable?(schema : Arrow::Schema) : Bool
+      @operands.all?(&.nullable?(schema))
     end
 
     def eval(ctx : EvalContext) : Datum
@@ -634,6 +703,13 @@ module Prism
       # lossless (`int32_col` + `lit(7)` stays `Int32`) and widens both sides when
       # it is not (`int_col` against `1.5` runs in `Float64`).
       Coerce.target(@then_value, @else_value, schema)
+    end
+
+    # A null condition selects the else branch, so a non-null `else_value`
+    # already rules out nulls; a null `then_value` is reachable whenever the
+    # condition is true.
+    def nullable?(schema : Arrow::Schema) : Bool
+      @then_value.nullable?(schema) || @else_value.nullable?(schema)
     end
 
     def eval(ctx : EvalContext) : Datum
@@ -707,6 +783,12 @@ module Prism
       # read; `Membership.matches` computes the same target at run time.
       Membership.target(@operand.dtype(schema), @values.data_type)
       Arrow::DataType.boolean
+    end
+
+    # Membership propagates the operand's nulls: a null cell is not in any set.
+    # With `nulls_equal: true` null is a value, so the answer is never null.
+    def nullable?(schema : Arrow::Schema) : Bool
+      @nulls_equal ? false : @operand.nullable?(schema)
     end
 
     def eval(ctx : EvalContext) : Datum

@@ -30,6 +30,64 @@ module Prism
       end
     end
 
+    # Casts for a user-facing verb or the `cast` expression, refusing to invent
+    # nulls.
+    #
+    # `Arrow.cast` is a *safe* cast: a value the target cannot represent becomes
+    # null — `"abc"` to `Int64`, `300` to `Int8`, `NaN` to `Int64`. On a column
+    # declared non-null that null makes `RecordBatch.try_new` raise from inside
+    # Arrow, naming no verb; on a nullable one it silently rewrites the data.
+    # Neither is a cast, so this path counts the nulls the kernel added and
+    # raises `Prism::DtypeError` instead. That is what lets `Expr#nullable?`
+    # claim a cast keeps its operand's flag.
+    #
+    # `subject` names the column or expression being cast, so the error says
+    # what could not be cast as well as why.
+    def cast_exact(datum : Datum, target : Arrow::DataType, subject : String) : Datum
+      case value = datum
+      when Arrow::ArrayBase
+        return value if value.data_type == target
+
+        cast_no_new_nulls(value, target, subject)
+      else
+        array = value.array.as(Arrow::ArrayBase)
+        return value if array.data_type == target
+
+        Arrow::Scalar(Arrow::ArrayBase).new(cast_no_new_nulls(array, target, subject))
+      end
+    end
+
+    private def cast_no_new_nulls(
+      array : Arrow::ArrayBase,
+      target : Arrow::DataType,
+      subject : String,
+    ) : Arrow::ArrayBase
+      result = Arrow.cast(array, target)
+      invented = result.null_count - array.null_count
+      return result if invented <= 0
+
+      raise DtypeError.new(
+        "cannot cast #{subject} from #{array.data_type} to #{target}: " \
+        "#{invented} of #{array.len} values do not fit and would become null" \
+        "#{failed_sample(array, result)}"
+      )
+    end
+
+    # Up to three of the values the cast could not represent, so the error says
+    # what to fix and not only how many. Polars prints the same sample
+    # (`conversion from Utf8 to Int64 failed for 1 out of 3 values: ["abc"]`).
+    # Only built while raising, so the happy path pays nothing.
+    private def failed_sample(before : Arrow::ArrayBase, after : Arrow::ArrayBase) : String
+      mask = Arrow.and_kleene(Arrow.is_not_null(before), Arrow.is_null(after))
+      failed = Arrow.filter(before, mask)
+      return "" if failed.len == 0
+
+      shown = failed.slice(0, Math.min(3, failed.len))
+      sample = Values.extract(shown).map(&.inspect).join(", ")
+      sample += ", …" if failed.len > shown.len
+      " (e.g. #{sample})"
+    end
+
     # The dtype an operation between `left` and `right` runs in.
     #
     # `cache` is the per-execution `Prism::TypeCache`; when present, dtype

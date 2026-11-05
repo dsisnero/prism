@@ -41,7 +41,9 @@ module Prism
       end
 
       def schema : Arrow::Schema
-        Arrow::Schema.new(@exprs.map { |expr| field_for(expr) })
+        Arrow::Schema.new(@exprs.map do |expr|
+          Prism.output_field(expr, Plan.output_name(expr), @input.schema)
+        end)
       end
 
       def children : Array(Node)
@@ -61,32 +63,6 @@ module Prism
         line(io, indent, "Select [#{names.join(", ")}]")
         describe_children(io, indent)
       end
-
-      private def field_for(expr : Expr) : Arrow::Field
-        case expr
-        when Col
-          input_field(expr.name)
-        when Alias
-          # Renaming a column must not change its nullability, otherwise a
-          # rename would report a different schema from the eager verb.
-          inner = expr.operand
-          if inner.is_a?(Col)
-            # `Field#with_name` mutates, so copy first (C16).
-            input_field(inner.name).copy.with_name(expr.name)
-          else
-            Arrow::Field.new(expr.name, expr.dtype(@input.schema), true)
-          end
-        else
-          Arrow::Field.new(Plan.output_name(expr), expr.dtype(@input.schema), true)
-        end
-      end
-
-      private def input_field(name : String) : Arrow::Field
-        field = @input.schema.fields.find_field(name)
-        return field if field
-
-        raise ColumnNotFound.new(name, @input.schema.fields.map(&.name))
-      end
     end
 
     # Adds or replaces one column.
@@ -99,7 +75,7 @@ module Prism
       end
 
       def schema : Arrow::Schema
-        field = Arrow::Field.new(@name, @expr.dtype(@input.schema), true)
+        field = Prism.output_field(@expr, @name, @input.schema)
         fields = @input.schema.fields.to_a
         index = fields.index { |existing| existing.name == @name }
 

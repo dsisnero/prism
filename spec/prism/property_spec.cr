@@ -552,6 +552,43 @@ describe "property checks" do
     end
   end
 
+  it "keeps a declared non-null column free of nulls, eagerly and lazily" do
+    REPEATS.times do |seed|
+      frame = random_frame(Random.new(seed))
+
+      # Every pipeline that builds a schema from expressions, so the rule that
+      # decides `nullable?` is checked against the values it claims about. A
+      # cast that would have to invent nulls is left out on purpose: it raises
+      # instead (`Coerce.cast_exact`).
+      pipelines = {
+        "fill_null" => {frame.fill_null(0), frame.lazy.fill_null(0)},
+        "cast"      => {frame.cast({"qty" => Arrow::DataType.int32}), frame.lazy.cast({"qty" => Arrow::DataType.int32})},
+        "with"      => {frame.with_column("sum", col("qty") + lit(1_i64)), frame.lazy.with_column("sum", col("qty") + lit(1_i64))},
+        "select"    => {frame.select(col("id"), col("qty").alias("q")), frame.lazy.select(col("id"), col("qty").alias("q"))},
+        "coalesce"  => {
+          frame.with_column("c", col("amount").coalesce(lit(0.0))),
+          frame.lazy.with_column("c", col("amount").coalesce(lit(0.0))),
+        },
+        "if_else" => {
+          frame.with_column("c", Prism.if_else(col("qty") > 4, col("qty"), col("qty"))),
+          frame.lazy.with_column("c", Prism.if_else(col("qty") > 4, col("qty"), col("qty"))),
+        },
+      }
+
+      pipelines.each do |label, (eager, lazy)|
+        collected = lazy.collect
+        collected.schema.should eq(eager.schema), "#{label}: the plan and the verb must agree"
+
+        eager.schema.fields.each do |field|
+          next if field.nullable?
+
+          eager[field.name].null_count.should eq(0), "#{label}: #{field.name} is declared non-null"
+          collected[field.name].null_count.should eq(0), "#{label}: #{field.name} stays non-null"
+        end
+      end
+    end
+  end
+
   it "keys floats by == rather than by total order" do
     nan = Float64::NAN
     quiet_nan = 0x7FF8_0000_0000_0001_u64.unsafe_as(Float64)

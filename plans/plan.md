@@ -20,10 +20,10 @@ implicit.
 
 ## Where we are
 
-*Updated 2026-11-03.*
+*Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(554 examples, ~30 s warm). The table below is the only place that tracks status;
+(581 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -40,9 +40,10 @@ single nested keys — which `arrow-cr` now owns, with Prism's workaround
 deleted — the Phase 24 row-encoded multi-key sort, the Phase 25 conditionals and
 the Phase 26 `is_in` / `read_csv(infer_rows: 0)` fixes, which were both reported
 downstream (the consumer's `shard_issues/prism.1.md` and `prism.2.md`), the Phase
-27 property oracles plus dictionary membership, the Phase 28 `concat` diagnostics
-the Phase 29 unique-name checks and the Phase 30 `fill_null` family rule. Phases
-0–30 are closed apart from the cosmetic local folder rename.
+27 property oracles plus dictionary membership, the Phase 28 `concat` diagnostics,
+the Phase 29 unique-name checks, the Phase 30 `fill_null` family rule and the
+Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
+nulls). Phases 0–31 are closed apart from the cosmetic local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
 the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
@@ -52,13 +53,18 @@ gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Nothing is queued.** The `is_in` hash path landed in `arrow-cr` `78b0cd4`
-   and was re-measured here (53.5 ms end-to-end against 682 ms, kernel at 1.2x a
-   hand-written `Set`), so the last measured item closed without Prism changing.
-   A new item needs a measurement or a failing case.
-2. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is the
-   Phase 26 pair (`is_in`, `read_csv(infer_rows: 0)`), both reported
-   downstream. The tag goes on when a consumer needs it, not on a schedule.
+1. **Nothing is queued.** Phase 31 closed the last failing case (a cast that
+   crashed inside Arrow, and an eager/plan schema disagreement that made `concat`
+   refuse two results of one pipeline). A new item needs a measurement or a
+   failing case, and the method that keeps finding them is a probe across the
+   surface the oracles do not reach — Phase 27 probed dtypes, Phases 28–30 probed
+   verbs, Phase 31 probed schemas: **the reader/writer round-trip is the one
+   surface with no oracle yet** (Parquet metadata, CSV inference, IPC dtypes), and
+   `strict: false` on `cast` is the recorded escape hatch a caller may ask for
+   (§17).
+2. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
+   26–31, one of which (`is_in`) came from a downstream report. The tag goes on
+   when a consumer needs it, not on a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
 the sort was under 4% of a 1e5-key group-by; after Phase 15 the aggregates are
@@ -67,10 +73,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **554 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**555**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**558**, ~1 min); with both
-set the suite is **559**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **581 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**582**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**585**, ~1 min); with both
+set the suite is **586**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -79,7 +85,9 @@ README). Per phase, on `main`: `326a0b4` ergonomics, `a7f1cd7` rows,
 `cd473ea` group_by pruning, `b308373` nested float keys, `36aa01b` list-view keys
 plus the `arrow-cr` report, `30f28a9` the bounded sort, `79a035b` `top_n`,
 `297ff04` multi-key passes, `820d447` `SortEngine`, `2125335` single nested keys,
-`8a2cd37` the `arrow-cr` fix, `6e573ae` row-encoded sort, `ab6429c` conditionals.
+`8a2cd37` the `arrow-cr` fix, `6e573ae` row-encoded sort, `ab6429c` conditionals,
+`01f63e4` the `fill_null` rule and `d3ca061` the Polars/arrow-rs verification of
+phases 27–30; Phase 31 follows them on `main`.
 Everything is on `main`, `v0.2.0` is the current release, and nothing is pending,
 so a new feature starts from a clean tree.
 
@@ -125,6 +133,7 @@ so a new feature starts from a clean tree.
 | 28 | `concat` diagnostics, and zero-row frames in a schema check | **done** |
 | 29 | Unique output names in `rename`, `select` and `group_by` | **done** |
 | 30 | `fill_null` fills only what the value fits | **done** |
+| 31 | One nullability rule: `Expr#nullable?`, and casts that never invent nulls | **done** |
 
 ---
 
@@ -2150,6 +2159,118 @@ examples.
   `Coerce.cast` inside the chunk loop. The named form had to validate up front,
   eagerly and in the plan, which is also where its error belongs.
 
+### Phase 31 — one nullability rule, and casts that never invent nulls (done)
+
+Phase 30's note said to probe what the previous phases had not reached, so this
+one probed **schemas** rather than dtypes or verbs: run every verb twice, once
+eagerly and once through the plan, and compare the `nullable` flags. Two failures
+came out, both from the same missing rule.
+
+```text
+df.cast({"nums" => Int64})                    # non-null Utf8 ["1", "abc", "3"]
+  -> Arrow::ArrowError: Column 'nums' is declared as non-nullable but contains null values
+
+df.lazy.cast({"v" => Int32}).collect           eager g=Utf8:nn v=Int32:nn
+df.cast({"v" => Int32})                        plan  g=Utf8:nn v=Int32:null
+Prism.concat([eager, lazy])
+  -> Prism::SchemaError: cannot concatenate frame 1: column v: expected non-null, got nullable
+```
+
+The first is `RecordBatch.try_new` rejecting the frame Prism handed it: `Arrow.cast`
+is a *safe* cast, so `"abc"`, `300` into `Int8` and `NaN` into `Int64` became null,
+while `DataFrame#cast` kept the input field's non-null flag. The second is the same
+bug one layer up — `cast` and the frame-wide `fill_null` were spelled as a `Select`
+of computed expressions, and `Select` declared every computed column nullable while
+the eager verbs preserved the input field. `concat` (Phase 28) then refused the two
+halves of one pipeline.
+
+- [x] `Expr#nullable?(schema)` — total, like `dtype`, and the only place the
+      question is answered: `Col` reports its field, `Lit` is null only for `nil`,
+      arithmetic/comparison/`neg`/`not` propagate an operand, `is_null`/
+      `is_not_null` are `false`, `cast` keeps its operand, `fill_null` takes the
+      replacement, `coalesce` is `false` as soon as one operand is, `if_else`
+      follows its branches, `is_in` follows the membership null rule, and
+      everything else (aggregations included) stays `true`
+- [x] `Prism.output_field(expr, name, schema)` — the one field rule, used by eager
+      `select`, `with_column`, `cast` and `fill_null` and by the plan's `Select`
+      and `WithColumn`, so a verb and its plan node cannot drift; a bare `Col`
+      (and `Alias` of one) still keeps its own field, metadata included
+- [x] `Coerce.cast_exact` — every spelling of "cast" (`DataFrame#cast`,
+      `Series#cast`, the `Cast` node, and therefore the plan) counts the nulls the
+      kernel added and raises `Prism::DtypeError` naming the column and the count
+      (`cannot cast column "nums" from Utf8 to Int64: 1 of 3 values do not fit and
+      would become null`), instead of nulling data or crashing inside Arrow
+- [x] `fill_null` now *drops* the flag on the columns it fills (the nulls are
+      gone), eagerly and in the plan; `with_column("copy", col("nn"))` is now
+      non-null like `select(col("nn").alias("copy"))` already was
+- [x] `col("a").coalesce(col("b"))` compiles: `[self] + others` inferred
+      `Array(Col)` and only mixed operands type-checked, found by pinning the
+      `coalesce` rule
+
+**Acceptance:** `spec/prism/nullability_spec.cr` pins the rule node by node, the
+eager/plan agreement per verb, the invariant that a declared non-null column holds
+no nulls, the four ways a lossy cast raises (verb, plan, expression, `Series`, plus
+the narrowing case), the legal neighbours (a column that holds nulls casts fine when
+every value fits; casting to the same dtype is a no-op), and both `concat`
+compositions that used to fail. `property_spec.cr` adds the invariant as an oracle
+over six seeds — every pipeline's declared non-null fields are checked against the
+values, eagerly and after `collect`, and the two schemas are compared. Suite: 580
+examples (586 with the compile and example specs).
+
+**Verified against upstream (DeepWiki + vendor sources):**
+
+- Polars' `cast` is strict by default, and its mechanism is the one used here:
+  `cast_chunks` (`crates/polars-core/src/utils/series.rs`) casts each chunk with
+  `check_nulls` set for `CastOptions::Strict`, compares the null count before and
+  after, and calls `handle_array_casting_failures` when it grew — raising even for
+  a column that was already nullable, with a message of the form
+  `conversion from Utf8 to Int64 failed for 1 out of 3 values: ["abc"]`. So
+  counting added nulls is Polars' rule, not an invention; Prism adds the sample
+  values for the same reason. `CastOptions::NonStrict` (`strict=False`) is the
+  nulling opt-out, and `CastOptions::Overflowing` (`wrap_numerical`) wraps
+  overflow; neither is exposed here (§17).
+- Polars does **not** track per-column nullability: `Field` is a name plus a
+  `DataType`, and nulls live in the `ChunkedArray` validity bitmap, so
+  `fill_null` cannot "drop a flag" there. `Expr#nullable?` is therefore a Prism
+  rule, and the closest upstream analogue is
+  `predicate_non_null_column_outputs` in
+  `crates/polars-plan/src/plans/aexpr/properties/general.rs`, which reasons about
+  which operations preserve or materialize nulls. The constraint it serves is
+  internal consistency (verb vs plan) plus Arrow's `RecordBatch` check (a non-null
+  field must not hold nulls).
+- Null propagation matches Polars node for node: arithmetic and comparisons
+  propagate an operand's null and add none; `is_null`/`is_not_null` answer every
+  row; Kleene `and`/`or` turn `null & false` into `false` and `null | true` into
+  `true`; a null `when` condition skips its branch and falls through to
+  `otherwise`, which is what `if_else`'s "null takes the else branch" encodes.
+  **One divergence found by the check:** Polars' integer `floordiv`/`mod` return
+  null on a zero divisor, while `arrow-cr`'s checked kernels raise
+  `Arrow::ArrowError: Divide by zero error`. Prism inherits the raise, and
+  `Binary#nullable?` is sound only for as long as that is true — recorded in §17
+  so a kernel change upstream is a schema change here.
+
+**Notes carried forward:**
+
+- **A schema flag is a claim about data, and `RecordBatch` is the auditor.**
+  Nullability was declared in five places (eager `select`, `with_column`, `cast`,
+  `fill_replacements` and the two plan nodes) with three different rules, so the
+  same pipeline reported different schemas depending on how it ran. The fix is the
+  Phase 29 shape — one helper (`Prism.output_field`) plus one predicate
+  (`Expr#nullable?`), called from every constructor of a schema — and the
+  measurement that found it was comparing the *schemas* of the eager and lazy
+  spellings, not their rows. Rows were identical in every failure above.
+- **A safe cast is not a cast.** `Arrow.cast` answers "what does this become", and
+  its answer for a value that does not fit is `null`; a verb that says "cast this
+  column" means "these values, in that dtype". Counting the nulls the kernel added
+  is what separates the two, and it is cheap (`null_count` is tracked on the
+  array). The same check makes the inferred flag safe, so the guard and the rule
+  are one decision, not two.
+- **Conservative is not the same as consistent.** `group_by` still reports its key
+  and aggregate fields as nullable even when the operand is non-null — a nullable
+  field may hold no nulls, so this is safe and it keeps the aggregate layer's one
+  schema-construction site (§17). What was *not* safe was two paths answering the
+  same question differently.
+
 ## 13. Testing strategy
 
 - Spec layout mirrors `src/prism/`. See
@@ -2835,6 +2956,9 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | Dictionary-encoded float keys were compared by value but not canonicalized | the values are what gets encoded, so canonicalizing them in place keeps the dictionary dtype and makes keying agree with plain float columns | 14 (done) |
 | `concat` nullability union | nullability is checked per frame today (a zero-row frame is exempt); unioning the flags would be lossless since `concat_batches` takes the caller's schema, but no caller has needed the looser rule | when a caller hits it |
 | Floats nested inside list/struct/map key columns are still `totalOrder` | reaching a float child means rebuilding the parent layout; nested key columns are rare and the limit is documented in `Prism::RowKeys` | 17 (done) |
+| `cast(strict: false)` (null on a value that does not fit) | Polars has the opt-out (`CastOptions::NonStrict`, and `Overflowing` for wrapping); Prism's strict cast is the default and the only spelling, and no caller has needed the escape hatch yet. It is a keyword on three surfaces (`DataFrame#cast`, `Series#cast`, `Expr#cast`), so it waits for a caller | when a caller hits it |
+| Integer division by zero raises instead of yielding null | Polars' `floordiv`/`mod` return null; `arrow-cr`'s checked kernels raise `Arrow::ArrowError: Divide by zero error`, and `Binary#nullable?` relies on that to claim a non-null operand pair gives a non-null result. Aligning would mean an upstream kernel change (or a Prism-level null-on-zero), not a local patch | if a caller wants Polars' null, or if `arrow-cr` changes it |
+| `group_by` key and aggregate fields stay nullable even when the operand cannot be null | a nullable field may hold no nulls, so the conservative claim is safe, and the plan runs the eager verb on a zero-row frame so the two cannot disagree; tightening it means teaching the aggregate layer the same rule | when a caller needs the non-null flag downstream (a Parquet schema, a `concat` with a non-null source) |
 
 RedAmber's headline ergonomic is **bare column names inside blocks**
 (`slice { carat > 1 }`), which works because Ruby `instance_eval`s the block

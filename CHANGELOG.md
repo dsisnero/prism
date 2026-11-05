@@ -6,6 +6,34 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- `cast` never invents nulls: a value the target dtype cannot represent (`"abc"`
+  to `Int64`, `300` to `Int8`, `NaN` to `Int64`) raises `Prism::DtypeError`
+  naming the column, the count and a sample value instead of becoming null — on
+  every surface (`DataFrame#cast`, `Series#cast`, `col("x").cast(...)` and the
+  plan). Before, a lossy cast on a non-null column crashed inside Arrow
+  (`Column 'x' is declared as non-nullable but contains null values`) and on a
+  nullable one rewrote the data. This is Polars' strict-cast rule, which compares
+  the null count before and after the cast. **Behaviour change**: a lossy cast
+  used to return nulls.
+- A column's `nullable` flag is inferred from its expression by one rule
+  (`Expr#nullable?`, through `Prism.output_field`), shared by the eager verbs and
+  the plan nodes: `cast` keeps its operand's flag, `fill_null` drops it, a
+  comparison or arithmetic column is null only where an operand is, `coalesce` is
+  non-null as soon as one operand is, `if_else` follows its branches and `is_in`
+  follows its null rule. `df.cast(...)` and `df.lazy.cast(...).collect` now report
+  the same schema, so `Prism.concat` accepts both; before, the lazy pipeline came
+  back nullable and the concat raised `column x: expected non-null, got nullable`.
+  **Behaviour change**: `with_column("copy", col("nn"))` and a filled column are
+  now non-nullable, which is what `select(col("nn").alias("copy"))` already said.
+
+### Fixed
+
+- `col("a").coalesce(col("b"))` compiles: the operand array inferred `Array(Col)`
+  and only mixed-type operands type-checked, so two plain columns were a compile
+  error.
+
 ## [0.2.0] - 2026-11-03
 
 Rows and typed rows, intervals, conditionals, set membership, a rewritten sort

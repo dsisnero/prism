@@ -6,7 +6,7 @@ module Prism
     def with_column(name : String | Symbol, expr : Expr) : DataFrame
       column = name.to_s
       types = TypeCache.new(@schema)
-      field = Arrow::Field.new(column, types.dtype(expr), true)
+      field = Prism.output_field(expr, column, @schema)
       index = @schema.fields.to_a.index { |existing| existing.name == column }
 
       fields = @schema.fields.to_a
@@ -127,6 +127,11 @@ module Prism
     end
 
     # Casts the named columns, leaving the rest untouched.
+    #
+    # The output field keeps the input field's nullability, which is only honest
+    # because the cast itself refuses to invent nulls: a value the target dtype
+    # cannot represent raises `Prism::DtypeError` naming the column rather than
+    # becoming null (`Coerce.cast_exact`).
     def cast(targets : Hash(String | Symbol, Arrow::DataType)) : DataFrame
       targets.each_key { |key| require_column!(key.to_s) }
 
@@ -135,14 +140,17 @@ module Prism
         next field unless target
         next field if field.data_type == target
 
-        Arrow::Field.new(field.name, target, field.nullable?)
+        Prism.output_field(Cast.new(Prism.col(field.name), target), field.name, @schema)
       end
       schema = Arrow::Schema.new(fields)
 
       batches = @batches.map do |batch|
         columns = batch.columns.map_with_index do |column, index|
-          target = targets[batch.schema.field(index).name]?
-          target && target != column.data_type ? Arrow.cast(column, target) : column
+          name = batch.schema.field(index).name
+          target = targets[name]?
+          next column unless target && target != column.data_type
+
+          Coerce.cast_exact(column, target, "column #{name.inspect}").as(Arrow::ArrayBase)
         end
 
         Arrow::RecordBatch.try_new(schema, columns)
@@ -159,7 +167,7 @@ module Prism
       targets = @schema.fields.each_with_object({} of String => Expr) do |field, memo|
         next unless Coerce.fillable?(field.data_type, literal_dtype)
 
-        memo[field.name] = replacement
+        memo[field.name] = FillNull.new(Prism.col(field.name), replacement)
       end
 
       fill_replacements(targets)
@@ -168,8 +176,9 @@ module Prism
     # Replaces nulls per column.
     def fill_null(values : Hash(String | Symbol, LiteralInput)) : DataFrame
       targets = values.each_with_object({} of String => Expr) do |(name, value), memo|
-        require_column!(name.to_s)
-        memo[name.to_s] = Prism.lit(value)
+        column = name.to_s
+        require_column!(column)
+        memo[column] = FillNull.new(Prism.col(column), Prism.lit(value))
       end
 
       fill_replacements(targets)
@@ -204,20 +213,17 @@ module Prism
       return self if replacements.empty?
 
       types = TypeCache.new(@schema)
-      # Filling never changes a dtype, so the schema is reused and `#dtype` would
-      # never run on its own; a replacement has to be checked here or an
-      # unfillable one reaches `Coerce.cast` and is coerced into nonsense (a
-      # scalar into a list, a float into an integer column).
-      replacements.each do |name, expr|
-        target = @schema.field_with_name(name).data_type
-        replacement = types.dtype(expr)
-        next if Coerce.fillable?(target, replacement)
-
-        raise DtypeError.new(
-          "cannot fill column #{name.inspect} (#{target}) with #{replacement}; " \
-          "cast the replacement explicitly"
-        )
+      # Filling never changes a dtype, and `Prism.output_field` is what says so:
+      # a `FillNull` field keeps the column's dtype and drops its nullability.
+      # Building the fields first also runs `FillNull#dtype`, which is what
+      # rejects an unfillable replacement (a scalar into a list, a float into an
+      # integer column) before any batch is built — otherwise the coercion
+      # happens in `Coerce.cast` at eval time and silently succeeds.
+      fields = @schema.fields.to_a.map do |field|
+        expr = replacements[field.name]?
+        expr ? Prism.output_field(expr, field.name, @schema) : field
       end
+      schema = Arrow::Schema.new(fields)
 
       duplicates = Cse.duplicate_keys(replacements.values)
       batches = @batches.map do |batch|
@@ -226,14 +232,13 @@ module Prism
           expr = replacements[batch.schema.field(index).name]?
           next column unless expr
 
-          replacement = Coerce.cast(ctx.evaluate(expr), column.data_type)
-          Datums.zip(Arrow.is_not_null(column), column, replacement)
+          Datums.array(ctx.evaluate(expr), ctx)
         end
 
-        Arrow::RecordBatch.try_new(@schema, columns)
+        Arrow::RecordBatch.try_new(schema, columns)
       end
 
-      DataFrame.new(@schema, batches)
+      DataFrame.new(schema, batches)
     end
 
     private def require_column!(name : String) : Nil

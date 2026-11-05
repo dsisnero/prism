@@ -172,10 +172,16 @@ module Prism
       end
     end
 
+    # Casts the chunk to another dtype, refusing to invent nulls: a value the
+    # target cannot represent raises `Prism::DtypeError` instead of becoming
+    # null (`Coerce.cast_exact`, the same path `DataFrame#cast` and the `cast`
+    # expression use).
     def cast(target : Arrow::DataType) : Series
       return self if target == @dtype
 
-      chunks = @chunks.map { |chunk| Arrow.cast(chunk, target).as(Arrow::ArrayBase) }
+      chunks = @chunks.map do |chunk|
+        Coerce.cast_exact(chunk, target, "series #{@name.inspect}").as(Arrow::ArrayBase)
+      end
 
       Series.new(@name, chunks, target)
     end

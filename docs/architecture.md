@@ -158,6 +158,7 @@ abstract struct Expr
   abstract def key : String                                 # canonical form
   abstract def columns : Array(String)                       # referenced names
   abstract def dtype(schema : Arrow::Schema) : Arrow::DataType
+  abstract def nullable?(schema : Arrow::Schema) : Bool      # can a value be null?
   abstract def eval(ctx : EvalContext) : Arrow::ArrayBase
 end
 ```
@@ -258,6 +259,55 @@ Repeated subexpressions are computed once per chunk. `Prism::Cse` counts canonic
 keys across a verb's expressions, and `EvalContext#evaluate` memoizes only the
 keys that occur more than once — the same saving as Polars' CSEE without
 rewriting the plan.
+
+### Nullability is a property of the expression
+
+`Expr#nullable?(schema)` is total, like `dtype`: it answers "can a value this
+expression produces be null?" without reading data. It is the **only** rule that
+decides a column's `nullable` flag, and `Prism.output_field(expr, name, schema)`
+is the only place a field is built from it. Every verb that turns expressions
+into columns calls that helper — eager `select`, `with_column`, `cast`,
+`fill_null`, and the plan's `Select` and `WithColumn` nodes — so an eager
+pipeline and the lazy one that mirrors it cannot report two schemas.
+
+```text
+Col                     -> the input field's flag
+Lit                     -> nil only
+arith / compare / neg   -> null where an operand is null, never of its own
+is_null / is_not_null   -> false (a predicate answers every row)
+cast                    -> the operand's flag (see below)
+fill_null               -> the replacement's flag
+coalesce                -> false as soon as one operand cannot be null
+if_else                 -> nullable if either branch is
+is_in                   -> the operand's flag, unless nulls_equal: true
+everything else         -> true (conservative; aggregations live here)
+```
+
+The default is deliberate: an unknown node claims nullable, and a nullable field
+may hold no nulls, so the worst case is a schema that is looser than the data. The
+opposite mistake is fatal — a field declared non-null that holds a null makes
+`Arrow::RecordBatch.try_new` raise from inside Arrow, naming no verb.
+
+That is why **a cast never invents nulls**. `Arrow.cast` is a safe cast: `"abc"`
+to `Int64`, `300` to `Int8` and `NaN` to `Int64` all become null.
+`Prism::Coerce.cast_exact` counts the nulls the kernel added and raises
+`Prism::DtypeError` naming the column, the count and a sample value instead, on
+every surface that spells "cast" (`DataFrame#cast`, `Series#cast`, the `cast`
+expression, and therefore the plan). Because the values that fit keep their
+null-ness exactly, `cast` can honestly claim its operand's flag, and a lossy cast
+fails loudly instead of publishing a lie. This is Polars' rule too: its
+`cast_chunks` compares the null count before and after under
+`CastOptions::Strict`.
+
+The arithmetic half of the table leans on the kernel: `arrow-cr`'s integer
+division and remainder **raise** on a zero divisor, so a non-null operand pair
+cannot produce a null. Polars returns null there instead, which is recorded as a
+divergence in [polars-parity](polars-parity.md); if `arrow-cr` ever follows, this
+table has to learn about `Div` and `Rem`.
+
+Coercion inside a comparison or arithmetic is the exception: `Coerce.cast` stays
+permissive because it casts a literal or a widening column that the caller did
+not ask to cast.
 
 ## Filtering
 
