@@ -77,7 +77,7 @@ since Phase 18 the sort is bounded too — `sort_by_slice` hands
 `Arrow.lexsort_to_indices` a limit of `offset + count`, and the sort selects that
 prefix with `partial_sort` instead of ordering every row (`arrow-cr` `5b4b958`,
 filed as
-[`shard_issues/arrow-cr.1.md`](../shard_issues/arrow-cr.1.md)).
+[`shard_issues/arrow-cr.done.1.md`](../shard_issues/arrow-cr.done.1.md)).
 
 Paired before/after on this machine, same 1e6-row frame, back to back
 (`src/prism/verbs/sort.cr` stashed for the "before" run):
@@ -190,7 +190,7 @@ on the same 1e6 rows / 12k members:
 
 So the kernel is 1.2x a hand-written `Set` probe and the expression is the right
 path for a large scan — no materialization, no 24k-term `|` chain, real
-pushdown. [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md) has the
+pushdown. [`shard_issues/arrow-cr.done.3.md`](../shard_issues/arrow-cr.done.3.md) has the
 report, what landed and the acceptance criteria it was measured against.
 
 **Row keys made `distinct` and `n_unique` ~3x faster.** `Prism::RowKeys` encodes

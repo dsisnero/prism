@@ -50,7 +50,7 @@ describe "Parquet IO" do
     read["region"].to_a.should eq(["east", nil, "west"])
   end
 
-  # Regression guard for shard_issues/parquet-cr.2.md (fixed upstream in
+  # Regression guard for shard_issues/parquet-cr.done.2.md (fixed upstream in
   # 5883ff1): a row filter used to shift columns containing nulls by one row per
   # null, so price returned [30.0, 40.0, 10.0] for rows 2,3,4.
   # The consumer's case: a set-membership predicate over a large file must reach

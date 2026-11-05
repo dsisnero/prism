@@ -5,7 +5,7 @@ module Prism
   # One place, so the expression and the column API cannot drift on the coercion
   # rule, the null rule, or which kernel runs: every path here goes through
   # `arrow-cr`'s `ArrayBase#is_in`, which has been a hash probe since `78b0cd4`
-  # (`shard_issues/arrow-cr.3.md`). There is deliberately no Prism-side loop —
+  # (`shard_issues/arrow-cr.done.3.md`). There is deliberately no Prism-side loop —
   # a second kernel for the same operation is exactly what §1 forbids.
   module Membership
     extend self

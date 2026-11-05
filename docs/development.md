@@ -152,7 +152,12 @@ If a kernel is missing or returns a wrong result:
    description with a runnable reproducer, expected vs actual, and the analysis.
    Numbers are per shard and continue across repos (for example
    `parquet-cr.1` lives in `amazon_data`, so this repo starts at
-   `parquet-cr.2`).
+   `parquet-cr.2`). When the fix lands and Prism is updated to it, record the
+   verification at the top of the report and rename the file to
+   `shard_issues/<shard>.done.<n>.md`: a fixed report is **kept**, not deleted,
+   because its reproducer is what re-proves the fix after the next
+   `shards update`. The status line names the fixing commit and the pin it was
+   last confirmed against.
 5. Record the workaround and a link to that file in `plans/plan.md`.
 
 Never edit `lib/*/src/` and commit — the symlink means the change lands in the

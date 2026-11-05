@@ -2,6 +2,8 @@
 
 ## Status: fixed upstream, consumer simplified (2026-11-03)
 
+Confirms against the current pin: the fix is an ancestor of arrow-cr `064ece4` (2026-11-05).
+
 Fixed in `arrow-cr` commit `3023eac` ("port: gate the single-column lexsort fast
 path with `can_sort_to_indices`"), merged to `main`. `Arrow.can_sort_to_indices?`
 now exists (`sort.cr`, with the `can_rank?` recursion in `rank.cr`),

@@ -2,6 +2,8 @@
 
 ## Status: fixed upstream and workaround removed (2026-11-01)
 
+Confirms against the current pin: the fix is an ancestor of parquet-cr `25a889e` (2026-11-05).
+
 Fixed in `parquet-cr` commit `5883ff1` ("port: Align row-filter skips with
 definition levels"), merged to `main`. The fix aligns the
 row-filter skip with definition levels in `src/parquet/column/reader.cr`, and

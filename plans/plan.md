@@ -68,7 +68,10 @@ gitignored, so this line is the record of what the suite below was run against.
    - **`shard_issues/arrow-cr.4.md`**: the CSV reader is 1.5–2.2x slower than
      Crystal's stdlib lexer plus the same builders (§Phase 32), and `batch_size`
      is not the explanation. Report it upstream with the lexer-only comparison,
-     re-measured on an idle machine; a Prism-side reader stays declined.
+     re-measured on an idle machine; a Prism-side reader stays declined. It is
+     the only report still open: `arrow-cr.done.1–3` and `parquet-cr.done.2` are
+     fixed upstream and renamed with the `.done` marker, and their reproducers
+     are kept because they are what re-proves each fix after a `shards update`.
    - **`strict: false` on `cast`** (§17): the recorded escape hatch for a caller
      that wants Polars' null-on-failure instead of the raise.
    - **`group_by` nullability** (§17): its key and aggregate fields stay nullable;
@@ -432,7 +435,7 @@ definition levels in `src/parquet/column/reader.cr`. Prism re-enabled
 `with_row_filter`, so Parquet predicates prune per row group again, and
 `spec/prism/io/parquet_spec.cr` keeps the reproduction as a permanent guard.
 The report lives at
-[`shard_issues/parquet-cr.2.md`](../shard_issues/parquet-cr.2.md).
+[`shard_issues/parquet-cr.done.2.md`](../shard_issues/parquet-cr.done.2.md).
 
 Original finding, kept because it explains the guard: a row filter used to shift
 columns containing nulls by one row per null while leaving null-free columns
@@ -457,7 +460,7 @@ a regression guard, and re-enabling pruning is one commented block in
 `src/prism/io/parquet.cr`.
 
 **Upstream action:** the report is written as
-[`shard_issues/parquet-cr.2.md`](../shard_issues/parquet-cr.2.md) (numbered per
+[`shard_issues/parquet-cr.done.2.md`](../shard_issues/parquet-cr.done.2.md) (numbered per
 shard, continuing from `parquet-cr.1` in `amazon_data`), with a standalone
 reproducer verified against the pinned checkout. Root cause narrowed: selections
 that span a null in a column shift that column's values by one row per null,
@@ -1947,7 +1950,7 @@ coercion and the empty-series dtype check. Suite: 519 examples.
   string set, of which 673 ms was `ArrayBase#is_in` sorting the set and binary
   searching per row (`O(n log m)` comparator calls), against 29.6 ms for a plain
   `Set(String)` probe. Filed as
-  [`shard_issues/arrow-cr.3.md`](../shard_issues/arrow-cr.3.md) rather than
+  [`shard_issues/arrow-cr.done.3.md`](../shard_issues/arrow-cr.done.3.md) rather than
   duplicating a kernel in Prism, and fixed upstream in `78b0cd4` (hash probe for
   the leaf dtypes, comparator fallback for nested/dictionary/run-end/interval/
   null, float keys by bit pattern, zero-copy byte slices). Re-measured from Prism
@@ -2729,7 +2732,7 @@ struct, map, decimal, interval or union arm.
 That guard is a port bug, not an Arrow rule. Upstream `arrow-ord` 60.0.0 gates
 the fast path — `if columns.len() == 1 && can_sort_to_indices(dtype)` — and
 otherwise falls through to its `LexicographicalComparator`, so one struct key
-sorts there. Filed as [`shard_issues/arrow-cr.2.md`](../shard_issues/arrow-cr.2.md)
+sorts there. Filed as [`shard_issues/arrow-cr.done.2.md`](../shard_issues/arrow-cr.done.2.md)
 with the reproducer and the wider dispatch gap (upstream's `can_sort_to_indices`
 also admits decimal and interval primitives, which the old arms did not).
 
@@ -2883,7 +2886,7 @@ List views (`list_view`, `large_list_view`) go through the same path: their
 construction does preserve offsets, sizes and dtype, so they are rebuilt around
 a canonicalized child rather than left on `totalOrder` floats. The one remaining
 top-k gap is upstream and written up as
-[`shard_issues/arrow-cr.1.md`](../shard_issues/arrow-cr.1.md).
+[`shard_issues/arrow-cr.done.1.md`](../shard_issues/arrow-cr.done.1.md).
 
 ### Eager grouping prunes what it does not read (Phase 16)
 
@@ -3107,7 +3110,7 @@ forgotten; if an item becomes urgent, it moves up rather than disappearing.
 | --- | --- | --- |
 | Projection pruning through joins | needs output-name → side mapping for suffixed columns | 9d (done) |
 | Slice pinned to `Sort`/`GroupBy`/`Distinct` | scan pushdown covered the common case first | 9d (done) |
-| Physical top-k for a pinned slice | gather half in 9d; sort half needed an `arrow-cr` fix (`5b4b958`, filed as `shard_issues/arrow-cr.1.md`), now wired up | done (Phase 18) |
+| Physical top-k for a pinned slice | gather half in 9d; sort half needed an `arrow-cr` fix (`5b4b958`, filed as `shard_issues/arrow-cr.done.1.md`), now wired up | done (Phase 18) |
 | `arrow-row` key encoding for joins/distinct | blocked on the `arrow-cr` port | 9d (landed; see §14) |
 | Decimal arithmetic | kernels grow precision, so a per-op result dtype is needed | post-v0.1 (done) |
 | Out-of-range literal folding | raising is safe, folding is Polars parity | 9c (done) |

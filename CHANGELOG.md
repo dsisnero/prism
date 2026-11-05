@@ -204,7 +204,7 @@ documented): the only deferred item left is the owner-gated repository rename.
   ...`. `arrow-cr` now sorts one column the way it sorts several (upstream's
   `can_sort_to_indices` guard on the fast path), so those keys reach the
   comparator chain; `top_n` on such a key selects a bounded prefix instead of
-  sorting every row. Reported in `shard_issues/arrow-cr.2.md`.
+  sorting every row. Reported in `shard_issues/arrow-cr.done.2.md`.
 - `fill_null` only fills a column with a value from its own family, through the
   new `Coerce.fillable?`: a frame-wide `fill_null(0)` fills integer and float
   columns and leaves strings, booleans and lists alone, where it used to cast the

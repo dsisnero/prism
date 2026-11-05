@@ -2,6 +2,8 @@
 
 ## Status: fixed upstream (2026-11-03)
 
+Confirms against the current pin: the fix is an ancestor of arrow-cr `064ece4` (2026-11-05).
+
 Fixed in `arrow-cr` commit `78b0cd4` ("perf: probe a hash set in `is_in`
 instead of binary-searching the sorted set"), on `main`. `ArrayBase#is_in` now
 builds a hash set of the member values and probes each row; the comparator sort

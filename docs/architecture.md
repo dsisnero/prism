@@ -535,7 +535,7 @@ instead of forcing one large batch.
 
 Row-group pruning was disabled for a while: `parquet-cr` used to shift
 null-bearing columns by one row per null when a filter was combined with a
-projection (`shard_issues/parquet-cr.2.md`). Fixed upstream in `5883ff1`, and the
+projection (`shard_issues/parquet-cr.done.2.md`). Fixed upstream in `5883ff1`, and the
 reproduction is kept as a spec guard.
 
 Writing defaults follow Polars rather than the Parquet crate: zstd level 3 with

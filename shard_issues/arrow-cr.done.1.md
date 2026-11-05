@@ -2,6 +2,8 @@
 
 ## Status: fixed upstream, consumer wired up (2026-11-03)
 
+Confirms against the current pin: the fix is an ancestor of arrow-cr `064ece4` (2026-11-05).
+
 Fixed in `arrow-cr` commit `5b4b958` ("port: bound sort work by the requested
 limit"), merged to `main`. `sort_to_indices` and `lexsort_to_indices` now select
 a bounded prefix with `partial_sort` and only sort that prefix; the full sort is
