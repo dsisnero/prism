@@ -30,9 +30,32 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Fixed
 
+- `write_csv` refuses a column it cannot carry faithfully, before the file is
+  opened: bytes (written as hex, a binary column read back as `Int64 [1, 203]`)
+  and nested values (which raised `Csv error: Nested type List(Int64) is not
+  supported in CSV`, naming the type but not the column). Both now raise
+  `Prism::UnsupportedOperation` naming the column and dtype and pointing at
+  Parquet or IPC. Polars' serializer refuses the same dtypes.
+- CSV inference never returns a `Null` column. A column whose first `infer_rows`
+  records were empty used to infer `Null`, which then read every later value as
+  null — the 101st row's `5` disappeared silently; it now falls back to `Utf8`,
+  the one dtype that cannot lose a value, which is what Polars infers for an empty
+  window. A header-only file reads as strings instead of `Null` columns.
 - `col("a").coalesce(col("b"))` compiles: the operand array inferred `Array(Col)`
   and only mixed-type operands type-checked, so two plain columns were a compile
   error.
+
+### Added
+
+- `spec/prism/io/roundtrip_spec.cr`, the format oracle: 29 dtypes (every numeric
+  width, boolean, utf8/large-utf8, binary, date32/64, time32/64, timestamp with
+  and without a timezone, duration, interval, decimal, null, dictionary, list,
+  fixed-size list, struct, map) each with a null in the middle, round-tripped
+  through Parquet, IPC and CSV, plus zero-row, chunked, all-null and
+  quoted/unicode/empty-name frames. Parquet and IPC are exact; CSV is exact with
+  `schema:` and value-preserving without it. The matrix lives in
+  `spec/support/dtypes.cr`, so a new dtype joins the oracle instead of getting a
+  fourth happy-path spec.
 
 ### Dependencies
 

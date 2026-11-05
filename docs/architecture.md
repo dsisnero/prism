@@ -549,7 +549,35 @@ every column as string, and Prism builds that schema itself from the header:
 `arrow-cr`'s `infer_schema(bytes, 0)` is upstream-faithful and infers *no* types,
 so it returns every field as `Null`, and passing that through read the right
 number of rows with every value null (reported downstream as
-`shard_issues/prism.2.md`, fixed in Phase 26).
+`shard_issues/prism.2.md`, fixed in Phase 26). A `Null` inference is never kept
+either, whatever the window: a column whose first `infer_rows` records were empty
+falls back to `Utf8`, because a `Null` column reads every *later* value as null —
+row 101's `5` would vanish — and Polars infers `String` there for the same
+reason. A header-only file lands on the same path.
+
+### What each format promises
+
+`spec/prism/io/roundtrip_spec.cr` runs one column per dtype (`spec/support/dtypes.cr`:
+every numeric width, boolean, utf8/large-utf8, binary, date32/64, time32/64,
+timestamp with and without a timezone, duration, interval, decimal, null,
+dictionary, list, fixed-size list, struct and map) through every writer and
+reader, with a null in the middle of each.
+
+- **Parquet and IPC are exact.** Schema and values come back field for field —
+  including interval, map, decimal and null columns, a zero-row frame, a chunked
+  frame, an all-null column and names that need quoting, unicode or are empty.
+  The one difference is chunk boundaries: Parquet reports row groups, so a
+  three-batch frame reads back as one batch.
+- **CSV is text, so it is lossy by design — but it never changes a value.** With
+  the frame's own schema handed back to `read_csv(schema:)`, every dtype the
+  reader can parse round-trips exactly. Without it, inference returns the text's
+  own types (an `Int32` comes back `Int64`, a dictionary comes back its values'
+  dtype, a duration comes back `Utf8`) and the *values* are what survived.
+  `write_csv` refuses what has no faithful text form — bytes (written as hex,
+  they would be inferred as a different integer) and nested values — with
+  `Prism::UnsupportedOperation` naming the column and pointing at Parquet or IPC,
+  before the file is opened. Polars refuses the same dtypes from its CSV
+  serializer; Prism's message names the column, Polars' does not.
 
 ## Joins
 

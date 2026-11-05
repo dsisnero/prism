@@ -182,6 +182,15 @@ inherits that. It is the one place where the "an operand's nulls are the only
 nulls" rule depends on a kernel choice: `Binary#nullable?` is only sound while
 division raises instead of nulling (§17).
 
+**CSV says what it cannot carry.** `infer_rows` is Polars' `infer_schema_length`,
+including `0` meaning "read every column as string", and a window that holds no
+value for a column falls back to string instead of a `Null` column — Polars
+infers `String` there too, and a `Null` column would read every later value as
+null. Writing refuses what has no faithful text form (binary, nested), which is
+what Polars' CSV serializer does with `datatype {dtype} cannot be written to
+CSV`; Prism's error names the column and points at Parquet or IPC. Parquet and
+IPC carry every dtype exactly, so a round-trip that matters belongs there.
+
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and
 `len(unique())`, and differing from SQL's `COUNT(DISTINCT x)`.

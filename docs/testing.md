@@ -103,6 +103,13 @@ For a real file, write to `temp/` (gitignored) inside the spec and read it back.
 Parquet round-trips through `IO::Memory` cover the writer/reader contract; the
 one file-based spec exists to prove path handling, not format correctness.
 
+`spec/prism/io/roundtrip_spec.cr` is the format oracle: it takes the dtype matrix
+in `spec/support/dtypes.cr` (one column per dtype Prism can hold, each with a null
+in the middle) and round-trips it through Parquet, IPC and CSV. Parquet and IPC
+must return the schema and the values exactly; CSV must return them exactly when
+handed its own schema, and must never change a value without one. Adding a dtype
+to `Prism` means adding it to that matrix, not writing a fourth happy-path spec.
+
 ## Optimizer specs
 
 Assert plan shape, not only results, so a quietly disabled pass fails:

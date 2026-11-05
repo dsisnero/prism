@@ -77,23 +77,40 @@ module Prism
   end
 
   # Writes a frame as CSV to an IO sink.
+  #
+  # CSV is text with inferred types, so a few dtypes have no faithful text form:
+  # bytes would be written as hex and read back as a different value, and a
+  # nested value has no single cell. Those raise `Prism::UnsupportedOperation`
+  # naming the column instead of writing a file that lies (or letting Arrow
+  # reject it without saying which column), and the message points at the
+  # formats that can carry them.
+  #
+  # Everything else is written as text and comes back exactly when the same
+  # schema is supplied to `read_csv` — see `spec/prism/io/roundtrip_spec.cr`.
   def self.write_csv(
     io : IO,
     frame : DataFrame,
     *,
     header : Bool = true,
   ) : Nil
+    ensure_csv_writable!(frame)
+
     writer = Arrow::Csv::WriterBuilder.new.with_header(header).build(io)
     frame.each_batch { |batch| writer.write(batch) }
   end
 
   # Writes a frame as CSV to a path.
+  #
+  # The frame is checked before the file is opened: a refusal must not truncate
+  # an existing file on its way out.
   def self.write_csv(
     path : String,
     frame : DataFrame,
     *,
     header : Bool = true,
   ) : Nil
+    ensure_csv_writable!(frame)
+
     File.open(path, "w") do |io|
       write_csv(io, frame, header: header)
     end
@@ -103,22 +120,51 @@ module Prism
   #
   # `infer_rows: 0` means "do not guess": take the names Arrow found in the
   # header and make every field a nullable string, which is Polars'
-  # `infer_schema_length=0` contract. Anything else is Arrow's inference.
+  # `infer_schema_length=0` contract. Anything else is Arrow's inference, with
+  # one correction: a column whose window held no value infers `Null`, and a
+  # `Null` column then reads every *later* value as null — a 101st row's `5`
+  # would disappear because the first 100 records were empty. `Null` is never a
+  # useful CSV inference, so it falls back to `Utf8`, the one dtype that cannot
+  # lose a value. A header-only file has no rows at all and lands here too.
   private def self.infer_csv_schema(
     format : Arrow::Csv::Format,
     bytes : Bytes,
     infer_rows : Int32,
   ) : Arrow::Schema
     inferred = format.infer_schema(bytes, infer_rows).first
-    return inferred unless infer_rows == 0
 
-    Arrow::Schema.new(
-      Arrow::Fields.from(
-        inferred.fields.to_a.map do |field|
-          Arrow::Field.new(field.name, Arrow::DataType.utf8, true)
-        end
+    fields = inferred.fields.to_a.map do |field|
+      if infer_rows == 0 || field.data_type.null?
+        Arrow::Field.new(field.name, Arrow::DataType.utf8, true)
+      else
+        field
+      end
+    end
+
+    Arrow::Schema.new(Arrow::Fields.from(fields))
+  end
+
+  # Rejects a dtype CSV cannot carry, naming the column.
+  #
+  # `arrow-cr` writes bytes as hex (which a reader infers as an integer with a
+  # different value) and raises `Csv error: Nested type List(Int64) is not
+  # supported in CSV` for nested columns, which names the type but not the
+  # column. Both are answered here, before a byte is written.
+  private def self.ensure_csv_writable!(frame : DataFrame) : Nil
+    frame.schema.fields.each do |field|
+      dtype = field.data_type
+      reason = if dtype.binary?
+                 "bytes have no text form, so hex would read back as a different value"
+               elsif dtype.nested?
+                 "a nested value has no single text form"
+               end
+      next unless reason
+
+      raise UnsupportedOperation.new(
+        "cannot write column #{field.name.inspect} (#{dtype}) to CSV: #{reason}; " \
+        "use Parquet or IPC, which carry any dtype"
       )
-    )
+    end
   end
 
   class DataFrame
