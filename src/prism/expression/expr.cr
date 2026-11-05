@@ -232,8 +232,8 @@ module Prism
       raise ColumnNotFound.new(source.name, schema.fields.map(&.name)) unless field
       return field if field.name == name
 
-      # `Field#with_name` mutates, so copy first (C16).
-      return field.copy.with_name(name)
+      # `with_name` returns a copy, so the input schema is untouched (C16).
+      return field.with_name(name)
     end
 
     Arrow::Field.new(name, expr.dtype(schema), expr.nullable?(schema))

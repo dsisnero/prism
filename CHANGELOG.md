@@ -34,6 +34,18 @@ All notable changes to this project are documented here. This project adheres to
   and only mixed-type operands type-checked, so two plain columns were a compile
   error.
 
+### Dependencies
+
+- `arrow-cr` bumped to `064ece4` (from `78b0cd4`): 44 commits of
+  `arrow-buffer`/`arrow-cast` reconciliation — a ported `BitIterator` and bit
+  utilities, `arrow-cast` parse/format parity for date, time, decimal and
+  timestamp, wider decimal kernels, and CSV/JSON reader fixes. No semantics Prism
+  relies on changed, and the suite passes unchanged: a safe cast still turns a
+  value that does not fit into null (so `Coerce.cast_exact` still raises), integer
+  division and remainder still raise on a zero divisor (which `Binary#nullable?`
+  depends on), and `Field#with_name` returns a copy, so the redundant
+  `field.copy` before it is gone and C16 in the plan now says so.
+
 ## [0.2.0] - 2026-11-03
 
 Rows and typed rows, intervals, conditionals, set membership, a rewritten sort

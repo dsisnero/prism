@@ -45,10 +45,12 @@ the Phase 29 unique-name checks, the Phase 30 `fill_null` family rule and the
 Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
 nulls). Phases 0–31 are closed apart from the cosmetic local folder rename.
 
-**Dependencies verified against:** `arrow-cr` `78b0cd4` (bounded sort `5b4b958`,
-the single-column `can_sort_to_indices?` guard in Phase 23, the `is_in` hash probe
-reported in `arrow-cr.3`) and `parquet-cr` `25a889e` (both `branch: main`,
-resolved from GitHub). `shard.lock` and `lib/` are
+**Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
+`78b0cd4`: 44 commits of `arrow-buffer`/`arrow-cast` reconciliation; no semantics
+Prism relies on changed — see the CHANGELOG) and `parquet-cr` `25a889e` (both
+`branch: main`, resolved from GitHub). Earlier `arrow-cr` work still pinned here:
+bounded sort `5b4b958`, the single-column `can_sort_to_indices?` guard (Phase 23)
+and the `is_in` hash probe reported in `arrow-cr.3`. `shard.lock` and `lib/` are
 gitignored, so this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
@@ -341,14 +343,20 @@ fails to compile even though both members are supported. **Decision:**
 Crystal instantiates once per operand-type pair — one written op table, four
 compiled variants, and scalars still broadcast inside Arrow.
 
-#### C16. Arrow's `Field#with_*` mutate, and `with_schema` only adds fields
+#### C16. `Field#with_*` return copies, and `with_schema` only adds fields
 
-`Field#with_name`, `with_metadata` and `with_nullable` assign to the receiver and
-return `self` — they are not functional copies. `RecordBatch#with_schema`
-requires the new schema to be a **superset** of the current one, so it cannot
-express a rename. **Decision:** rename does `field.copy.with_name(...)` and
-rebuilds each batch with `Arrow::RecordBatch.new(schema, batch.columns,
-batch.num_rows)`; that keeps the arrays and copies nothing.
+`Field#with_name`, `with_data_type`, `with_nullable` and `with_metadata` return a
+copy and leave the receiver alone (verified against `arrow-cr` `064ece4`; the
+earlier note that they mutate was wrong and Prism's `field.copy.with_name(...)`
+was belt-and-braces — the copy was dropped in the `064ece4` bump). Only the two
+in-place spellings mutate: `metadata_mut` hands out the metadata, and
+`with_dict_is_ordered` assigns to the receiver and returns `self`.
+
+`RecordBatch#with_schema` requires the new schema to be a **superset** of the
+current one, so it cannot express a rename. **Decision:** rename does
+`field.with_name(...)` and rebuilds each batch with
+`Arrow::RecordBatch.new(schema, batch.columns, batch.num_rows)`; that keeps the
+arrays and copies nothing.
 
 #### C17. `select` is a Crystal keyword
 
@@ -1229,8 +1237,8 @@ chunk-count assertions: element-wise verbs keep their chunks, `sort_by` and
 - `rename` cannot use `RecordBatch#with_schema`: it requires the new schema to
   be a superset, so a rename is rejected. Batches are rebuilt around the same
   arrays instead, which stays copy-free (C16).
-- `Field#with_name` mutates in place, so rename copies the field first — otherwise
-  it would rename the source frame's schema too (C16).
+- `Field#with_name` returns a copy (C16), so rename never touches the source
+  frame's schema.
 - `select` is a Crystal keyword (channel select). `df.select(...)` is fine,
   but a receiverless `select(...)` inside the class parses as the keyword;
   internal calls use `self.select` (C17).
@@ -1480,8 +1488,8 @@ series with `==` is always truthy — `same_as?` exists for structural compariso
 
 This phase also fixed a real bug: `select` marked every aliased column nullable,
 so `rename` through the planner produced a different schema from the eager
-verb. Aliasing a bare column now keeps its nullability (copying the field first,
-C16).
+verb. Aliasing a bare column now keeps its nullability (the renamed field is a
+copy, C16).
 
 #### 9c. Expression coverage (done, two deferrals)
 

@@ -94,9 +94,9 @@ module Prism
 
       fields = @schema.fields.to_a.map do |field|
         replacement = normalized[field.name]?
-        # `Field#with_name` mutates in place, so copy before renaming or the
-        # source frame's schema would change too.
-        replacement ? field.copy.with_name(replacement) : field
+        # `with_name` returns a copy, so the source frame's schema is untouched
+        # (C16).
+        replacement ? field.with_name(replacement) : field
       end
       # A swap (`a -> b`, `b -> a`) is legal because it is checked on the result;
       # renaming onto a name that survives is not.
