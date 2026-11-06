@@ -535,9 +535,12 @@ extremes use total order (`-0.0` below `0.0`, every NaN above `+inf`). A nested
 aggregation (`col("a").sum.mean`) has no defined cross-group meaning, so it keeps
 the per-group evaluation rather than acquiring one silently.
 
-`variance`/`std` are `sum((x - mean)^2) / (n - ddof)` with `sub`/`mul`/`sum`, and
-`median` is `sort` plus the middle row — both per group, on the already-evaluated
-operand.
+`variance`/`std` are `Arrow.variance`/`Arrow.stddev`, a one-pass Welford kernel
+(`VarianceOptions(ddof:)`) that applies Prism's rule — nil when `count <= ddof` —
+so there are no full-length temporaries per group (3.6x faster than the four-pass
+`sum((x - mean)^2)` it replaced). `mean` stays `sum / non-null count`, which
+measures *faster* than `Arrow.mean` (2.5 ms against 5.0 ms on 1e6 rows), and
+`median` is still `sort` plus the middle row because there is no quantile kernel.
 
 Null keys form one group. `null_keys: :first | :last` controls placement
 (:first matches Arrow's `ASC NULLS FIRST` default); `:drop` filters null-key rows

@@ -72,6 +72,41 @@ describe "string kernels" do
     eager_strings(frame, col("v").str_contains("hobbit")).should eq([false, true])
   end
 
+  it "changes case with the UTF-8 kernels, not the ASCII ones" do
+    frame = strings_frame
+
+    # "héllo" -> "HÉLLO" proves the unicode kernel: an ascii-only transform would
+    # leave the accent alone.
+    accented = Prism.from_columns({v: Arrow::StringArray.from_nullable(["héllo", nil]).as(Arrow::ArrayBase)})
+
+    eager_strings(accented, col("v").str_to_uppercase).should eq(["HÉLLO", nil])
+    eager_strings(accented, col("v").str_to_lowercase).should eq(["héllo", nil])
+    eager_strings(frame, col("title").str_to_uppercase).should eq(["OPEN LIBRARY", nil, "THE HOBBIT"])
+    frame.with_column("up", col("title").str_to_uppercase).dtypes["up"].should eq(Arrow::DataType.utf8)
+  end
+
+  it "trims whitespace from both ends, or one" do
+    frame = Prism.from_columns({v: Arrow::StringArray.from_nullable(["  a b  ", nil, "c"]).as(Arrow::ArrayBase)})
+
+    eager_strings(frame, col("v").str_trim).should eq(["a b", nil, "c"])
+    eager_strings(frame, col("v").str_trim_start).should eq(["a b  ", nil, "c"])
+    eager_strings(frame, col("v").str_trim_end).should eq(["  a b", nil, "c"])
+  end
+
+  it "keeps a dictionary's values through a transform" do
+    frame = Prism.from_columns({v: Arrow::DictionaryArray(Int32).from_options(["ab", "cd"]).as(Arrow::ArrayBase)})
+
+    eager_strings(frame, col("v").str_to_uppercase).should eq(["AB", "CD"])
+  end
+
+  it "rejects a non-string operand for a transform" do
+    frame = strings_frame
+
+    expect_raises(Prism::DtypeError, /"n".*Int64/) do
+      frame.with_column("x", col("n").str_to_uppercase)
+    end
+  end
+
   it "names the column and dtype it cannot use" do
     frame = strings_frame
 

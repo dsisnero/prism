@@ -220,6 +220,29 @@ module Prism
       StrPredicate.new(StrPredicateKind::EndsWith, self, needle)
     end
 
+    # Upper-cases the value (Polars' `str.to_uppercase()`), Unicode-aware.
+    def str_to_uppercase : Expr
+      StrTransform.new(StrTransformKind::Upper, self)
+    end
+
+    # Lower-cases the value (Polars' `str.to_lowercase()`), Unicode-aware.
+    def str_to_lowercase : Expr
+      StrTransform.new(StrTransformKind::Lower, self)
+    end
+
+    # Strips whitespace from both ends (Polars' `str.strip_chars()`), or from one.
+    def str_trim : Expr
+      StrTransform.new(StrTransformKind::Trim, self)
+    end
+
+    def str_trim_start : Expr
+      StrTransform.new(StrTransformKind::TrimStart, self)
+    end
+
+    def str_trim_end : Expr
+      StrTransform.new(StrTransformKind::TrimEnd, self)
+    end
+
     # A byte slice: `offset` may be negative (from the end), and a `nil` length
     # runs to the end of the value.
     def str_slice(offset : Int, length : Int? = nil) : Expr

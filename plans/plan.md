@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(640 examples, ~30 s warm). The table below is the only place that tracks status;
+(654 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -47,8 +47,9 @@ nulls), the Phase 32 IO round-trip oracle plus the two CSV losses it found, and 
 Phase 33 CSV schema-by-name fix, the Phase 34 lazy call-shape parity and the
 Phase 35 `cast(strict: false)` opt-out and the Phase 36 value coverage for the view,
 run-end and wide-decimal dtypes, and the Phase 37 expression layer over the
-kernels `arrow-cr` already ships. Phases 0–37 are closed apart from the cosmetic
-local folder rename.
+kernels `arrow-cr` already ships, and the Phase 38 case/trim expressions plus the
+`std`/`var` delegation. Phases 0–38 are closed apart from the cosmetic local
+folder rename.
 
 **Dependencies verified against:** `arrow-cr` `ca106f2` (bumped 2026-11-05 from
 `064ece4`: 55 commits, and the big one — the **C++ extension track** landed chunks
@@ -66,17 +67,10 @@ this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **Queued, and measured** — the `ca106f2` bump landed kernels Prism still
-   hand-rolls. In order:
-   - **`std`/`variance` delegation**: `Arrow.stddev` is **16.5 ms** where Prism's
-     four-pass `Aggregates.standard_deviation` is **50.2 ms** on 1e6 Float64 with
-     20% nulls (3x). `mean` is the opposite: Prism's `sum/count` is **6.8 ms**
-     against `Arrow.mean`'s **11.7 ms**, so it stays as it is — the kernel exists
-     and is slower.
-   - **String transforms**: `utf8_lower/upper/title/trim/ltrim/rtrim` and the
-     character predicates now exist in `arrow-cr` (C++ chunk 3), so
-     `str_to_uppercase`/`str_to_lowercase`/`str_trim` are wiring, not a kernel ask.
-   - **`fill_null_forward/backward`** (C++ chunk 6) give `fill_null(strategy:)`.
+1. **Queued** — one kernel-backed feature is left from the `ca106f2` bump:
+   - **`fill_null_forward/backward`** (C++ chunk 6) give `fill_null(strategy:)`,
+     which needs an API decision (a `strategy:` keyword beside the value and hash
+     forms, on `DataFrame`, `LazyFrame`, `Series` and `Expr`) rather than a node.
    What else is left:
    - **`shard_issues/arrow-cr.4.md`** (filed, open, external): the CSV reader costs
      1.4x Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
@@ -131,10 +125,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **640 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**641**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**644**, ~1 min); with both
-set the suite is **645**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **654 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**655**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**658**, ~1 min); with both
+set the suite is **659**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -200,6 +194,7 @@ so a new feature starts from a clean tree.
 | 35 | `cast(strict: false)`: the nulling opt-out, on all four surfaces | **done** |
 | 36 | View, run-end and `Decimal256` columns materialize and print | **done** |
 | 37 | Expressions over the kernels that already exist (string, temporal, shift/diff/rank) | **done** |
+| 38 | Use the kernels `ca106f2` landed: string case/trim, and `std`/`var` delegation | **done** |
 
 ---
 
@@ -914,7 +909,7 @@ UserSchema.schema                             # => Arrow::Schema
 | Boolean | `&` / `\|` (operators, parenthesise), `and` / `or` / `not` (methods; `!` is not overloadable) |
 | Null | `is_null`, `is_not_null`, `fill_null(v)`, `coalesce(*exprs)` |
 | Cast | `cast(dtype, strict: true)`, `is_in(values)` |
-| String | `str_length`, `str_contains`, `str_starts_with`, `str_ends_with`, `str_slice(offset, length)`, `matches(pattern)` |
+| String | `str_length`, `str_contains`, `str_starts_with`, `str_ends_with`, `str_slice(offset, length)`, `matches(pattern)`, `str_to_uppercase`, `str_to_lowercase`, `str_trim`, `str_trim_start`, `str_trim_end` |
 | Temporal | `date_part(part)`, plus `year quarter month week day day_of_year weekday hour minute second` |
 | Position | `shift(n)`, `diff(n)`, `rank(descending: false)` |
 | Conditional | `if_else`, `case_when` |
@@ -924,9 +919,8 @@ UserSchema.schema                             # => Arrow::Schema
 
 Not implemented, and not expressible without a kernel `arrow-cr` does not have:
 `// ** abs round floor ceil sqrt pow log exp clip`, and of the string transforms
-`replace`/`split`/`find`/`count_matches` (case and trim kernels landed in
-`arrow-cr` `ca106f2` and are only waiting to be wired). A Crystal per-row loop
-would break §14, so these wait for the kernel rather than being hand-rolled.
+`replace`/`split`/`find`/`count_matches`. A Crystal per-row loop would break §14,
+so these wait for the kernel rather than being hand-rolled.
 
 ### 6.2 `Series` surface
 
@@ -2716,6 +2710,58 @@ examples (645 with the compile and example specs).
   returns a *dictionary* of lengths (`with_values`), which is not what a user
   means by "the length column"; decoding first and declaring the decoded dtype
   keeps the expression surface consistent with `is_in` and the keyed verbs.
+
+### Phase 38 — use the kernels the bump landed (done)
+
+Two things `arrow-cr` `ca106f2` shipped that Prism was still doing itself, plus
+two it was missing.
+
+**String case and trim** — red first (`undefined method 'str_to_uppercase' for
+Prism::Col`), then one `StrTransform` node over the UTF-8 kernels:
+`str_to_uppercase`, `str_to_lowercase`, `str_trim`, `str_trim_start`,
+`str_trim_end`. The UTF-8 variants rather than the ASCII ones, because an ASCII
+transform silently leaves `"héllo"` unchanged and Polars' default is
+Unicode-aware too; the spec pins `"héllo"` → `"HÉLLO"` for exactly that reason.
+
+**`std`/`var` delegation** — the four-pass `sum((x - mean)^2)` (cast, sum,
+subtract, multiply, sum, divide, with two full-length temporaries per group)
+became `Arrow.variance`/`Arrow.stddev`, a one-pass Welford kernel whose nil rule
+(`count <= ddof`) is the one Prism already documented. Measured in one run, best
+of five, 1e6 Float64 with 20% nulls:
+
+```text
+four-pass std (before)   22.3 ms
+Arrow.stddev (after)      6.2 ms    3.6x
+```
+
+`mean` deliberately stays Prism's `sum / non-null count`: it measures **2.5 ms**
+against `Arrow.mean`'s **5.0 ms**, so the kernel exists, is correct, and is
+slower. `Float16` and boolean inputs, which the old code accepted by widening to
+Float64, still go through that cast (`stats_array`), so no dtype lost support.
+
+**Acceptance:** `spec/prism/expr_kernels_spec.cr` gains the case/trim values,
+null propagation, dtype, the dictionary path and the non-string error;
+`spec/prism/aggregates_spec.cr` is new and pins the statistics contract that the
+delegation had to preserve — ddof 0 and 1, nulls skipped, nil for too few values,
+Int32/Float16/boolean/decimal inputs, a randomized comparison against a two-pass
+reference, and the same numbers through `group_by`. Suite: 654 examples (659 with
+the compile and example specs).
+
+**Notes carried forward:**
+
+- **Characterization tests are the red state for a refactor.** The new API gave a
+  compile error to drive; a performance change cannot, so the statistics contract
+  went in *before* the kernel and had to stay green through it. Both are in the
+  same commit because the phase is one story — "stop hand-rolling what the
+  dependency now ships" — and the measurement is what justifies the change.
+- **A kernel that is slower is still worth measuring.** `mean` was on the list of
+  things to delegate; the same-run measurement showed the hand-rolled `sum/count`
+  is twice as fast, so it stayed. Delegating by name rather than by measurement
+  would have made the library slower while looking tidier.
+- **Widening stays at the edge.** The kernel dispatches numerics and decimals but
+  not `Float16` or boolean, so those are cast first — which is what the old
+  implementation did for *every* dtype. The dtype gate lives in one private
+  `stats_array` rather than in each caller.
 
 ## 13. Testing strategy
 

@@ -234,6 +234,73 @@ module Prism
     end
   end
 
+  # Case and whitespace transforms (`str.to_uppercase()` and `str.strip_chars()`).
+  #
+  # The UTF-8 kernels, not the ASCII ones: Polars' default is Unicode-aware too
+  # (`ascii_only=True` is the opt-in there), and an ASCII transform would silently
+  # leave "héllo" unchanged.
+  enum StrTransformKind
+    Upper
+    Lower
+    Trim
+    TrimStart
+    TrimEnd
+
+    def key_name : String
+      case self
+      in .upper?      then "str_upper"
+      in .lower?      then "str_lower"
+      in .trim?       then "str_trim"
+      in .trim_start? then "str_trim_start"
+      in .trim_end?   then "str_trim_end"
+      end
+    end
+  end
+
+  class StrTransform < Expr
+    getter kind : StrTransformKind
+    getter operand : Expr
+
+    def initialize(@kind : StrTransformKind, @operand : Expr)
+    end
+
+    def key : String
+      "#{@kind.key_name}(#{@operand.key})"
+    end
+
+    def children : Array(Expr)
+      [@operand]
+    end
+
+    def columns : Array(String)
+      @operand.columns
+    end
+
+    def dtype(schema : Arrow::Schema) : Arrow::DataType
+      KernelArgs.require_string(@operand, schema)
+    end
+
+    def nullable?(schema : Arrow::Schema) : Bool
+      @operand.nullable?(schema)
+    end
+
+    def eval(ctx : EvalContext) : Datum
+      array = KernelArgs.decode(Datums.array(ctx.evaluate(@operand), ctx))
+
+      case @kind
+      in .upper?      then Arrow.utf8_upper(array)
+      in .lower?      then Arrow.utf8_lower(array)
+      in .trim?       then Arrow.utf8_trim_whitespace(array)
+      in .trim_start? then Arrow.utf8_ltrim_whitespace(array)
+      in .trim_end?   then Arrow.utf8_rtrim_whitespace(array)
+      end
+    end
+
+    def to_s(io : IO) : Nil
+      io << key
+    end
+  end
+
   # Regular-expression match against a constant pattern (`str.contains` with a
   # pattern, in Polars; `matches` here so a literal `str_contains` stays literal).
   class RegexMatch < Expr

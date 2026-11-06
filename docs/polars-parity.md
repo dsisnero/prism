@@ -52,6 +52,9 @@ that is only Polars'.
 | String contains (regex) | `pl.col("x").str.contains("^a")` | `col("x").matches("^a")` |
 | Starts/ends with | `.str.starts_with("a")` / `.str.ends_with("a")` | `str_starts_with("a")` / `str_ends_with("a")` |
 | String slice | `pl.col("x").str.slice(0, 4)` | `col("x").str_slice(0, 4)` |
+| Case | `.str.to_uppercase()` / `.str.to_lowercase()` | `str_to_uppercase` / `str_to_lowercase` |
+| Trim | `.str.strip_chars()` / `_start()` / `_end()` | `str_trim` / `str_trim_start` / `str_trim_end` |
+| Variance / std | `pl.col("x").var()` / `.std()` | `col("x").variance` / `col("x").std` (Welford kernel) |
 | Date parts | `pl.col("d").dt.year()` … | `col("d").year` … (`date_part(:year)`) |
 | Shift | `pl.col("x").shift(1)` | `col("x").shift(1)` |
 | Diff | `pl.col("x").diff(1)` | `col("x").diff(1)` |
@@ -213,11 +216,10 @@ column silently is the kind of convenience that hides a mismatch.
 (`str.len_bytes()`, not `len_chars`), `str_slice` offsets in bytes, and
 `str_contains` is literal while `matches` takes a pattern — Polars' `str.contains`
 is regex by default, so a ported call needs the split made explicit. `weekday` is
-1 = Monday .. 7 = Sunday, `week` is ISO. The string *transforms* Polars has
-(`to_lowercase`, `to_uppercase`, `trim`) exist as `arrow-cr` kernels since
-`ca106f2` (its C++ chunk 3) and are not wired to `Expr` yet; `replace`, `split`,
-`find` and `count_matches` are still missing upstream, and there is no Prism
-hand-rolled version of any of them.
+1 = Monday .. 7 = Sunday, `week` is ISO. The string *transforms* are `str_to_uppercase`, `str_to_lowercase`, `str_trim`,
+`str_trim_start` and `str_trim_end`, backed by the UTF-8 kernels (Unicode-aware,
+like Polars' default). `replace`, `split`, `find` and `count_matches` are still
+missing upstream, and there is no Prism hand-rolled version of them.
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and

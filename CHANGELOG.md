@@ -8,6 +8,12 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Added
 
+- `str_to_uppercase`, `str_to_lowercase`, `str_trim`, `str_trim_start` and
+  `str_trim_end` expressions, over `arrow-cr`'s UTF-8 kernels (Unicode-aware, like
+  Polars' default): `col("x").str_to_uppercase` maps `"héllo"` to `"HÉLLO"`, where
+  the ASCII kernel would leave the accent alone. Dictionary columns decode through
+  their values first, and a non-string operand raises `Prism::DtypeError` naming
+  the column.
 - Expression methods over kernels `arrow-cr` already ships, so no Prism-side loop:
   `str_length` (bytes), `str_contains` / `str_starts_with` / `str_ends_with`
   (literal), `str_slice(offset, length)`, `matches(pattern)` (regex), the ten
@@ -43,6 +49,14 @@ All notable changes to this project are documented here. This project adheres to
   for each, so a verb that gains a shape eagerly cannot silently lack it lazily.
 
 ### Changed
+
+- `std`/`var` delegate to `Arrow.stddev`/`Arrow.variance`, a one-pass Welford
+  kernel, instead of computing `sum((x - mean)^2)` with four kernel passes and two
+  full-length temporaries per group: **22.3 ms → 6.2 ms** (3.6x) on 1e6 Float64
+  with 20% nulls. The contract is unchanged (ddof, nulls skipped, nil when
+  `count <= ddof`) and is pinned by `spec/prism/aggregates_spec.cr`. `mean` stays
+  Prism's `sum / count`, which measures faster than the new `Arrow.mean` kernel
+  (2.5 ms against 5.0 ms).
 
 - `cast` never invents nulls: a value the target dtype cannot represent (`"abc"`
   to `Int64`, `300` to `Int8`, `NaN` to `Int64`) raises `Prism::DtypeError`
