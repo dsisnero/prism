@@ -121,6 +121,19 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Dependencies
 
+- `arrow-cr` bumped to `59381cd` (from `ca106f2`): reconciliation batch 43 for
+  `arrow-arith`'s `numeric.rs` (the 22 test IDs are ported, and the scalar
+  `date32_*_opt`/`date64_*_opt` calendar helpers now exist), the Decimal128/256
+  `rank` fix (`can_rank?` and `rank` agree again; upstream ranks the physical
+  integer, so `shard_issues/arrow-cr.5.md` is fixed and now
+  `arrow-cr.done.5.md`), and the first CSV-reader performance fix — the per-field
+  `IO::Memory`, the per-cell validation `String` and the second `String` pass are
+  gone, taking the all-Utf8 reader from 730-900 ms to 546-586 ms on a 1e6x4 probe
+  (stdlib 277-310 ms; `shard_issues/arrow-cr.4.md` stays open against the 1.25x
+  bar). Nothing Prism relies on moved: integer division still raises on a zero
+  divisor, a safe cast still nulls an unfit value, and Prism's
+  `require_rankable` still excludes decimals as a Polars-semantics choice rather
+  than a workaround.
 - `arrow-cr` bumped to `ca106f2` (from `064ece4`): 55 commits, and the C++ extension
   track landed chunks 1–4 — dictionary/run-end encode+decode, the cumulative family
   (`cumulative_sum/prod/min/max/mean`), ASCII and UTF-8 string kernels (case, trim,

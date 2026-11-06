@@ -51,19 +51,24 @@ kernels `arrow-cr` already ships, and the Phase 38 case/trim expressions plus th
 `std`/`var` delegation. Phases 0–38 are closed apart from the cosmetic local
 folder rename.
 
-**Dependencies verified against:** `arrow-cr` `ca106f2` (bumped 2026-11-05 from
-`064ece4`: 55 commits, and the big one — the **C++ extension track** landed chunks
-1–4: dictionary/run-end encode+decode, the cumulative family, ASCII and UTF-8
-string kernels (case, trim, character predicates), and scalar+decimal statistics
-(`Arrow.mean`/`variance`/`stddev`), plus `fill_null_forward/backward`, `if_else`,
-the list kernels and a `ChunkedArray` container). The semantics Prism relies on
-are unchanged: integer division still raises on a zero divisor, a safe cast still
-nulls an unfit value (so `Coerce.cast_exact` still raises), and `can_rank?` still
-claims decimals — `shard_issues/arrow-cr.5.md` stays open. Earlier `arrow-cr` work
-still pinned: bounded sort `5b4b958`, the `can_sort_to_indices?` guard (Phase 23)
-and the `is_in` hash probe (`arrow-cr.3`). `parquet-cr` `25a889e` (both
-`branch: main`, resolved from GitHub). `shard.lock` and `lib/` are gitignored, so
-this line is the record of what the suite below was run against.
+**Dependencies verified against:** `arrow-cr` `59381cd` (bumped 2026-11-06 from
+`ca106f2`: reconciliation batch 43 for `arrow-arith`'s `numeric.rs` plus the new
+scalar `date32_*_opt`/`date64_*_opt` helpers, the Decimal128/256 `rank` fix, and
+the first CSV-reader performance fix — the per-field `IO::Memory`, the per-cell
+validation `String` and the second `String` pass are gone). The semantics Prism
+relies on still hold: integer division raises on a zero divisor, a safe cast
+nulls an unfit value (so `Coerce.cast_exact` still raises), and `can_rank?` plus
+`rank` now **agree** on decimals (upstream ranks the physical integer), so
+`shard_issues/arrow-cr.5.md` is fixed and renamed `arrow-cr.done.5.md`;
+Prism's `require_rankable` still excludes decimals as a Polars-semantics choice,
+not a workaround. The CSV reader improved 730-900 ms → 546-586 ms on the 1e6x4
+all-Utf8 probe (stdlib 277-310 ms), so `shard_issues/arrow-cr.4.md` stays open
+with the remaining costs recorded. Earlier `arrow-cr` work still pinned: the
+C++ extension track through chunk 6 (`ca106f2`), bounded sort `5b4b958`, the
+`can_sort_to_indices?` guard (Phase 23) and the `is_in` hash probe (`arrow-cr.3`).
+`parquet-cr` `25a889e` (both `branch: main`, resolved from GitHub). `shard.lock`
+and `lib/` are gitignored, so this line is the record of what the suite below was
+run against.
 
 **Next up, in order** (each is one atomic commit):
 
@@ -72,15 +77,17 @@ this line is the record of what the suite below was run against.
      which needs an API decision (a `strategy:` keyword beside the value and hash
      forms, on `DataFrame`, `LazyFrame`, `Series` and `Expr`) rather than a node.
    What else is left:
-   - **`shard_issues/arrow-cr.4.md`** (filed, open, external): the CSV reader costs
-     1.4x Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
-     `batch_size` is not the explanation. The report names the per-cell
-     `IO::Memory` + two `dup`s + the throwaway `String` in `validate_utf8` as the
-     cost, with 1.25x of stdlib as the acceptance bar. Prism does not work around
-     it; the next step is upstream. It is the only open report —
-     `arrow-cr.done.1–3` and `parquet-cr.done.2` are fixed, renamed with the
-     `.done` marker, and keep their reproducers so a `shards update` can re-prove
-     each fix.
+   - **`shard_issues/arrow-cr.4.md`** (open, external, partially fixed at
+     `59381cd`): the CSV reader cost 1.4x Crystal's stdlib lexer plus the same
+     builders for the all-Utf8 case, and `batch_size` is not the explanation. The
+     per-field `IO::Memory`, the per-cell `String` in `validate_utf8` and the
+     second `String` pass are now gone (reader 730-900 ms → 546-586 ms on the
+     1e6x4 probe, stdlib 277-310 ms), so the remaining gap is the double row-array
+     build, the bounds-checked byte loop, the `line_count` rescan and `feed`'s
+     input copy; the 1.25x bar still governs. Prism still does not work around it.
+     It is the only open report — `arrow-cr.done.1–3`, `arrow-cr.done.5` and
+     `parquet-cr.done.2` are fixed, renamed with the `.done` marker, and keep
+     their reproducers so a `shards update` can re-prove each fix.
    - **`group_by` nullability** (§17): its key and aggregate fields stay nullable;
      tightening them only pays when a caller needs the flag (a Parquet schema or a
      `concat` with a non-null source).
@@ -88,7 +95,7 @@ this line is the record of what the suite below was run against.
      only one Polars has that Prism does not.
 2. **Upstream, in this order** (each is a report or a bumped dependency, not a
    Prism phase). `ca106f2` closed the string-case/trim and statistics parts of this
-   list; what remains is:
+   list and `59381cd` closed the decimal-rank report; what remains is:
    - **PL-1 uniqueness/value_counts** (`is_unique`, `is_duplicated`, `n_unique`,
      `value_counts`, `mode` for a whole column). Prism hand-rolls all of it with
      row-encoded hash sets — measured 104 ms per 1e5 groups for `n_unique` against
