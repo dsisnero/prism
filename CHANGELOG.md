@@ -121,6 +121,13 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Dependencies
 
+- `arrow-cr` bumped to `fab3c36` (from `ca106f2`): the CSV-reader performance
+  report is closed. The reader now feeds the `Utf8`/`Utf8View` builders from the
+  CSV byte slices (no per-cell `String`), scans plain runs without a per-byte
+  call and validates UTF-8 without allocating; on the report's 1e6x4 all-Utf8
+  probe it went from 367-511 ms to 201-227 ms, level with Crystal's stdlib
+  `CSV.parse` plus the same four builders (201-258 ms, down from a 1.9x gap).
+  A typed read stays at 1.44x the all-Utf8 read. No open shard reports remain.
 - `arrow-cr` bumped to `59381cd` (from `ca106f2`): reconciliation batch 43 for
   `arrow-arith`'s `numeric.rs` (the 22 test IDs are ported, and the scalar
   `date32_*_opt`/`date64_*_opt` calendar helpers now exist), the Decimal128/256

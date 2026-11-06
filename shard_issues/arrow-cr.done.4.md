@@ -1,11 +1,34 @@
 # `arrow-cr`: the CSV reader costs ~1.4x a stdlib lexer plus the same builders
 
-## Status: open — first fix landed, 1.25x bar not met yet (2026-11-06)
+## Status: fixed upstream (2026-11-06)
 
-Prism does not work around this: `read_csv` stays on `arrow-cr`'s reader, whose
-typing and inference are the contract ([Phase 32 of the
-plan](../plans/plan.md)). The report exists so the gap is measured rather than
-remembered, and so the fix lands upstream where every consumer gets it.
+Fixed in `arrow-cr` `fab3c36` ("perf: build CSV strings from bytes, scan plain
+runs unchecked"), which finishes the work `59381cd` started. Consumers see it
+after `shards update arrow-cr` (the pin here was `ca106f2`).
+
+Measured on the report's own scenario (1e6 rows x 4 columns, all-Utf8 schema,
+`--release`, best of five, same-machine alternating runs):
+
+```text
+                              before (ca106f2)      after (fab3c36)     stdlib (same runs)
+arrow-cr reader (all-Utf8)    367 - 511 ms          201 - 227 ms        201 - 258 ms
+arrow-cr reader (Int32 col)   424 ms                358 ms              -
+```
+
+So the reader is now **level with** Crystal's stdlib `CSV.parse` plus the same
+four `StringArray` builders instead of ~1.9x, i.e. well inside the 1.25x
+acceptance bar, and a typed read stays at 1.44x the all-Utf8 read. The
+`IO::Memory`/double-`dup`/validation-`String` costs the report named were real
+and are all gone: unquoted fields are slices of the fed buffer, the byte loop
+scans plain runs without a per-byte call, `flush` keeps rows as bytes and feeds
+the Utf8/Utf8View builders directly, and UTF-8 validation is a non-allocating
+byte validator with the same rules as `String#valid_encoding?`.
+
+What is left (not worth a report): typed columns still materialize one `String`
+per cell for the parsers, and the parser still builds one `Array(Bytes)` per
+row. Neither is on the all-Utf8 path any more.
+
+### Progress (2026-11-06, `arrow-cr` `59381cd`)
 
 ### Progress (2026-11-06, `arrow-cr` `59381cd`)
 
