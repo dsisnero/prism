@@ -1,14 +1,34 @@
 # `arrow-cr`: `can_rank?` says yes to decimals that `rank` cannot rank
 
-## Status: open (2026-11-05)
+## Status: fixed upstream (2026-11-06)
 
-Still present at the current pin `arrow-cr` `ca106f2`: `Arrow.can_rank?` answers
-`true` for `Decimal128(10, 2)` and `Arrow.rank` still raises.
+Fixed in `arrow-cr` commit `c1c5db8` ("port: rank the Decimal128/256 storage
+like upstream"), merged to `main`. Consumers see it after
+`shards update arrow-cr` (the pin here was `ca106f2`). `shard_issues/arrow-cr.4.md`
+is the other open report.
 
-Prism works around it: `Prism::KernelArgs.require_rankable` excludes decimals
-before asking `Arrow.can_rank?`, so `col("d").rank` raises
-`Prism::DtypeError` naming the column instead of failing inside the kernel.
-`shard_issues/arrow-cr.4.md` is the other open report.
+The symptom was real and is gone: `Arrow.can_rank?` still answers `true` for
+every decimal width, and `Arrow.rank` now ranks all of them. The report's
+premise was wrong in one place, though — upstream does **not** exclude decimals
+from `can_rank`: `can_rank` uses `DataType::is_primitive` (which includes
+`Decimal32/64/128/256`) and `downcast_primitive_array!` downcasts all four
+decimal widths, so upstream `rank` orders the **physical integer** (the scale is
+ignored). The port's `Decimal32`/`Decimal64` arms already matched; only
+`Decimal128`/`Decimal256` raised because their `Int128`/`I256` storage had no
+`rank` branch.
+
+Resolution: option 2 in the report (rank by physical value), not option 1.
+`src/arrow/rank.cr` now dispatches `PrimitiveArray(Int128)` and
+`PrimitiveArray(I256)`, and `spec/arrow/rank_spec.cr` pins the scale-blind order
+for all four widths plus `can_rank?`.
+
+The Prism guard (`Arrow.can_rank?(dtype) && !dtype.decimal?`) is now only a
+Polars-semantics choice, not a workaround for a kernel bug: if `col("d").rank`
+should rank decimal columns, drop the `!dtype.decimal?` clause and update the
+spec that pins the `DtypeError`.
+
+The rest of the report (the analysis below) is kept for context but its
+"Expected"/"Why" sections describe the pre-fix state.
 
 ## Failure
 

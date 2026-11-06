@@ -1,11 +1,50 @@
 # `arrow-cr`: the CSV reader costs ~1.4x a stdlib lexer plus the same builders
 
-## Status: open (2026-11-05)
+## Status: open — first fix landed, 1.25x bar not met yet (2026-11-06)
 
 Prism does not work around this: `read_csv` stays on `arrow-cr`'s reader, whose
 typing and inference are the contract ([Phase 32 of the
 plan](../plans/plan.md)). The report exists so the gap is measured rather than
 remembered, and so the fix lands upstream where every consumer gets it.
+
+### Progress (2026-11-06, `arrow-cr` `59381cd`)
+
+The per-cell allocation analysis below was correct and the first part is fixed
+("perf: stop copying every CSV field twice"):
+
+- `parse_record` no longer allocates an `IO::Memory` per field: unquoted fields
+  are slices of the fed buffer, and only a field that touched a quoted section
+  is materialized (through one scratch buffer reused across fields).
+- The delimiter/quote/terminator tests are inlined in the byte loop instead of
+  a `terminator_at` call per byte.
+- `flush` builds each field as exactly one `String` and validates it there;
+  the separate `validate_utf8` pass (one throw-away `String` per cell) is gone.
+
+Measured on the same machine with a 1e6-row x 4-column all-Utf8 file (28 MiB,
+`--release`, best of five): reader **730-900 ms before, 546-586 ms after**
+(~1.35-1.55x faster); the stdlib `CSV.parse` + four `StringArray` builders side
+measured 277-310 ms in the same runs. That is ~1.9-2.0x, so the 1.25x bar is
+still open. What remains, in rough order of expected payoff:
+
+1. The reader still builds the rows twice: `Array(Array(Bytes))` in the record
+   decoder, then `Array(Array(String))` in `flush` before the column builders.
+   Building columns straight from the byte records (with a byte-level UTF-8
+   validator for the unprojected fields) would remove one 1M-array allocation
+   pass.
+2. The byte loop is still a bounds-checked Crystal loop with a branch per byte;
+   the stdlib lexer scans for the next delimiter instead.
+3. `line_count` re-scans every consumed record to count line breaks, although
+   `parse_record` already sees each byte; counting quoted newlines there would
+   remove one pass over the input.
+4. `feed` still copies the whole first buffer (`input.dup`); `BufReader` owns
+   its bytes and could hand ownership over.
+
+Prism's acceptance oracle (CSV specs plus
+`spec/prism/io/roundtrip_spec.cr`) is unchanged and green in `arrow-cr`'s own
+55 CSV fixtures; the current pin here is still `ca106f2`, so a
+`shards update arrow-cr` is needed before re-measuring Prism itself.
+
+### Original report (2026-11-05)
 
 ## Failure
 
