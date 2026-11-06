@@ -107,6 +107,19 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Dependencies
 
+- `arrow-cr` bumped to `ca106f2` (from `064ece4`): 55 commits, and the C++ extension
+  track landed chunks 1–4 — dictionary/run-end encode+decode, the cumulative family
+  (`cumulative_sum/prod/min/max/mean`), ASCII and UTF-8 string kernels (case, trim,
+  character predicates), and statistics (`Arrow.mean`, `variance`, `stddev`), plus
+  `fill_null_forward/backward`, `if_else`, list kernels (`list_flatten`,
+  `list_parent_indices`, `list_value_length`) and a `ChunkedArray` container.
+  Nothing Prism relies on moved: integer division still raises on a zero divisor
+  (which `Binary#nullable?` depends on), a safe cast still nulls an unfit value
+  (so `Coerce.cast_exact` still raises), and `can_rank?` still claims decimals
+  (`shard_issues/arrow-cr.5.md` stays open). Two measured follow-ups are queued:
+  `std`/`variance` delegation is **3x** (`Arrow.stddev` 16.5 ms against Prism's
+  four-pass 50.2 ms on 1e6 rows), while `mean` **stays** Prism's `sum/count`
+  (6.8 ms against the kernel's 11.7 ms).
 - `arrow-cr` bumped to `064ece4` (from `78b0cd4`): 44 commits of
   `arrow-buffer`/`arrow-cast` reconciliation — a ported `BitIterator` and bit
   utilities, `arrow-cast` parse/format parity for date, time, decimal and

@@ -50,19 +50,34 @@ run-end and wide-decimal dtypes, and the Phase 37 expression layer over the
 kernels `arrow-cr` already ships. Phases 0–37 are closed apart from the cosmetic
 local folder rename.
 
-**Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
-`78b0cd4`: 44 commits of `arrow-buffer`/`arrow-cast` reconciliation; no semantics
-Prism relies on changed — see the CHANGELOG) and `parquet-cr` `25a889e` (both
-`branch: main`, resolved from GitHub). Earlier `arrow-cr` work still pinned here:
-bounded sort `5b4b958`, the single-column `can_sort_to_indices?` guard (Phase 23)
-and the `is_in` hash probe reported in `arrow-cr.3`. `shard.lock` and `lib/` are
-gitignored, so this line is the record of what the suite below was run against.
+**Dependencies verified against:** `arrow-cr` `ca106f2` (bumped 2026-11-05 from
+`064ece4`: 55 commits, and the big one — the **C++ extension track** landed chunks
+1–4: dictionary/run-end encode+decode, the cumulative family, ASCII and UTF-8
+string kernels (case, trim, character predicates), and scalar+decimal statistics
+(`Arrow.mean`/`variance`/`stddev`), plus `fill_null_forward/backward`, `if_else`,
+the list kernels and a `ChunkedArray` container). The semantics Prism relies on
+are unchanged: integer division still raises on a zero divisor, a safe cast still
+nulls an unfit value (so `Coerce.cast_exact` still raises), and `can_rank?` still
+claims decimals — `shard_issues/arrow-cr.5.md` stays open. Earlier `arrow-cr` work
+still pinned: bounded sort `5b4b958`, the `can_sort_to_indices?` guard (Phase 23)
+and the `is_in` hash probe (`arrow-cr.3`). `parquet-cr` `25a889e` (both
+`branch: main`, resolved from GitHub). `shard.lock` and `lib/` are gitignored, so
+this line is the record of what the suite below was run against.
 
 **Next up, in order** (each is one atomic commit):
 
-1. **The queued work is done.** Phases 34 and 35 closed the two items this block
-   listed (lazy call shapes, `cast(strict: false)`), so nothing is queued that can
-   be started without a new failing case or a caller. What is left:
+1. **Queued, and measured** — the `ca106f2` bump landed kernels Prism still
+   hand-rolls. In order:
+   - **`std`/`variance` delegation**: `Arrow.stddev` is **16.5 ms** where Prism's
+     four-pass `Aggregates.standard_deviation` is **50.2 ms** on 1e6 Float64 with
+     20% nulls (3x). `mean` is the opposite: Prism's `sum/count` is **6.8 ms**
+     against `Arrow.mean`'s **11.7 ms**, so it stays as it is — the kernel exists
+     and is slower.
+   - **String transforms**: `utf8_lower/upper/title/trim/ltrim/rtrim` and the
+     character predicates now exist in `arrow-cr` (C++ chunk 3), so
+     `str_to_uppercase`/`str_to_lowercase`/`str_trim` are wiring, not a kernel ask.
+   - **`fill_null_forward/backward`** (C++ chunk 6) give `fill_null(strategy:)`.
+   What else is left:
    - **`shard_issues/arrow-cr.4.md`** (filed, open, external): the CSV reader costs
      1.4x Crystal's stdlib lexer plus the same builders for the all-Utf8 case, and
      `batch_size` is not the explanation. The report names the per-cell
@@ -78,20 +93,21 @@ gitignored, so this line is the record of what the suite below was run against.
    - **`CastOptions::Overflowing`** (§17): the third cast mode (wrapping) is the
      only one Polars has that Prism does not.
 2. **Upstream, in this order** (each is a report or a bumped dependency, not a
-   Prism phase):
+   Prism phase). `ca106f2` closed the string-case/trim and statistics parts of this
+   list; what remains is:
    - **PL-1 uniqueness/value_counts** (`is_unique`, `is_duplicated`, `n_unique`,
      `value_counts`, `mode` for a whole column). Prism hand-rolls all of it with
      row-encoded hash sets — measured 104 ms per 1e5 groups for `n_unique` against
      46 ms for `sum` — and has no `value_counts` verb at all.
-   - **PL-2 `median`/`quantile`** (then `arg_min`/`arg_max`). `median` is the one
+   - **PL-2 `median`/`quantile`** (then `arg_min`/`arg_max`). Still the one
      measurable aggregate gap: 178 ms per 1e5 groups against 46 ms for `sum`,
-     because Prism filters and sorts per group. `mean` is *not* worth a kernel
-     (38 ms, already at the `sum` floor).
-   - **C++ chunk 3 string transforms** (`to_lowercase`/`to_uppercase`/`trim`/
-     `replace`/`split`/`find`): the only part of the string namespace still
-     missing after Phase 37.
-   - **C++ chunk 4 unary math** (`abs`/`sign`/`round`/`floor`/`ceil`/`sqrt`/`pow`/
-     `log`): cheap kernels, and §6.1 no longer promises them by accident.
+     because Prism filters and sorts per group. `mean`/`variance`/`stddev` landed
+     (and `mean` is slower than Prism's `sum/count`, so only `std`/`var` are worth
+     using).
+   - **C++ chunk 3 deferred tail** `replace`/`split`/`find`/`count_matches` — the
+     case and trim kernels landed, these did not.
+   - **Unary math** (`abs`/`sign`/`round`/`floor`/`ceil`/`sqrt`/`pow`/`log`): still
+     absent from `arrow-cr`, still promised nowhere.
    - **Not worth asking for**: `is_between`/`is_close` (composable), `top_k`
      (bounded sort already, Phases 18/20), `mean`/`count` (at the floor), hash
      aggregates (Prism's one-pass grouped aggregation is faster), `pivot`/`melt`
@@ -907,10 +923,10 @@ UserSchema.schema                             # => Arrow::Schema
 | Introspection | `dtype(schema)`, `nullable?(schema)`, `columns : Array(String)`, `key`, `same_as?(other)` |
 
 Not implemented, and not expressible without a kernel `arrow-cr` does not have:
-`// ** abs round floor ceil sqrt pow log exp clip` and the string *transforms*
-(`to_uppercase`, `to_lowercase`, `trim`, `replace`, `split`, `find`). They are the
-next upstream asks (§Phase 37); a Crystal per-row loop would break §14, so they
-wait for the kernel rather than being hand-rolled.
+`// ** abs round floor ceil sqrt pow log exp clip`, and of the string transforms
+`replace`/`split`/`find`/`count_matches` (case and trim kernels landed in
+`arrow-cr` `ca106f2` and are only waiting to be wired). A Crystal per-row loop
+would break §14, so these wait for the kernel rather than being hand-rolled.
 
 ### 6.2 `Series` surface
 

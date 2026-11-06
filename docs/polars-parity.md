@@ -214,8 +214,10 @@ column silently is the kind of convenience that hides a mismatch.
 `str_contains` is literal while `matches` takes a pattern — Polars' `str.contains`
 is regex by default, so a ported call needs the split made explicit. `weekday` is
 1 = Monday .. 7 = Sunday, `week` is ISO. The string *transforms* Polars has
-(`to_lowercase`, `trim`, `replace`, `split`, `find`) are absent because the kernel
-is absent (arrow-cr's C++ chunk 3); there is no Prism hand-rolled version.
+(`to_lowercase`, `to_uppercase`, `trim`) exist as `arrow-cr` kernels since
+`ca106f2` (its C++ chunk 3) and are not wired to `Expr` yet; `replace`, `split`,
+`find` and `count_matches` are still missing upstream, and there is no Prism
+hand-rolled version of any of them.
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and

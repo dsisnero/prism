@@ -2,6 +2,9 @@
 
 ## Status: open (2026-11-05)
 
+Still present at the current pin `arrow-cr` `ca106f2`: `Arrow.can_rank?` answers
+`true` for `Decimal128(10, 2)` and `Arrow.rank` still raises.
+
 Prism works around it: `Prism::KernelArgs.require_rankable` excludes decimals
 before asking `Arrow.can_rank?`, so `col("d").rank` raises
 `Prism::DtypeError` naming the column instead of failing inside the kernel.
