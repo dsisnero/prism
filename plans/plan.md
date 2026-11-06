@@ -23,7 +23,7 @@ implicit.
 *Updated 2026-11-05.*
 
 **Start here:** `git status` (must be clean), then `make lint && make test`
-(622 examples, ~30 s warm). The table below is the only place that tracks status;
+(640 examples, ~30 s warm). The table below is the only place that tracks status;
 do not re-derive it from `git log`.
 
 **State:** `0.2.0` is released on `2026-11-03` — tagged `v0.2.0` and pushed to
@@ -46,7 +46,8 @@ Phase 31 nullability rule (one `Expr#nullable?`, and a cast that never invents
 nulls), the Phase 32 IO round-trip oracle plus the two CSV losses it found, and the
 Phase 33 CSV schema-by-name fix, the Phase 34 lazy call-shape parity and the
 Phase 35 `cast(strict: false)` opt-out and the Phase 36 value coverage for the view,
-run-end and wide-decimal dtypes. Phases 0–36 are closed apart from the cosmetic
+run-end and wide-decimal dtypes, and the Phase 37 expression layer over the
+kernels `arrow-cr` already ships. Phases 0–37 are closed apart from the cosmetic
 local folder rename.
 
 **Dependencies verified against:** `arrow-cr` `064ece4` (bumped 2026-11-05 from
@@ -76,18 +77,35 @@ gitignored, so this line is the record of what the suite below was run against.
      `concat` with a non-null source).
    - **`CastOptions::Overflowing`** (§17): the third cast mode (wrapping) is the
      only one Polars has that Prism does not.
-2. **A new phase starts from a probe.** The method that keeps finding real bugs is
-   one screen of calls across a surface the oracles do not reach — Phase 27 probed
-   dtypes, 28–30 verbs, 31 schemas, 32 the reader/writer round-trip, 33 the IO
-   options, 36 the dtypes `arrow-cr` gained later. Surfaces with the thinnest
-   oracles now: `Series` verbs (it has no arithmetic, `sort`, `head`/`tail`,
-   `std`/`var`/`median` — a real gap, but a feature request rather than a failing
-   case), typed frames (`define_schema` round-trips and `S::Row` against
-   `DataFrame#rows`), and nested-key coverage for the view/run-end dtypes in
-   `distinct`/`group_by`/joins. Each still needs a *failing* case before it becomes
-   a phase.
-3. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
-   26–35, one of which (`is_in`) came from a downstream report. The tag goes on
+2. **Upstream, in this order** (each is a report or a bumped dependency, not a
+   Prism phase):
+   - **PL-1 uniqueness/value_counts** (`is_unique`, `is_duplicated`, `n_unique`,
+     `value_counts`, `mode` for a whole column). Prism hand-rolls all of it with
+     row-encoded hash sets — measured 104 ms per 1e5 groups for `n_unique` against
+     46 ms for `sum` — and has no `value_counts` verb at all.
+   - **PL-2 `median`/`quantile`** (then `arg_min`/`arg_max`). `median` is the one
+     measurable aggregate gap: 178 ms per 1e5 groups against 46 ms for `sum`,
+     because Prism filters and sorts per group. `mean` is *not* worth a kernel
+     (38 ms, already at the `sum` floor).
+   - **C++ chunk 3 string transforms** (`to_lowercase`/`to_uppercase`/`trim`/
+     `replace`/`split`/`find`): the only part of the string namespace still
+     missing after Phase 37.
+   - **C++ chunk 4 unary math** (`abs`/`sign`/`round`/`floor`/`ceil`/`sqrt`/`pow`/
+     `log`): cheap kernels, and §6.1 no longer promises them by accident.
+   - **Not worth asking for**: `is_between`/`is_close` (composable), `top_k`
+     (bounded sort already, Phases 18/20), `mean`/`count` (at the floor), hash
+     aggregates (Prism's one-pass grouped aggregation is faster), `pivot`/`melt`
+     (shape, and a non-goal).
+3. **A new Prism phase starts from a probe.** The method that keeps finding real
+   bugs is one screen of calls across a surface the oracles do not reach — Phase
+   27 probed dtypes, 28–30 verbs, 31 schemas, 32 the reader/writer round-trip, 33
+   the IO options, 36 the dtypes `arrow-cr` gained later. Thinnest oracles now:
+   `Series` verbs (no arithmetic, `sort`, `head`/`tail` — a feature gap rather than
+   a failing case), typed frames (`define_schema` round-trips and `S::Row` against
+   `DataFrame#rows`), and the new expression nodes under a *chunked* frame (every
+   kernel wrapper was exercised on a single batch).
+4. **`0.2.1` waits for a phase.** `0.2.0` is tagged; everything since is Phases
+   26–37, one of which (`is_in`) came from a downstream report. The tag goes on
    when a consumer needs it, not on a schedule.
 
 **Closed, do not re-open:** hash-based grouping. Measured twice. Before Phase 15
@@ -97,10 +115,10 @@ ranges it produces are exactly what lets one pass reduce every group (§14). A
 hash table would trade one sort for a per-group gather, which is the work
 vectorization just removed.
 
-**Gates:** `make lint` + `make test` green, **622 examples**.
-`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**623**, ~13 s) and
-`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**626**, ~1 min); with both
-set the suite is **627**. Run both before a release.
+**Gates:** `make lint` + `make test` green, **640 examples**.
+`PRISM_COMPILE_SPECS=1` adds the compile-failure spec (**641**, ~13 s) and
+`PRISM_EXAMPLE_SPECS=1` adds the four example specs (**644**, ~1 min); with both
+set the suite is **645**. Run both before a release.
 
 **Last commits:** `v0.2.0` is tagged on the release commit (changelog merged for
 phases 12–25, version at `0.2.0` since `66d11a8`, the Polars page linked from the
@@ -165,6 +183,7 @@ so a new feature starts from a clean tree.
 | 34 | The lazy verbs take every call shape the eager ones do | **done** |
 | 35 | `cast(strict: false)`: the nulling opt-out, on all four surfaces | **done** |
 | 36 | View, run-end and `Decimal256` columns materialize and print | **done** |
+| 37 | Expressions over the kernels that already exist (string, temporal, shift/diff/rank) | **done** |
 
 ---
 
@@ -874,15 +893,24 @@ UserSchema.schema                             # => Arrow::Schema
 
 | Category | Methods |
 | --- | --- |
-| Arithmetic | `+ - * / // % ** abs round floor ceil sqrt pow` |
-| Comparison | `== != < <= > >= eq neq lt lt_eq gt gt_eq` |
+| Arithmetic | `+ - * / %` and unary `-` |
+| Comparison | `== != < <= > >=` |
 | Boolean | `&` / `\|` (operators, parenthesise), `and` / `or` / `not` (methods; `!` is not overloadable) |
 | Null | `is_null`, `is_not_null`, `fill_null(v)`, `coalesce(*exprs)` |
-| Cast | `cast(dtype)` |
-| String | `str_length`, `str_contains`, `str_starts_with`, `str_to_uppercase`, `str_to_lowercase` |
+| Cast | `cast(dtype, strict: true)`, `is_in(values)` |
+| String | `str_length`, `str_contains`, `str_starts_with`, `str_ends_with`, `str_slice(offset, length)`, `matches(pattern)` |
+| Temporal | `date_part(part)`, plus `year quarter month week day day_of_year weekday hour minute second` |
+| Position | `shift(n)`, `diff(n)`, `rank(descending: false)` |
+| Conditional | `if_else`, `case_when` |
 | Aggregate | `sum min max mean count count_all n_unique first last std var median` |
 | Naming | `alias(name)` |
-| Introspection | `dtype(schema)`, `columns : Array(String)`, `key`, `same_as?(other)` |
+| Introspection | `dtype(schema)`, `nullable?(schema)`, `columns : Array(String)`, `key`, `same_as?(other)` |
+
+Not implemented, and not expressible without a kernel `arrow-cr` does not have:
+`// ** abs round floor ceil sqrt pow log exp clip` and the string *transforms*
+(`to_uppercase`, `to_lowercase`, `trim`, `replace`, `split`, `find`). They are the
+next upstream asks (§Phase 37); a Crystal per-row loop would break §14, so they
+wait for the kernel rather than being hand-rolled.
 
 ### 6.2 `Series` surface
 
@@ -2610,6 +2638,68 @@ examples (627 with the compile and example specs).
   `to_a`/`rows`/`to_s`/`distinct`/`sort`/`group_by`. That is twice now (Phase 27
   and here) that a small matrix over *dtypes nobody had exercised* found a real
   gap while the property oracles passed.
+
+### Phase 37 — expressions over the kernels that already exist (done)
+
+A survey of `arrow-cr` `064ece4` against `Expr` found that most of the "missing
+Polars surface" was not missing at all: the kernels exist and Prism never wired
+them. `Arrow.length`, `contains`/`starts_with`/`ends_with`, `regexp_is_match_scalar`,
+`substring`, `date_part` (17 parts), `shift` and `rank` were all reachable, and
+none was exposed. Meanwhile the plan's own §6.1 table advertised a string surface
+(`str_to_uppercase`, `str_to_lowercase`) and unary math that do not exist in
+either library.
+
+```text
+col("title").str_contains("open")   -> undefined method 'str_contains' for Prism::Col
+col("ts").year                      -> undefined method 'year' for Prism::Col
+col("n").shift(1)                   -> undefined method 'shift' for Prism::Col
+```
+
+- [x] one new file of nodes (`src/prism/expression/kernel_nodes.cr`) — `StrLength`,
+      `StrPredicate` (contains / starts-with / ends-with), `StrSlice`,
+      `RegexMatch`, `TemporalPart`, `Shift`, `Rank` — each forwarding one chunk to
+      one `Arrow.*` kernel, with `dtype` and `nullable?` so a plan can be typed
+      before any data is read. No node loops over rows
+- [x] `str_length` reports the kernel's own width (Int32, Int64 for the large
+      variants) and counts **bytes**, which is what `str_slice` offsets into;
+      `matches` is separate from `str_contains` so the literal one stays literal
+- [x] ten `date_part` accessors (`year` … `second`, `weekday` = 1..7 Monday-first,
+      `week` ISO) sharing one node
+- [x] `shift(n)` (nullable at the boundary, and only when `n != 0`),
+      `diff(n) = self - self.shift(n)` composed from existing nodes, and
+      `rank(descending:)` (ties share the highest rank, nulls last, never null)
+- [x] dictionary columns decode through their values first, the rule `is_in`,
+      `RowKeys` and the aggregations already follow, so a dictionary of strings
+      answers the same as the strings
+- [x] every operand check is a `Prism::DtypeError` naming the column: a non-string
+      operand for the string ops, a non-temporal one for `date_part`, and a decimal
+      for `rank` — which also **found an upstream bug**, filed as
+      `shard_issues/arrow-cr.5.md`: `Arrow.can_rank?` answers true for decimals
+      while `Arrow.rank` has no branch for them
+- [x] the §6.1 table now lists what exists and names what does not, instead of
+      promising `str_to_uppercase`/`str_to_lowercase` and six math functions
+
+**Acceptance:** `spec/prism/expr_kernels_spec.cr` pins each kernel's values, null
+propagation, dtypes and nullability, the boundary nulls of `shift`, tie handling
+in `rank`, the dictionary path, the three error paths, and every expression
+through the plan (schema and frame compared with the eager result). Suite: 640
+examples (645 with the compile and example specs).
+
+**Notes carried forward:**
+
+- **Check the dependency before writing the wrapper.** The instinct after the
+  Polars survey was "wait for arrow-cr to port `arrow-string`/`arrow-arith`"; a
+  five-minute inventory showed the string predicates, length, slice, regex,
+  date parts, `shift` and `rank` were already there. The genuinely missing list is
+  much smaller than the plan's table implied, and it is now written down
+  accurately.
+- **Compose before you add.** `diff` is `self - shift(n)` on existing nodes, and
+  `matches` is `regexp_is_match_scalar`; the only new *kernel* needed here was
+  none. Each node that remains is a genuine one-kernel wrapper.
+- **A dictionary is a physical encoding, not a dtype.** `Arrow.length(dict)`
+  returns a *dictionary* of lengths (`with_values`), which is not what a user
+  means by "the length column"; decoding first and declaring the decoded dtype
+  keeps the expression surface consistent with `is_in` and the keyed verbs.
 
 ## 13. Testing strategy
 

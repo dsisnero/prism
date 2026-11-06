@@ -193,6 +193,113 @@ module Prism
       Cast.new(self, target, strict)
     end
 
+    # --- strings ---------------------------------------------------------
+    #
+    # Polars' `str` namespace over the kernels `arrow-cr` already ships
+    # (`arrow-string`): `str.len_bytes()` is `str_length`, `str.contains` with a
+    # literal is `str_contains`, `str.slice` is `str_slice`. They count *bytes*,
+    # like the kernels, so a byte offset works on any UTF-8 text.
+
+    # Byte length of a string or binary value.
+    def str_length : Expr
+      StrLength.new(self)
+    end
+
+    # Whether the value contains `needle` as a literal substring.
+    def str_contains(needle : String) : Expr
+      StrPredicate.new(StrPredicateKind::Contains, self, needle)
+    end
+
+    # Whether the value starts with `needle`.
+    def str_starts_with(needle : String) : Expr
+      StrPredicate.new(StrPredicateKind::StartsWith, self, needle)
+    end
+
+    # Whether the value ends with `needle`.
+    def str_ends_with(needle : String) : Expr
+      StrPredicate.new(StrPredicateKind::EndsWith, self, needle)
+    end
+
+    # A byte slice: `offset` may be negative (from the end), and a `nil` length
+    # runs to the end of the value.
+    def str_slice(offset : Int, length : Int? = nil) : Expr
+      StrSlice.new(self, offset.to_i64, length.try(&.to_i64))
+    end
+
+    # Regular-expression match (Polars' `str.contains` with a pattern; separate
+    # from `str_contains`, which is literal).
+    def matches(pattern : String) : Expr
+      RegexMatch.new(self, pattern)
+    end
+
+    # --- temporal --------------------------------------------------------
+
+    # One calendar part of a date/time/timestamp column, as `Int32`.
+    def date_part(part : Arrow::DatePart) : Expr
+      TemporalPart.new(self, part)
+    end
+
+    # The accessors Polars spells `dt.<part>()`. `weekday` is 1 = Monday .. 7 =
+    # Sunday, and `week` is ISO.
+    def year : Expr
+      date_part(Arrow::DatePart::Year)
+    end
+
+    def quarter : Expr
+      date_part(Arrow::DatePart::Quarter)
+    end
+
+    def month : Expr
+      date_part(Arrow::DatePart::Month)
+    end
+
+    def week : Expr
+      date_part(Arrow::DatePart::WeekISO)
+    end
+
+    def day : Expr
+      date_part(Arrow::DatePart::Day)
+    end
+
+    def day_of_year : Expr
+      date_part(Arrow::DatePart::DayOfYear)
+    end
+
+    def weekday : Expr
+      date_part(Arrow::DatePart::DayOfWeekMonday1)
+    end
+
+    def hour : Expr
+      date_part(Arrow::DatePart::Hour)
+    end
+
+    def minute : Expr
+      date_part(Arrow::DatePart::Minute)
+    end
+
+    def second : Expr
+      date_part(Arrow::DatePart::Second)
+    end
+
+    # --- position --------------------------------------------------------
+
+    # Moves values `offset` rows forward (negative moves them back), leaving
+    # nulls where rows enter or leave the window.
+    def shift(offset : Int) : Expr
+      Shift.new(self, offset.to_i64)
+    end
+
+    # Difference from `offset` rows back: `self - self.shift(offset)`.
+    def diff(offset : Int = 1) : Expr
+      self - shift(offset)
+    end
+
+    # Rank of each row in sorted order, ties sharing the highest rank. Every row
+    # gets a rank, so the column is never null.
+    def rank(*, descending : Bool = false) : Expr
+      Rank.new(self, descending)
+    end
+
     def alias(name : String | Symbol) : Expr
       Alias.new(self, name.to_s)
     end

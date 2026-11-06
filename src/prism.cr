@@ -22,6 +22,7 @@ require "./prism/expression/type_cache"
 require "./prism/expression/cse"
 require "./prism/expression/kernels"
 require "./prism/expression/nodes"
+require "./prism/expression/kernel_nodes"
 require "./prism/expression/dsl"
 require "./prism/expression/operators"
 

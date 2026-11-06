@@ -8,6 +8,15 @@ All notable changes to this project are documented here. This project adheres to
 
 ### Added
 
+- Expression methods over kernels `arrow-cr` already ships, so no Prism-side loop:
+  `str_length` (bytes), `str_contains` / `str_starts_with` / `str_ends_with`
+  (literal), `str_slice(offset, length)`, `matches(pattern)` (regex), the ten
+  `date_part` accessors (`year`, `quarter`, `month`, `week`, `day`, `day_of_year`,
+  `weekday`, `hour`, `minute`, `second`), `shift(n)`, `diff(n)` and
+  `rank(descending:)`. Dictionary columns decode through their values, every
+  operand check raises `Prism::DtypeError` naming the column, and the plan's
+  `Expr` table now lists what exists instead of advertising `str_to_uppercase`,
+  `str_to_lowercase` and six math functions that were never implemented.
 - `Utf8View`, `BinaryView`, run-end encoded and `Decimal256` columns materialize:
   `Values.extract`/`extract_at` gained the four cases, so `df["v"].to_a`,
   `df.rows` and `df.to_s` no longer raise `UnsupportedOperation` on a frame that

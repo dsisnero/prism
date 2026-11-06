@@ -261,6 +261,15 @@ Literals evaluate to a length-1 `Arrow::Scalar` rather than a broadcast array, s
 reject a union of array and scalar, so `Prism::Kernels` narrows the union and
 calls a generic `apply` instantiated per operand pair.
 
+The kernels live in `arrow-cr`; `src/prism/expression/kernel_nodes.cr` holds the
+thin nodes over them (`str_length`, the three substring predicates, `str_slice`,
+`matches`, `date_part`, `shift`, `rank`). A node adds exactly what the expression
+layer needs — a `key`, a `dtype` computed before any data is read, and
+`nullable?` — and its `eval` forwards one chunk to one kernel, so there is no
+per-row Crystal loop to get wrong. A dictionary operand is decoded to its values
+first, because the kernels' `with_values` form (a dictionary *of* lengths, for
+instance) is a physical encoding rather than the column a caller means.
+
 Schema-dependent work happens **once per execution**, not once per chunk.
 `Prism::TypeCache` resolves output dtypes and coercion targets keyed by
 `Expr#key`; verbs build one and share it across every chunk's `EvalContext`.

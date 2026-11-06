@@ -47,6 +47,15 @@ that is only Polars'.
 | Set membership | `pl.col("x").is_in(["a", "b"])` | `col("x").is_in(["a", "b"])` |
 | Series membership | `s.is_in(other)` | `series.is_in(values)` |
 | First non-null | `pl.coalesce(a, b)` | `a.coalesce(b)` |
+| String length (bytes) | `pl.col("x").str.len_bytes()` | `col("x").str_length` |
+| String contains (literal) | `pl.col("x").str.contains("a", literal=True)` | `col("x").str_contains("a")` |
+| String contains (regex) | `pl.col("x").str.contains("^a")` | `col("x").matches("^a")` |
+| Starts/ends with | `.str.starts_with("a")` / `.str.ends_with("a")` | `str_starts_with("a")` / `str_ends_with("a")` |
+| String slice | `pl.col("x").str.slice(0, 4)` | `col("x").str_slice(0, 4)` |
+| Date parts | `pl.col("d").dt.year()` … | `col("d").year` … (`date_part(:year)`) |
+| Shift | `pl.col("x").shift(1)` | `col("x").shift(1)` |
+| Diff | `pl.col("x").diff(1)` | `col("x").diff(1)` |
+| Rank | `pl.col("x").rank()` | `col("x").rank` |
 | Fill nulls | `pl.col("x").fill_null(0)` | `col("x").fill_null(0)` (or the `df.fill_null(0)` verb) |
 | Null mask | `pl.col("x").is_null()` | `col("x").is_null` |
 | Cast | `pl.col("x").cast(pl.Int64)` | `col("x").cast(Arrow::DataType.int64)` (strict by default; `strict: false` nulls instead of raising) |
@@ -199,6 +208,14 @@ the missing and unexpected columns), and rejects two fields of one name with
 `DuplicateColumn`. Two Polars knobs have no Prism spelling yet — `extra_columns`'
 `ignore` and `missing_columns`' `insert` (§17) — because dropping or inventing a
 column silently is the kind of convenience that hides a mismatch.
+
+**Strings are bytes, and `matches` is the regex one.** `str_length` counts bytes
+(`str.len_bytes()`, not `len_chars`), `str_slice` offsets in bytes, and
+`str_contains` is literal while `matches` takes a pattern — Polars' `str.contains`
+is regex by default, so a ported call needs the split made explicit. `weekday` is
+1 = Monday .. 7 = Sunday, `week` is ISO. The string *transforms* Polars has
+(`to_lowercase`, `trim`, `replace`, `split`, `find`) are absent because the kernel
+is absent (arrow-cr's C++ chunk 3); there is no Prism hand-rolled version.
 
 **`n_unique` counts null.** One null value counts as one distinct value, matching
 Polars' `ChunkUnique` (which adds one when `null_count > 0`) and
